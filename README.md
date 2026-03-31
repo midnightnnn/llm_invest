@@ -1,82 +1,92 @@
 <p align="center">
-  <h1 align="center">LLM Arena</h1>
+  <h1 align="center">🏟️ LLM Arena</h1>
   <p align="center">
-    <strong>Multi-LLM Autonomous Investment Arena</strong><br>
-    3 AI agents compete with real tools, real capital, and zero human intervention.
+    <b>Multi-LLM Autonomous Investment Arena</b><br>
+    3 AI agents compete with real money, real tools, and zero human intervention.
   </p>
   <p align="center">
-    <a href="#quick-start">Quick Start</a> &bull;
-    <a href="#how-it-works">How It Works</a> &bull;
-    <a href="#architecture">Architecture</a> &bull;
-    <a href="#admin-ui">Admin UI</a> &bull;
-    <a href="#cli-reference">CLI Reference</a>
+    <img src="https://img.shields.io/badge/python-3.12+-3776ab?style=flat-square&logo=python&logoColor=white" alt="Python 3.12+">
+    <img src="https://img.shields.io/badge/license-MIT-22c55e?style=flat-square" alt="MIT License">
+    <img src="https://img.shields.io/badge/framework-Google_ADK-4285f4?style=flat-square&logo=google&logoColor=white" alt="Google ADK">
+    <img src="https://img.shields.io/badge/tests-600+-f59e0b?style=flat-square" alt="Tests">
+  </p>
+  <p align="center">
+    <a href="#quick-start">Quick Start</a> ·
+    <a href="#architecture">Architecture</a> ·
+    <a href="#how-it-works">How It Works</a> ·
+    <a href="#admin-ui">Admin UI</a> ·
+    <a href="#cli-reference">CLI</a>
   </p>
 </p>
 
 ---
 
-## What is LLM Arena?
-
-LLM Arena pits **GPT-5.2**, **Gemini 3 Flash**, and **Claude Sonnet 4.6** against each other in a fully autonomous stock trading competition across **US (NASDAQ + NYSE)** and **Korean (KOSPI + KOSDAQ)** markets.
-
-Each agent independently decides which stocks to research, when to buy/sell, and how to manage its portfolio — using 19+ quantitative tools, long-term memory, and real broker execution via [KIS Open Trading API](https://apiportal.koreainvestment.com/).
-
-```
-No hardcoded strategies. No pre-filtered stock lists. No human in the loop.
-The LLM IS the strategy.
-```
-
-### Key Features
-
-| | Feature | Description |
-|---|---------|-------------|
-| **Autonomy** | Full agent autonomy | Tool selection, stock discovery, trade decisions — all by the LLM |
-| **Dual Market** | US + Korea | NASDAQ, NYSE, KOSPI, KOSDAQ with market-aware scheduling |
-| **Draft/Exec** | Two-phase rounds | Draft round (analysis only) → read peers → Execution round (real trades) |
-| **Memory** | Long-term memory | Vector search + reranking + compaction + REACT injection |
-| **Risk** | Built-in risk engine | Position limits, cash buffers, cooldowns, daily turnover caps |
-| **Reconciliation** | Auto-recovery | Pre-cycle sync → reconcile → auto-fix → re-check → block if unresolved |
-| **Admin UI** | Live configuration | Prompts, agents, risk, tools, memory policy — all editable without redeploy |
-| **Ledger** | Event-sourced accounting | Append-only ledger with checkpoint replay, not snapshot overwrites |
+> **GPT-5.2** vs **Gemini 3 Flash** vs **Claude Sonnet 4.6** — each agent independently discovers stocks,
+> builds conviction, and executes real trades across **US + Korean markets**.
+> No hardcoded strategies. No pre-filtered stock lists. **The LLM *is* the strategy.**
 
 ---
 
-## How It Works
+## Quick Start
 
-```mermaid
-flowchart TD
-    START(["⏰ Scheduler Trigger<br>US 15:00 ET · KR 14:30 KST · Mon–Fri"])
-    START --> HOL{"🗓️ Holiday?"}
-    HOL -->|"Yes"| SKIP(["Skip"])
-    HOL -->|"No"| H["1 · Hydrate tenant runtime<br><i>secrets + config</i>"]
-    H --> S["2 · Sync market data + broker<br><i>quotes · account · trades · cash · dividends</i>"]
-    S --> R["3 · Reconciliation + auto-recovery"]
-    R --> F["4 · Build forecasts<br><i>neural + foundation models</i>"]
-    F --> RS["5 · Research Agent<br><i>holdings analysis + movers</i>"]
-    RS --> DRAFT["6 · Draft Round<br><i>3 agents in parallel · analysis only</i>"]
-    DRAFT --> EXEC["7 · Execution Round<br><i>3 agents in parallel · real trades</i><br>OrderIntent → RiskEngine → Broker → KIS API"]
-    EXEC --> NAV["8 · Record official NAV + compress memories"]
+### Prerequisites
 
-    classDef trigger fill:#dbeafe,stroke:#3b82f6,stroke-width:2px,color:#1e40af
-    classDef decision fill:#fef3c7,stroke:#d97706,stroke-width:2px,color:#92400e
-    classDef step fill:#f0fdf4,stroke:#22c55e,stroke-width:1.5px,color:#14532d
-    classDef skip fill:#fee2e2,stroke:#ef4444,stroke-width:1.5px,color:#991b1b
+- Python 3.12+
+- GCP project with BigQuery + Firestore
+- At least one LLM API key (OpenAI, Google AI, or Anthropic)
 
-    class START trigger
-    class HOL decision
-    class H,S,R,F,RS,DRAFT,EXEC,NAV step
-    class SKIP skip
+### 1. Clone & Install
+
+```bash
+git clone https://github.com/your-username/LLm_arena.git
+cd LLm_arena
+pip install -e .[dev]
 ```
 
-### The Agents
+> **Optional** — install forecasting models (PyTorch, NeuralForecast, Chronos, TimesFM):
+> ```bash
+> pip install -e .[dev,forecasting]
+> ```
 
-| Agent | Model | Provider |
-|-------|-------|----------|
-| GPT | GPT-5.2 | OpenAI |
-| Gemini | Gemini 3 Flash | Google AI / Vertex AI |
-| Claude | Claude Sonnet 4.6 | Anthropic / Vertex AI |
+### 2. Configure
 
-All agents run on [Google ADK](https://github.com/google/adk-python) with ReAct reasoning. Each gets an independent virtual sleeve (default 1,000,000 KRW) tracked against a single real brokerage account.
+```bash
+cp .env.example .env
+```
+
+Edit `.env` with your credentials:
+
+```env
+# GCP (required)
+GOOGLE_CLOUD_PROJECT=your-gcp-project
+BQ_DATASET=llm_arena
+
+# LLM keys — at least one
+OPENAI_API_KEY=sk-...
+GEMINI_API_KEY=AI...
+ANTHROPIC_API_KEY=sk-ant-...
+
+# Live trading — optional, paper trading works without these
+KIS_API_KEY=...
+KIS_API_SECRET=...
+KIS_ACCOUNT_NO=...
+```
+
+### 3. Initialize & Run
+
+```bash
+# Create database tables
+llm-arena init-bq
+
+# Run a trading cycle (paper trading by default)
+llm-arena run-pipeline --market us      # NASDAQ + NYSE
+llm-arena run-pipeline --market kospi   # KOSPI + KOSDAQ
+
+# Launch Admin UI
+llm-arena serve-ui                      # → http://localhost:8080
+```
+
+That's it — agents will analyze the market, draft strategies, review each other's picks, and execute trades autonomously.
 
 ---
 
@@ -114,9 +124,9 @@ flowchart TB
     end
 
     %% ─── Tool Layer ───
-    subgraph TOOLS[" 🧰 19 Autonomous Tools + MCP "]
+    subgraph TOOLS[" 🧰 18 Autonomous Tools + MCP "]
         direction LR
-        TQ["📊 Quant<br><i>screen · optimize<br>forecast · momentum</i>"]
+        TQ["📊 Quant<br><i>screen · optimize<br>forecast · technicals</i>"]
         TS["📰 Sentiment<br><i>reddit · SEC<br>earnings · F&G</i>"]
         TM["🌐 Macro<br><i>FRED · ECOS<br>indices</i>"]
         TC["🧠 Memory<br><i>vector search<br>peer lessons</i>"]
@@ -164,191 +174,157 @@ flowchart TB
     class BQ,FS,KIS store
 ```
 
-### Project Structure
+<details>
+<summary><b>Project Structure</b></summary>
 
 ```
 arena/
   agents/          # ADK ReAct agents + Research + Memory Compaction
-  memory/          # Long-term memory (store, vector, policy, cleanup, query)
-  ui/              # Admin UI (FastAPI + Jinja2)
+  memory/          # Long-term memory (store, vector, policy, query, cleanup)
+  ui/              # Admin UI (FastAPI + Jinja2 + HTMX)
   tools/           # Tool registry (quant, sentiment, macro, context)
-  data/            # BigQuery repositories + schema + arena_config
+  data/            # BigQuery repositories + schema
   broker/          # Paper / Live (KIS) broker adapters
   execution/       # Central order gateway
   open_trading/    # KIS client + account sync
-  forecasting/     # Multi-model stacking forecasts (neural + foundation)
-  security/        # API credentials (Secret Manager)
-  config.py        # Environment → Settings + runtime overrides
-  context.py       # Context builder (with memory reranking)
+  forecasting/     # Multi-model stacking forecasts
+  security/        # Secret Manager integration
+  config.py        # Settings + runtime overrides
+  context.py       # Context builder + memory reranking
   orchestrator.py  # Cycle orchestration
-  market_hours.py  # Market hours / holidays (dynamic lunar calendar for KR)
   risk.py          # Risk engine
 tests/             # 600+ test cases (pytest)
-scripts/           # Deploy scripts + DB migrations + utilities
+scripts/           # Deploy scripts + migrations
 ```
+
+</details>
 
 ---
 
-## Quick Start
+## How It Works
 
-### Prerequisites
+```mermaid
+flowchart TD
+    START(["⏰ Scheduler Trigger<br>US 15:00 ET · KR 14:30 KST · Mon–Fri"])
+    START --> HOL{"🗓️ Holiday?"}
+    HOL -->|"Yes"| SKIP(["Skip"])
+    HOL -->|"No"| H["1 · Hydrate tenant runtime<br><i>secrets + config</i>"]
+    H --> S["2 · Sync market data + broker<br><i>quotes · account · trades · cash · dividends</i>"]
+    S --> R["3 · Reconciliation + auto-recovery"]
+    R --> F["4 · Build forecasts<br><i>neural + foundation models</i>"]
+    F --> RS["5 · Research Agent<br><i>holdings analysis + movers</i>"]
+    RS --> DRAFT["6 · Draft Round<br><i>3 agents in parallel · analysis only</i>"]
+    DRAFT --> EXEC["7 · Execution Round<br><i>3 agents in parallel · real trades</i><br>OrderIntent → RiskEngine → Broker → KIS API"]
+    EXEC --> NAV["8 · Record official NAV + compress memories"]
 
-- Python 3.12+
-- GCP project with BigQuery + Firestore enabled
-- API keys: at least one of OpenAI / Google AI / Anthropic
+    classDef trigger fill:#dbeafe,stroke:#3b82f6,stroke-width:2px,color:#1e40af
+    classDef decision fill:#fef3c7,stroke:#d97706,stroke-width:2px,color:#92400e
+    classDef step fill:#f0fdf4,stroke:#22c55e,stroke-width:1.5px,color:#14532d
+    classDef skip fill:#fee2e2,stroke:#ef4444,stroke-width:1.5px,color:#991b1b
 
-### 1. Install
-
-```bash
-git clone https://github.com/your-username/LLm_arena.git
-cd LLm_arena
-pip install -e .[dev]
-
-# Optional: install forecasting models (PyTorch, NeuralForecast, Chronos, TimesFM)
-pip install -e .[dev,forecasting]
+    class START trigger
+    class HOL decision
+    class H,S,R,F,RS,DRAFT,EXEC,NAV step
+    class SKIP skip
 ```
 
-### 2. Configure
+### The Agents
 
-```bash
-cp .env.example .env
-```
+| Agent | Model | Provider |
+|-------|-------|----------|
+| GPT | GPT-5.2 | OpenAI |
+| Gemini | Gemini 3 Flash | Google AI / Vertex AI |
+| Claude | Claude Sonnet 4.6 | Anthropic / Vertex AI |
 
-Edit `.env` with your credentials:
-
-```env
-# Required
-GOOGLE_CLOUD_PROJECT=your-gcp-project-id
-BQ_DATASET=llm_arena
-
-# At least one LLM API key
-OPENAI_API_KEY=sk-...
-GEMINI_API_KEY=AI...
-ANTHROPIC_API_KEY=sk-ant-...
-
-# Optional public demo tenant (official deployment example)
-ARENA_PUBLIC_DEMO_TENANT=midnightnnn
-
-# Optional: approved live/private tenants can use midnightnnn's
-# operator-funded Gemini for research only
-ARENA_SHARED_RESEARCH_GEMINI_SOURCE_TENANT=midnightnnn
-
-# For live trading (optional)
-KIS_API_KEY=...
-KIS_API_SECRET=...
-KIS_ACCOUNT_NO=...
-```
-
-### 3. Initialize Database
-
-```bash
-llm-arena init-bq
-```
-
-### 4. Run
-
-```bash
-# Paper trading (default, no real money)
-llm-arena run-pipeline --market us
-llm-arena run-pipeline --market kospi
-
-# Launch Admin UI
-llm-arena serve-ui
-# → http://localhost:8080
-```
+Each agent runs on [Google ADK](https://github.com/google/adk-python) with ReAct reasoning and gets an independent virtual portfolio tracked against a single brokerage account.
 
 ---
 
-## Agent Tools (19 + MCP)
+## Tools
 
-Agents choose which tools to call autonomously during each reasoning step.
+Agents autonomously choose which tools to call at each reasoning step.
 
-### Context Tools
+| Tool | Category | Description |
+|------|----------|-------------|
+| `get_research_briefing` | Context | Research via Gemini Google Search Grounding |
+| `search_past_experiences` | Context | Semantic search over past memories |
+| `search_peer_lessons` | Context | Lessons learned by other agents |
+| `portfolio_diagnosis` | Context | Holdings diagnosis + HRP rebalance plan |
+| `save_memory` | Context | Persist a manual memory note |
+| `screen_market` | Quant | Universe screening with filters |
+| `optimize_portfolio` | Quant | Portfolio optimization + rebalance orders |
+| `forecast_returns` | Quant | Neural + foundation model stacking forecasts |
+| `technical_signals` | Quant | RSI / MACD / Bollinger / SMA |
+| `correlation_matrix` | Quant | Correlation analysis |
+| `sector_summary` | Quant | Per-sector return & volatility |
+| `get_fundamentals` | Quant | Valuation metrics (PER / PBR / ROE) |
+| `index_snapshot` | Macro | Major index quotes (auto-routed by market) |
+| `macro_snapshot` | Macro | Macro indicators (US: FRED, KR: ECOS) |
+| `fear_greed_index` | Macro | VIX-based fear/greed gauge |
+| `earnings_calendar` | Macro | Earnings schedule |
+| `fetch_reddit_sentiment` | Sentiment | Social sentiment |
+| `fetch_sec_filings` | Sentiment | SEC EDGAR filings |
 
-| Tool | Description |
-|------|-------------|
-| `get_research_briefing` | Research briefing via Gemini Google Search Grounding |
-| `search_past_experiences` | Semantic search over past memories (Firestore Vector) |
-| `search_peer_lessons` | Search lessons learned by other agents |
-| `portfolio_diagnosis` | Current holdings diagnosis + HRP rebalance plan |
-| `save_memory` | Save a manual memory note |
-
-### Quantitative Tools
-
-| Tool | Description |
-|------|-------------|
-| `screen_market` | Universe screening with filters |
-| `optimize_portfolio` | Portfolio optimization + rebalance orders |
-| `forecast_returns` | Return forecasts (neural + foundation model stacking) |
-| `momentum_rank` | Multi-period momentum ranking |
-| `technical_signals` | RSI / MACD / Bollinger / SMA |
-| `correlation_matrix` | Correlation matrix |
-| `sector_summary` | Per-sector return & volatility |
-| `get_fundamentals` | Valuation metrics (US: PER/PBR, KR: ROE/debt ratio) |
-
-### Sentiment & Macro Tools
-
-| Tool | Description |
-|------|-------------|
-| `index_snapshot` | Major index quotes (auto-routed by market) |
-| `macro_snapshot` | Macro indicators (US: FRED, KR: ECOS) |
-| `fear_greed_index` | VIX-based fear/greed gauge |
-| `earnings_calendar` | Earnings schedule |
-| `fetch_reddit_sentiment` | Reddit social sentiment |
-| `fetch_sec_filings` | SEC EDGAR filings |
+> **+ MCP** — Add custom tool servers via Admin UI (SSE / Streamable HTTP).
 
 ---
 
 ## Admin UI
 
-All settings are stored in BigQuery (`arena_config`) and take effect on the **next batch run** — no redeploy needed.
+All settings live in BigQuery and take effect on the next cycle — **no redeploy needed**.
 
-| Page | What You Can Do |
-|------|-----------------|
-| **Prompt** | Edit the system prompt that guides agent behavior |
-| **Agents** | Add/remove agents, change models, per-agent overrides |
-| **Risk** | Tune 7 risk parameters (max order, position limits, etc.) |
-| **Sleeve** | Set per-agent target capital (auto-creates capital events) |
-| **Tools** | Toggle any of the 19 built-in tools on/off |
-| **MCP** | Add custom tool servers via SSE/Streamable HTTP |
-| **Memory** | 3D neural graph visualization of memory policy — click nodes to edit |
+| Page | Description |
+|------|-------------|
+| **Prompt** | System prompt that guides agent behavior |
+| **Agents** | Add/remove agents, swap models, per-agent overrides |
+| **Risk** | Position limits, cash buffers, cooldowns, turnover caps |
+| **Sleeve** | Per-agent target capital allocation |
+| **Tools** | Toggle built-in tools on/off per cycle |
+| **MCP** | Register custom tool servers |
+| **Memory** | 3D neural graph visualization of memory policy |
 
 ---
 
-## Long-Term Memory System
-
-Agents remember past trades, strategy lessons, and manual notes across cycles.
+## Memory System
 
 ```mermaid
 flowchart LR
     ST["💾 Store<br><i>BigQuery + Firestore</i>"]
-    RT["🔍 Retrieve<br><i>Semantic Vector Search<br>→ Reranking</i>"]
-    IN["💉 Inject<br><i>Cycle Context +<br>Mid-REACT Results</i>"]
-    CO["🗜️ Compress<br><i>MemoryCompactionAgent<br>→ Lessons</i>"]
-    CL["🧹 Cleanup<br><i>Auto-delete Old<br>Low-score Memories</i>"]
+    RT["🔍 Retrieve + Rerank<br><i>vector search → scoring<br>type · freshness · ticker · perf</i>"]
+    IN["💉 Inject<br><i>cycle context +<br>mid-REACT tool calls</i>"]
+    CO["🗜️ Compress<br><i>MemoryCompactionAgent<br>→ strategic lessons</i>"]
+    CL["🧹 Cleanup<br><i>forgetting curves ·<br>policy-driven expiry</i>"]
 
     ST --> RT --> IN --> CO --> CL
-    CL -.->|"policy-driven"| ST
+    CL -.->|"feedback loop"| ST
 
-    classDef mem fill:#ede9fe,stroke:#8b5cf6,stroke-width:2px,color:#4c1d95
-    class ST,RT,IN,CO,CL mem
+    classDef store fill:#dbeafe,stroke:#3b82f6,stroke-width:2px,color:#1e40af
+    classDef retrieve fill:#ecfdf5,stroke:#10b981,stroke-width:2px,color:#064e3b
+    classDef inject fill:#fef3c7,stroke:#d97706,stroke-width:2px,color:#92400e
+    classDef compress fill:#ede9fe,stroke:#8b5cf6,stroke-width:2px,color:#4c1d95
+    classDef cleanup fill:#fee2e2,stroke:#ef4444,stroke-width:2px,color:#991b1b
+
+    class ST store
+    class RT retrieve
+    class IN inject
+    class CO compress
+    class CL cleanup
 ```
 
-The memory policy is fully configurable through the **3D Memory Graph** in Admin UI — 6 groups (Storage, Event Types, Compaction, Retrieval, REACT Injection, Cleanup) with click-to-edit nodes.
+10 policy groups — Storage, Event Types, Hierarchy, Tagging, Forgetting, Graph, Compaction, Retrieval, REACT Injection, Cleanup — all editable through the 3D Memory Graph in Admin UI.
 
 ---
 
-## Risk Policy
+## Multi-Tenant
 
-| Parameter | Default | .env Example |
-|-----------|---------|-------------|
-| Max single order | 100,000,000 KRW | 350,000 KRW |
-| Daily turnover cap | 65% | 65% |
-| Max position weight | 100% | 35% |
-| Min cash buffer | 10% | 10% |
-| Ticker cooldown | 120s | 120s |
-
-> The `.env.example` ships with conservative values suitable for paper trading.
+| Feature | Description |
+|---------|-------------|
+| Auto-provisioning | New users get a `simulated_only` tenant on first login |
+| Public demo | Optionally expose an operator-funded tenant as read-only |
+| Paper trading | Activates when KIS demo credentials are saved |
+| Live trading | Requires explicit backend approval (`promote-tenant-live`) |
+| Data isolation | Trades, portfolios, memory, config — fully isolated per tenant |
+| BYOK | Each tenant brings their own LLM API keys |
 
 ---
 
@@ -357,10 +333,21 @@ The memory policy is fully configurable through the **3D Memory Graph** in Admin
 | Command | Description |
 |---------|-------------|
 | `init-bq` | Create BigQuery tables |
-| `run-pipeline --market us\|kospi` | Full pipeline (sync → forecast → trade) |
-| `run-shared-prep --market us` | Shared sync/forecast, then dispatch agent job |
+| `run-pipeline --market us\|kospi` | Full pipeline: sync → forecast → trade |
+| `run-shared-prep --market us` | Shared sync + forecast, then dispatch agents |
 | `run-agent-cycle --market us` | Agent trading cycle only |
 | `serve-ui` | Launch Admin UI (port 8080) |
+| `recover-sleeves` | Checkpoint rebuild + re-reconcile |
+| `promote-tenant-live --tenant <id>` | Promote tenant to live trading |
+| `set-tenant-simulated --tenant <id>` | Reset tenant to simulated mode |
+
+Add `--live` for live trading mode. Add `--all-tenants` for multi-tenant batch.
+
+<details>
+<summary>All sync & utility commands</summary>
+
+| Command | Description |
+|---------|-------------|
 | `sync-market` | Sync market features |
 | `sync-market-quotes` | Sync latest quotes |
 | `sync-account` | Sync broker account snapshot |
@@ -368,23 +355,19 @@ The memory policy is fully configurable through the **3D Memory Graph** in Admin
 | `sync-broker-cash` | Sync broker cash events |
 | `sync-dividends` | Sync dividend records |
 | `build-forecasts` | Generate return forecasts |
-| `recover-sleeves` | Checkpoint rebuild + re-reconcile |
-| `run-batch` | Manual sync + cycle shortcut |
-| `promote-tenant-live --tenant <id>` | Promote tenant to live trading |
-| `set-tenant-simulated --tenant <id>` | Reset tenant to simulated mode |
 
-Add `--live` for live trading mode. Add `--all-tenants` to run for all tenants.
+</details>
 
 ---
 
-## Deployment (GCP Cloud Run)
+## Deployment
 
 ```bash
 # Dual market jobs (US + KOSPI on separate schedules)
 DUAL_MARKET=true bash scripts/deploy_cloud_run_job.sh
 
-# Admin UI (with auto-provisioning for new users)
-ALLOW_UNAUTHENTICATED=true bash scripts/deploy_cloud_run_ui.sh
+# Admin UI
+bash scripts/deploy_cloud_run_ui.sh
 ```
 
 | Component | Schedule |
@@ -392,50 +375,6 @@ ALLOW_UNAUTHENTICATED=true bash scripts/deploy_cloud_run_ui.sh
 | US Job | 15:00 ET, Mon–Fri |
 | KOSPI Job | 14:30 KST, Mon–Fri |
 | Admin UI | Always-on |
-
----
-
-## Multi-Tenant Architecture
-
-LLM Arena supports multiple independent tenants on a single deployment.
-
-- **New users** get an auto-provisioned tenant with `simulated_only` mode
-- **Optional public demo tenant** can be exposed with `ARENA_PUBLIC_DEMO_TENANT`
-- **Paper trading** activates when KIS demo credentials are saved
-- **Live trading** requires explicit backend approval (`promote-tenant-live`)
-- All data (trades, sleeves, memory, config) is isolated per tenant
-- `paper` and `live` are separate execution lanes within the same tenant
-
-### Public Demo + BYOK
-
-For the official deployment, `midnightnnn` can be configured as the public demo tenant:
-
-- `midnightnnn` is the operator-funded demo tenant
-- Signed-in users are auto-granted `viewer` access when `ARENA_PUBLIC_DEMO_TENANT=midnightnnn`
-- Scheduled multi-tenant jobs automatically include the public demo tenant when that env var is set
-- Gemini research generation for `midnightnnn` can use operator-managed credentials
-- Approved live/private tenants can borrow research-only Gemini from `midnightnnn` when `ARENA_SHARED_RESEARCH_GEMINI_SOURCE_TENANT=midnightnnn`
-- This shared fallback only hydrates research briefings. It does not enable Gemini trading agents for those tenants
-- All other tenants remain BYOK for Gemini / OpenAI / Anthropic keys
-- Tenants without Gemini credentials skip new research briefing generation gracefully, but cached `get_research_briefing` reads still work
-
----
-
-## Reconciliation & Safety
-
-Before every live cycle, the system runs a full safety check:
-
-```
-sync-account → sync-broker-trades → sync-broker-cash
-  → reconciliation → auto-recovery → re-check
-  → proceed only if clean
-```
-
-| Check | Severity |
-|-------|----------|
-| Position mismatch | **Error** — blocks cycle |
-| Negative agent cash | **Error** — blocks cycle |
-| Broker cash residual | Warning — logged, not blocked |
 
 ---
 
@@ -447,25 +386,18 @@ sync-account → sync-broker-trades → sync-broker-cash
 | LLM Providers | OpenAI, Google AI / Vertex AI, Anthropic |
 | Database | BigQuery (event store) + Firestore (vector search) |
 | Broker | [KIS Open Trading API](https://apiportal.koreainvestment.com/) |
-| Forecasting | NeuralForecast, Chronos, TimesFM, Lag-Llama, LightGBM |
+| Forecasting | NeuralForecast, Chronos, TimesFM, Lag-Llama |
 | UI | FastAPI + Jinja2 + HTMX |
-| Secrets | GCP Secret Manager |
-| Infra | Cloud Run Jobs + Cloud Run Service |
-| Language | Python 3.12+ |
+| Infra | GCP Cloud Run Jobs + Cloud Run Service |
 
 ---
 
 ## Development
 
 ```bash
-# Install with dev dependencies
 pip install -e .[dev]
-
-# Run tests (600+ test cases)
-pytest
-
-# Run specific test
-pytest tests/test_risk.py -v
+pytest                        # 600+ tests
+pytest tests/test_risk.py -v  # specific module
 ```
 
 ---
