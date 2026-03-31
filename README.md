@@ -43,22 +43,29 @@ The LLM IS the strategy.
 
 ## How It Works
 
-```
-Scheduler trigger (US: 15:00 ET / KR: 14:30 KST, Mon-Fri)
-  │
-  ├─ Holiday? → Skip
-  │
-  ├─ 1. Hydrate tenant runtime (secrets + config)
-  ├─ 2. Sync market data + broker account + trades + cash + dividends
-  ├─ 3. Reconciliation + auto-recovery
-  ├─ 4. Build forecasts (neural + foundation models)
-  ├─ 5. Research Agent (holdings analysis + movers)
-  │
-  ├─ 6. Draft Round ── 3 agents in parallel, analysis only (HOLD)
-  ├─ 7. Execution Round ── 3 agents in parallel, real trades
-  │     └─ OrderIntent → RiskEngine → Broker → KIS API
-  │
-  └─ 8. Record official NAV + compress memories
+```mermaid
+flowchart TD
+    START(["⏰ Scheduler Trigger<br>US 15:00 ET · KR 14:30 KST · Mon–Fri"])
+    START --> HOL{"🗓️ Holiday?"}
+    HOL -->|"Yes"| SKIP(["Skip"])
+    HOL -->|"No"| H["1 · Hydrate tenant runtime<br><i>secrets + config</i>"]
+    H --> S["2 · Sync market data + broker<br><i>quotes · account · trades · cash · dividends</i>"]
+    S --> R["3 · Reconciliation + auto-recovery"]
+    R --> F["4 · Build forecasts<br><i>neural + foundation models</i>"]
+    F --> RS["5 · Research Agent<br><i>holdings analysis + movers</i>"]
+    RS --> DRAFT["6 · Draft Round<br><i>3 agents in parallel · analysis only</i>"]
+    DRAFT --> EXEC["7 · Execution Round<br><i>3 agents in parallel · real trades</i><br>OrderIntent → RiskEngine → Broker → KIS API"]
+    EXEC --> NAV["8 · Record official NAV + compress memories"]
+
+    classDef trigger fill:#dbeafe,stroke:#3b82f6,stroke-width:2px,color:#1e40af
+    classDef decision fill:#fef3c7,stroke:#d97706,stroke-width:2px,color:#92400e
+    classDef step fill:#f0fdf4,stroke:#22c55e,stroke-width:1.5px,color:#14532d
+    classDef skip fill:#fee2e2,stroke:#ef4444,stroke-width:1.5px,color:#991b1b
+
+    class START trigger
+    class HOL decision
+    class H,S,R,F,RS,DRAFT,EXEC,NAV step
+    class SKIP skip
 ```
 
 ### The Agents
@@ -76,47 +83,85 @@ All agents run on [Google ADK](https://github.com/google/adk-python) with ReAct 
 ## Architecture
 
 ```mermaid
-graph TB
-    subgraph CLI["Entry Point"]
-        PIPE["run-pipeline --market us|kospi"]
+flowchart TB
+    %% ─── Entry Points ───
+    subgraph ENTRY[" 🎯 Entry Points "]
+        direction LR
+        CLI(["🖥️ CLI<br>run-pipeline --market us|kospi"])
+        SCHED(["⏰ Cloud Scheduler<br>US 15:00 ET · KR 14:30 KST"])
+        ADMIN(["🎛️ Admin UI<br>Prompts · Risk · Tools · Memory"])
     end
 
-    subgraph ADMIN["Admin UI"]
-        PAGES["Prompt · Agent · Risk · Sleeve · Tools · MCP · Memory Graph"]
+    %% ─── Orchestrator ───
+    ORCH{{"⚙️ Orchestrator"}}
+
+    %% ─── Pre-Trade Pipeline ───
+    subgraph PIPELINE[" 🔄 Pre-Trade Pipeline "]
+        direction LR
+        SYNC["📡 Sync<br><i>quotes · account<br>trades · cash</i>"]
+        RECON["🔍 Reconcile<br><i>auto-recovery</i>"]
+        FCAST["📈 Forecast<br><i>neural + foundation<br>model stacking</i>"]
+        RSRCH["🔬 Research<br><i>holdings · movers</i>"]
+        SYNC --> RECON --> FCAST --> RSRCH
     end
 
-    subgraph CORE["Core"]
-        CFG["arena_config (BQ)"]
-        ORCH["Orchestrator"]
-        CTX["ContextBuilder"]
-        RISK["RiskEngine"]
-        GW["ExecutionGateway"]
-        RECON["Reconciliation + Recovery"]
+    %% ─── Agent Arena ───
+    subgraph ARENA[" 🏟️ Agent Arena · Draft → Peer Review → Execute "]
+        direction LR
+        GPT["🟢 <b>GPT-5.2</b><br>OpenAI"]
+        GEM["🔵 <b>Gemini 3 Flash</b><br>Google AI"]
+        CLD["🟣 <b>Claude Sonnet 4.6</b><br>Anthropic"]
     end
 
-    subgraph AGENTS["ADK Agents (ReAct)"]
-        GPT["GPT-5.2"]
-        GEM["Gemini 3 Flash"]
-        CLAUDE["Claude Sonnet 4.6"]
+    %% ─── Tool Layer ───
+    subgraph TOOLS[" 🧰 19 Autonomous Tools + MCP "]
+        direction LR
+        TQ["📊 Quant<br><i>screen · optimize<br>forecast · momentum</i>"]
+        TS["📰 Sentiment<br><i>reddit · SEC<br>earnings · F&G</i>"]
+        TM["🌐 Macro<br><i>FRED · ECOS<br>indices</i>"]
+        TC["🧠 Memory<br><i>vector search<br>peer lessons</i>"]
+        TMCP["🔌 MCP<br><i>custom servers</i>"]
     end
 
-    subgraph TOOLS["Tools (19 + MCP)"]
-        BUILTIN["Quant · Sentiment · Macro · Context · Memory"]
-        MCP_T["MCP Custom Tools"]
+    %% ─── Risk & Execution ───
+    RISK{{"🛡️ Risk Engine<br><i>limits · buffers · cooldowns</i>"}}
+    GW(["⚡ Execution Gateway"])
+
+    %% ─── Storage Layer ───
+    subgraph STORE[" 💾 Storage "]
+        direction LR
+        BQ[("BigQuery<br><i>Event Store</i>")]
+        FS[("Firestore<br><i>Vector DB</i>")]
+        KIS["🏦 KIS Broker API"]
     end
 
-    subgraph STORE["Storage"]
-        BQ["BigQuery"]
-        FS["Firestore (Vector)"]
-        OT["KIS API"]
-    end
+    %% ─── Flow ───
+    ENTRY --> ORCH --> PIPELINE --> ARENA
+    ARENA <-->|"tool calls"| TOOLS
+    ARENA -->|"OrderIntent"| RISK
+    RISK -->|"approved"| GW --> KIS
+    TOOLS <--> BQ & FS
+    ADMIN -.->|"live config"| BQ
+    GW -.->|"trade log"| BQ
 
-    ADMIN -->|Save| CFG
-    CFG -->|Next batch| ORCH
-    PIPE --> ORCH --> CTX --> AGENTS
-    AGENTS --> BUILTIN & MCP_T --> BQ & FS & OT
-    ORCH --> GW --> RISK --> OT
-    ORCH --> RECON --> BQ & OT
+    %% ─── Styles ───
+    classDef entry fill:#dbeafe,stroke:#3b82f6,stroke-width:2px,color:#1e40af
+    classDef orch fill:#d1fae5,stroke:#059669,stroke-width:2.5px,color:#065f46
+    classDef pipe fill:#e0e7ff,stroke:#6366f1,stroke-width:1.5px,color:#312e81
+    classDef agent fill:#ede9fe,stroke:#8b5cf6,stroke-width:2.5px,color:#4c1d95
+    classDef tool fill:#ecfdf5,stroke:#10b981,stroke-width:1.5px,color:#064e3b
+    classDef risk fill:#fee2e2,stroke:#ef4444,stroke-width:2.5px,color:#991b1b
+    classDef gw fill:#fef3c7,stroke:#d97706,stroke-width:2px,color:#92400e
+    classDef store fill:#fff7ed,stroke:#f97316,stroke-width:2px,color:#9a3412
+
+    class CLI,SCHED,ADMIN entry
+    class ORCH orch
+    class SYNC,RECON,FCAST,RSRCH pipe
+    class GPT,GEM,CLD agent
+    class TQ,TS,TM,TC,TMCP tool
+    class RISK risk
+    class GW gw
+    class BQ,FS,KIS store
 ```
 
 ### Project Structure
@@ -274,16 +319,19 @@ All settings are stored in BigQuery (`arena_config`) and take effect on the **ne
 
 Agents remember past trades, strategy lessons, and manual notes across cycles.
 
-```
-Store: BigQuery (audit log) + Firestore (vector search)
-  ↓
-Retrieve: Semantic vector search → Reranking (type, freshness, ticker, performance)
-  ↓
-Inject: Cycle context + mid-REACT tool results
-  ↓
-Compress: Post-cycle MemoryCompactionAgent summarizes into lessons
-  ↓
-Cleanup: Auto-delete old low-score memories (policy-driven)
+```mermaid
+flowchart LR
+    ST["💾 Store<br><i>BigQuery + Firestore</i>"]
+    RT["🔍 Retrieve<br><i>Semantic Vector Search<br>→ Reranking</i>"]
+    IN["💉 Inject<br><i>Cycle Context +<br>Mid-REACT Results</i>"]
+    CO["🗜️ Compress<br><i>MemoryCompactionAgent<br>→ Lessons</i>"]
+    CL["🧹 Cleanup<br><i>Auto-delete Old<br>Low-score Memories</i>"]
+
+    ST --> RT --> IN --> CO --> CL
+    CL -.->|"policy-driven"| ST
+
+    classDef mem fill:#ede9fe,stroke:#8b5cf6,stroke-width:2px,color:#4c1d95
+    class ST,RT,IN,CO,CL mem
 ```
 
 The memory policy is fully configurable through the **3D Memory Graph** in Admin UI — 6 groups (Storage, Event Types, Compaction, Retrieval, REACT Injection, Cleanup) with click-to-edit nodes.
