@@ -1,0 +1,50 @@
+<div class="mb-5 mt-6 flex items-center gap-3">
+  <h3 class="font-display text-2xl font-bold text-ink-900 tracking-tight">Portfolio Overview</h3>
+  {% if is_live %}
+  <span class="inline-flex rounded-full bg-green-100/80 px-2 py-0.5 text-[10px] font-bold tracking-wider text-green-700">LIVE</span>
+  {% else %}
+  <span class="inline-flex rounded-full bg-amber-100/80 px-2 py-0.5 text-[10px] font-bold tracking-wider text-amber-700">PAPER</span>
+  {% endif %}
+</div>
+
+<section class="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
+  {% if cards_html %}
+  {{ cards_html|safe }}
+  {% else %}
+  <div class="col-span-full rounded-[24px] border border-ink-200 bg-white/80 p-8 text-center text-sm text-ink-500 shadow-sm backdrop-blur-md">포트폴리오 데이터가 없습니다.</div>
+  {% endif %}
+</section>
+
+{{ charts_html|safe }}
+
+<section class="mt-10 reveal rounded-[24px] border border-ink-200/60 bg-white/80 p-6 shadow-sm backdrop-blur-md">
+  <h3 class="mb-4 font-display text-lg font-bold text-ink-900 tracking-tight">Initial Sleeve Config</h3>
+  <div class="overflow-x-auto">
+    <table class="min-w-full text-left">
+      <thead>
+        <tr class="border-b border-ink-200 text-[10px] font-bold uppercase tracking-widest text-ink-400">
+          <th class="px-3 py-3">Agent</th>
+          <th class="px-3 py-3">Initialized</th>
+          <th class="px-3 py-3">Sleeve Capital</th>
+          <th class="px-3 py-3">Initial Positions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% if sleeve_rows %}
+          {% for row in sleeve_rows %}
+          <tr class="border-b border-ink-100 hover:bg-ink-50 transition-colors">
+            <td class="px-3 py-2 text-sm font-medium">{{ row.agent_id }}</td>
+            <td class="px-3 py-2 text-sm text-ink-600">{{ row.initialized_at_label }}</td>
+            <td class="px-3 py-2 text-sm">{{ row.sleeve_capital }}</td>
+            <td class="px-3 py-2 text-sm">{{ row.initial_positions }}</td>
+          </tr>
+          {% endfor %}
+        {% else %}
+        <tr>
+          <td class="px-3 py-4 text-sm text-ink-500 text-center" colspan="4">슬리브 설정이 없습니다.</td>
+        </tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</section>

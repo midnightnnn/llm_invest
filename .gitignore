@@ -1,0 +1,36 @@
+__pycache__/
+*.pyc
+.env
+.venv/
+venv/
+.pytest_cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build
+*.egg-info/
+dist/
+build/
+
+# Coverage
+htmlcov/
+.coverage
+
+# Playwright (test browser binaries)
+.pw-debs/
+.pw-libs/
+.venv-playwright/
+
+# Claude Code (local user settings)
+.claude/settings.local.json
+
+# Internal docs
+llm_arena_codebase_summary.md

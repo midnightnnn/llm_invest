@@ -1,0 +1,120 @@
+<section class="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
+  {% for card in cards %}
+  <div class="reveal flex flex-col rounded-[24px] border border-ink-200/60 bg-white/80 p-5 shadow-sm backdrop-blur-md transition-all duration-300 hover:-translate-y-1 hover:shadow-lg">
+    <p class="text-[10px] font-bold uppercase tracking-widest text-ink-500">{{ card.title }}</p>
+    <p{% if card.value_id %} id="{{ card.value_id }}"{% endif %} class="mt-2 font-display text-3xl font-bold tracking-tight text-ink-900">{{ card.value }}</p>
+    <p class="mt-auto pt-4 text-xs font-medium text-ink-500 line-clamp-1 border-t border-ink-100/50">{{ card.note }}</p>
+  </div>
+  {% endfor %}
+</section>
+
+<section class="reveal mt-8">
+  <h3 class="mb-3 text-sm font-bold uppercase tracking-widest text-ink-500">Tenant Health</h3>
+  <div class="rounded-[24px] border border-ink-200/60 bg-white/80 shadow-sm backdrop-blur-md overflow-x-auto">
+    <table class="w-full text-left">
+      <thead>
+        <tr class="text-[10px] font-bold uppercase tracking-widest text-ink-400">
+          <th class="px-4 py-3">Tenant</th><th class="px-4 py-3">Status</th>
+          <th class="px-4 py-3">Type</th><th class="px-4 py-3">Stage</th>
+          <th class="px-4 py-3">Started</th><th class="px-4 py-3">Finished</th>
+          <th class="px-4 py-3">Message</th><th class="px-4 py-3"></th>
+        </tr>
+      </thead>
+      <tbody id="ops-health-tbody">
+        {% for row in health_rows %}
+        <tr class="border-t border-ink-100/50">
+          <td class="px-4 py-2.5 text-sm font-medium"><a href="/?tenant_id={{ row.tenant_id }}" class="text-brand-700 hover:underline">{{ row.tenant_id }}</a></td>
+          <td class="px-4 py-2.5">{{ row.status_badge_html|safe }}</td>
+          <td class="px-4 py-2.5 text-xs text-ink-600">{{ row.run_type }}</td>
+          <td class="px-4 py-2.5 text-xs text-ink-600">{{ row.stage }}</td>
+          <td class="px-4 py-2.5 text-xs text-ink-500 font-mono">{{ row.started_html|safe }}</td>
+          <td class="px-4 py-2.5 text-xs text-ink-500 font-mono">{{ row.finished_html|safe }}</td>
+          <td class="px-4 py-2.5 text-xs text-ink-600 max-w-[260px] truncate">{{ row.message }}</td>
+          <td class="px-4 py-2.5">
+            {% if row.log_uri %}
+            <a href="{{ row.log_uri }}" target="_blank" class="text-brand-700 hover:underline text-[11px]">log</a>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="mt-8 grid gap-6 lg:grid-cols-2">
+  <div class="reveal">
+    <h3 class="mb-3 text-sm font-bold uppercase tracking-widest text-ink-500">Credentials</h3>
+    <div class="rounded-[24px] border border-ink-200/60 bg-white/80 shadow-sm backdrop-blur-md overflow-x-auto">
+      <table class="w-full text-left">
+        <thead>
+          <tr class="text-[10px] font-bold uppercase tracking-widest text-ink-400">
+            <th class="px-3 py-3">Tenant</th><th class="px-3 py-3">KIS</th>
+            <th class="px-3 py-3 text-center">GPT</th><th class="px-3 py-3 text-center">Gemini</th>
+            <th class="px-3 py-3 text-center">Claude</th><th class="px-3 py-3">Updated</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in credential_rows %}
+          <tr class="border-t border-ink-100/50">
+            <td class="px-3 py-2 text-sm font-medium">{{ row.tenant_id }}</td>
+            <td class="px-3 py-2 text-xs text-ink-600">{{ row.kis_env }}</td>
+            <td class="px-3 py-2 text-center">{{ row.openai_dot_html|safe }}</td>
+            <td class="px-3 py-2 text-center">{{ row.gemini_dot_html|safe }}</td>
+            <td class="px-3 py-2 text-center">{{ row.anthropic_dot_html|safe }}</td>
+            <td class="px-3 py-2 text-xs text-ink-500 font-mono">{{ row.updated_at_html|safe }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="reveal">
+    <h3 class="mb-3 text-sm font-bold uppercase tracking-widest text-ink-500">Audit Log</h3>
+    <div class="rounded-[24px] border border-ink-200/60 bg-white/80 shadow-sm backdrop-blur-md overflow-y-auto max-h-[420px] styled-scrollbar">
+      <table class="w-full text-left">
+        <thead class="sticky top-0 bg-white/95 backdrop-blur-sm">
+          <tr class="text-[10px] font-bold uppercase tracking-widest text-ink-400">
+            <th class="px-3 py-3">Time</th><th class="px-3 py-3">User</th>
+            <th class="px-3 py-3">Tenant</th><th class="px-3 py-3">Action</th>
+            <th class="px-3 py-3">Status</th>
+          </tr>
+        </thead>
+        <tbody id="ops-audit-tbody">
+          {% for row in audit_rows %}
+          <tr class="border-t border-ink-100/50">
+            <td class="px-3 py-2 text-xs text-ink-500 font-mono whitespace-nowrap">{{ row.timestamp_html|safe }}</td>
+            <td class="px-3 py-2 text-xs text-ink-600">{{ row.user }}</td>
+            <td class="px-3 py-2 text-xs text-ink-600">{{ row.tenant }}</td>
+            <td class="px-3 py-2 text-xs font-medium text-ink-700">{{ row.action }}</td>
+            <td class="px-3 py-2">{{ row.status_badge_html|safe }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<script>
+(function(){
+  function refresh(){
+    fetch('/api/ops/health').then(function(r){return r.json();}).then(function(data){
+      if(!Array.isArray(data))return;
+      var ok=0,warn=0,fail=0;
+      data.forEach(function(r){
+        var s=String(r.status||'');
+        if(s==='success'||s==='running')ok++;
+        else if(s==='warning'||s==='blocked')warn++;
+        else if(s==='failed')fail++;
+      });
+      var el;
+      el=document.getElementById('ops-healthy');if(el)el.textContent=String(ok);
+      el=document.getElementById('ops-warning');if(el)el.textContent=String(warn);
+      el=document.getElementById('ops-failed');if(el)el.textContent=String(fail);
+    }).catch(function(){});
+  }
+  setInterval(refresh,30000);
+})();
+</script>

@@ -1,0 +1,15 @@
+<section class="mt-10 reveal mx-auto max-w-2xl rounded-[28px] border {{ border_class }} bg-white/85 p-8 shadow-sm backdrop-blur-md">
+  <p class="text-[11px] font-semibold uppercase tracking-[0.28em] {{ eyebrow_text_class }}">{{ eyebrow }}</p>
+  <h1 class="mt-3 font-display text-3xl font-bold tracking-tight text-ink-900">{{ title }}</h1>
+  {% for paragraph in paragraphs %}
+  <p class="{{ paragraph.classes }}">{{ paragraph.html|safe }}</p>
+  {% endfor %}
+  {% if note %}
+  <p class="mt-3 text-sm text-ink-500">메모: {{ note }}</p>
+  {% endif %}
+  <div class="mt-6 flex flex-wrap gap-3">
+    {% for action in actions %}
+    <a href="{{ action.href }}" class="{{ action.classes }}">{{ action.label }}</a>
+    {% endfor %}
+  </div>
+</section>

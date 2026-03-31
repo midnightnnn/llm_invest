@@ -1,0 +1,48 @@
+[project]
+name = "llm-arena"
+version = "0.1.0"
+description = "Multi-agent LLM investment arena with BigQuery, ADK, and centralized execution."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "google-adk[extensions]>=1.25.0",
+    "google-cloud-bigquery>=3.40.1",
+    "google-cloud-secret-manager>=2.26.0",
+    "google-cloud-firestore>=2.16.0",
+    "fastapi>=0.124.1",
+    "uvicorn>=0.34.0",
+    "pandas>=2.2.0",
+    "numpy>=1.26,<2.0",
+    "scipy>=1.14.0",
+    "pydantic>=2.12.0",
+    "python-multipart>=0.0.9",
+    "python-dotenv>=1.0.0",
+    "itsdangerous>=2.2.0",
+    "rich>=13.7.0",
+    "requests>=2.32.0",
+    "korean-lunar-calendar>=0.3.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2.0",
+]
+forecasting = [
+    "setuptools>=70.0.0,<81.0.0",
+    "torch @ https://download.pytorch.org/whl/cpu/torch-2.10.0%2Bcpu-cp312-cp312-manylinux_2_28_x86_64.whl ; platform_system == 'Linux' and platform_machine == 'x86_64'",
+    "torch>=2.3.0 ; platform_system != 'Linux' or platform_machine != 'x86_64'",
+    "neuralforecast==3.1.4",
+    "ray==2.54.0",
+    "chronos-forecasting>=2.2.2",
+    "timesfm @ git+https://github.com/google-research/timesfm.git",
+    "lag-llama @ git+https://github.com/time-series-foundation-models/lag-llama.git",
+    "lightgbm>=4.5.0",
+    "scikit-learn>=1.6.0",
+]
+
+[project.scripts]
+llm-arena = "arena.cli:main"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

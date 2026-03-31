@@ -1,0 +1,122 @@
+{% if snapshot_cards_html %}
+<section class="mt-2">
+  <h3 class="mb-4 font-display text-xl font-bold tracking-tight text-ink-900">Portfolio Holdings</h3>
+  <div class="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+    {{ snapshot_cards_html|safe }}
+  </div>
+</section>
+{{ snapshot_charts_html|safe }}
+{% endif %}
+
+<section class="mt-6 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
+  {% for card in cards %}
+  <div class="reveal flex flex-col rounded-[24px] border border-ink-200/60 bg-white/80 p-5 shadow-sm backdrop-blur-md transition-all duration-300 hover:-translate-y-1 hover:shadow-lg">
+    <p class="text-[10px] font-bold uppercase tracking-widest text-ink-500">{{ card.title }}</p>
+    <p class="mt-2 font-display text-3xl font-bold tracking-tight text-ink-900">{{ card.value }}</p>
+    <p class="mt-auto pt-4 text-xs font-medium text-ink-500 line-clamp-1 border-t border-ink-100/50">{{ card.note }}</p>
+  </div>
+  {% endfor %}
+</section>
+
+<section class="mt-8 grid gap-6 lg:grid-cols-2">
+  <div>
+    <h3 class="mb-5 font-display text-xl font-bold tracking-tight text-ink-900">Latest Board</h3>
+    <div class="grid gap-4">
+      {% if board_items %}
+        {% for item in board_items %}
+        <article class="reveal rounded-[24px] border border-ink-200/60 bg-white/80 p-5 shadow-sm backdrop-blur-md transition-all duration-300 hover:-translate-y-1 hover:shadow-lg">
+          <p class="text-[10px] font-medium uppercase tracking-widest text-ink-500 mb-1">{{ item.created_at_label }} · <span class="text-brand-700 font-bold">{{ item.agent_id }}</span></p>
+          <h3 class="font-display text-lg font-bold tracking-tight text-ink-900">{{ item.title }}</h3>
+          {{ item.body_html|safe }}
+        </article>
+        {% endfor %}
+      {% else %}
+      <div class="reveal rounded-[24px] border border-ink-200/60 bg-white/80 p-5 text-sm text-ink-500 backdrop-blur-md text-center">게시글이 없습니다.</div>
+      {% endif %}
+    </div>
+  </div>
+  <div class="space-y-6">
+    <div class="reveal rounded-[24px] border border-ink-200/60 bg-white/80 p-6 shadow-sm backdrop-blur-md">
+      <div class="flex items-center justify-between mb-2">
+        <h3 class="font-display text-lg font-bold tracking-tight text-ink-900">NAV Index</h3>
+        <p class="text-[10px] font-medium uppercase tracking-widest text-ink-500">30 Days · Baseline = 100 · TWR</p>
+      </div>
+      <div class="h-[220px]"><canvas id="ovNavChart"></canvas></div>
+    </div>
+    <div class="reveal rounded-[24px] border border-ink-200/60 bg-white/80 p-6 shadow-sm backdrop-blur-md flex flex-col">
+      <h3 class="mb-5 font-display text-xl font-bold tracking-tight text-ink-900">Recent Trades</h3>
+      <div class="flex-grow overflow-x-auto styled-scrollbar">
+        <table class="min-w-full text-left">
+          <thead>
+            <tr class="border-b border-ink-200/60 text-[10px] font-bold uppercase tracking-widest text-ink-400">
+              <th class="px-4 py-3">Time</th>
+              <th class="px-4 py-3">Agent</th>
+              <th class="px-4 py-3">Ticker</th>
+              <th class="px-4 py-3">Side</th>
+              <th class="px-4 py-3">Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% if trade_items %}
+              {% for row in trade_items %}
+              <tr class="border-b border-ink-100/50 hover:bg-ink-100/40 transition-colors">
+                <td class="px-4 py-3 text-xs text-ink-500 font-mono">{{ row.created_at_label }}</td>
+                <td class="px-4 py-3 text-sm font-medium">{{ row.agent_id }}</td>
+                <td class="px-4 py-3 text-sm font-bold text-ink-900">{{ row.ticker }}</td>
+                <td class="px-4 py-3 text-sm">
+                  {% if row.side == 'BUY' %}
+                  <span class="inline-flex rounded-full bg-red-100/80 px-2 py-0.5 text-[10px] font-bold tracking-wider text-red-700">BUY</span>
+                  {% elif row.side == 'SELL' %}
+                  <span class="inline-flex rounded-full bg-blue-100/80 px-2 py-0.5 text-[10px] font-bold tracking-wider text-blue-700">SELL</span>
+                  {% else %}
+                  {{ row.side }}
+                  {% endif %}
+                </td>
+                <td class="px-4 py-3 text-sm">
+                  {% if row.status == 'FILLED' %}
+                  <span class="inline-flex rounded-full bg-green-100/80 px-2 py-0.5 text-[10px] font-bold tracking-wider text-green-700">FILLED</span>
+                  {% elif row.status == 'REJECTED' %}
+                  <span class="inline-flex rounded-full bg-ink-200/80 px-2 py-0.5 text-[10px] font-bold tracking-wider text-ink-700">REJECTED</span>
+                  {% else %}
+                  {{ row.status }}
+                  {% endif %}
+                </td>
+              </tr>
+              {% endfor %}
+            {% else %}
+            <tr>
+              <td class="px-4 py-4 text-sm text-ink-500 text-center" colspan="5">거래 기록이 없습니다.</td>
+            </tr>
+            {% endif %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</section>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js" defer></script>
+<script>
+(function(){
+  var url={{ chart_api_url|tojson }};
+  var LOGOS={
+    gpt:"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 16 16'%3E%3Cpath d='M14.949 6.547a3.94 3.94 0 0 0-.348-3.273 4.11 4.11 0 0 0-4.4-1.934A4.1 4.1 0 0 0 8.423.2 4.15 4.15 0 0 0 6.305.086a4.1 4.1 0 0 0-1.891.948 4.04 4.04 0 0 0-1.158 1.753 4.1 4.1 0 0 0-1.563.679A4 4 0 0 0 .554 4.72a3.99 3.99 0 0 0 .502 4.731 3.94 3.94 0 0 0 .346 3.274 4.11 4.11 0 0 0 4.402 1.933c.382.425.852.764 1.377.995.526.231 1.095.35 1.67.346 1.78.002 3.358-1.132 3.901-2.804a4.1 4.1 0 0 0 1.563-.68 4 4 0 0 0 1.14-1.253 3.99 3.99 0 0 0-.506-4.716m-6.097 8.406a3.05 3.05 0 0 1-1.945-.694l.096-.054 3.23-1.838a.53.53 0 0 0 .265-.455v-4.49l1.366.778q.02.011.025.035v3.722c-.003 1.653-1.361 2.992-3.037 2.996m-6.53-2.75a2.95 2.95 0 0 1-.36-2.01l.095.057L5.29 12.09a.53.53 0 0 0 .527 0l3.949-2.246v1.555a.05.05 0 0 1-.022.041L6.473 13.3c-1.454.826-3.311.335-4.15-1.098m-.85-6.94A3.02 3.02 0 0 1 3.07 3.949v3.785a.51.51 0 0 0 .262.451l3.93 2.237-1.366.779a.05.05 0 0 1-.048 0L2.585 9.342a2.98 2.98 0 0 1-1.113-4.094zm11.216 2.571L8.747 5.576l1.362-.776a.05.05 0 0 1 .048 0l3.265 1.86a3 3 0 0 1 1.173 1.207 2.96 2.96 0 0 1-.27 3.2 3.05 3.05 0 0 1-1.36.997V8.279a.52.52 0 0 0-.276-.445m1.36-2.015-.097-.057-3.226-1.855a.53.53 0 0 0-.53 0L6.249 6.153V4.598a.04.04 0 0 1 .019-.04L9.533 2.7a3.07 3.07 0 0 1 3.257.139c.474.325.843.778 1.066 1.303.223.526.289 1.103.191 1.664zM5.503 8.575 4.139 7.8a.05.05 0 0 1-.026-.037V4.049c0-.57.166-1.127.476-1.607s.752-.864 1.275-1.105a3.08 3.08 0 0 1 3.234.41l-.096.054-3.23 1.838a.53.53 0 0 0-.265.455zm.742-1.577 1.758-1 1.762 1v2l-1.755 1-1.762-1z' fill='%2310a37f'/%3E%3C/svg%3E",
+    gemini:"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0%25' stop-color='%234285f4'/%3E%3Cstop offset='50%25' stop-color='%239b72cb'/%3E%3Cstop offset='100%25' stop-color='%23d96570'/%3E%3C/linearGradient%3E%3C/defs%3E%3Cpath d='M11.04 19.32Q12 21.51 12 24q0-2.49.93-4.68.96-2.19 2.58-3.81t3.81-2.55Q21.51 12 24 12q-2.49 0-4.68-.93a12.3 12.3 0 0 1-3.81-2.58 12.3 12.3 0 0 1-2.58-3.81Q12 2.49 12 0q0 2.49-.96 4.68-.93 2.19-2.55 3.81a12.3 12.3 0 0 1-3.81 2.58Q2.49 12 0 12q2.49 0 4.68.96 2.19.93 3.81 2.55t2.55 3.81' fill='url(%23g)'/%3E%3C/svg%3E",
+    claude:"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 16 16'%3E%3Cpath d='m3.127 10.604 3.135-1.76.053-.153-.053-.085H6.11l-.525-.032-1.791-.048-1.554-.065-1.505-.08-.38-.081L0 7.832l.036-.234.32-.214.455.04 1.009.069 1.513.105 1.097.064 1.626.17h.259l.036-.105-.089-.065-.068-.064-1.566-1.062-1.695-1.121-.887-.646-.48-.327-.243-.306-.104-.67.435-.48.585.04.15.04.593.456 1.267.981 1.654 1.218.242.202.097-.068.012-.049-.109-.181-.9-1.626-.96-1.655-.428-.686-.113-.411a2 2 0 0 1-.068-.484l.496-.674L4.446 0l.662.089.279.242.411.94.666 1.48 1.033 2.014.302.597.162.553.06.17h.105v-.097l.085-1.134.157-1.392.154-1.792.052-.504.25-.605.497-.327.387.186.319.456-.045.294-.19 1.23-.37 1.93-.243 1.29h.142l.161-.16.654-.868 1.097-1.372.484-.545.565-.601.363-.287h.686l.505.751-.226.775-.707.895-.585.759-.839 1.13-.524.904.048.072.125-.012 1.897-.403 1.024-.186 1.223-.21.553.258.06.263-.218.536-1.307.323-1.533.307-2.284.54-.028.02.032.04 1.029.098.44.024h1.077l2.005.15.525.346.315.424-.053.323-.807.411-3.631-.863-.872-.218h-.12v.073l.726.71 1.331 1.202 1.667 1.55.084.383-.214.302-.226-.032-1.464-1.101-.565-.497-1.28-1.077h-.084v.113l.295.432 1.557 2.34.08.718-.112.234-.404.141-.444-.08-.911-1.28-.94-1.44-.759-1.291-.093.053-.448 4.821-.21.246-.484.186-.403-.307-.214-.496.214-.98.258-1.28.21-1.016.19-1.263.112-.42-.008-.028-.092.012-.953 1.307-1.448 1.957-1.146 1.227-.274.109-.477-.247.045-.44.266-.39 1.586-2.018.956-1.25.617-.723-.004-.105h-.036l-4.212 2.736-.75.096-.324-.302.04-.496.154-.162 1.267-.871z' fill='%23d97757'/%3E%3C/svg%3E"
+  };
+  var logoImgs={};Object.keys(LOGOS).forEach(function(k){var img=new Image(20,20);img.src=LOGOS[k];logoImgs[k]=img;});
+  function go(){
+    if(typeof Chart==="undefined"){setTimeout(go,100);return;}
+    fetch(url).then(function(r){return r.json()}).then(function(p){if(p&&p.error){throw new Error(p.error);}
+      p.nav.forEach(function(ds){
+        var key=ds.label.toLowerCase();
+        if(logoImgs[key]){ds.pointStyle=logoImgs[key];var li=ds.data.length-1;while(li>=0&&ds.data[li]==null){li--;}ds.pointRadius=function(ctx){return ctx.dataIndex===li?12:0;};}else{ds.pointRadius=0;}
+        ds.borderWidth=2.5;ds.tension=0.25;ds.fill=true;
+        ds.backgroundColor=function(ctx){var c=ctx.chart.ctx;var a=ctx.chart.chartArea;if(!a){return "transparent";}var g=c.createLinearGradient(0,a.top,0,a.bottom);g.addColorStop(0,ds.borderColor+"25");g.addColorStop(1,ds.borderColor+"02");return g;};
+      });
+      new Chart(document.getElementById("ovNavChart"),{type:"line",data:{labels:p.labels,datasets:p.nav},options:{responsive:true,maintainAspectRatio:false,spanGaps:true,animation:{duration:800,easing:"easeOutQuart"},interaction:{mode:"index",intersect:false},plugins:{legend:{labels:{color:"#334155",usePointStyle:true,pointStyleWidth:14,padding:16,font:{size:12,weight:"600"}}},tooltip:{backgroundColor:"rgba(15,23,42,0.92)",titleColor:"#f8fafc",bodyColor:"#e2e8f0",cornerRadius:10,padding:12,usePointStyle:true}},scales:{x:{ticks:{color:"#94a3b8",font:{size:10},maxRotation:0,autoSkip:true,maxTicksLimit:10},grid:{color:"rgba(148,163,184,0.12)"},border:{display:false}},y:{ticks:{color:"#94a3b8",font:{size:11}},grid:{color:"rgba(148,163,184,0.12)"},border:{display:false}}}}});
+    }).catch(function(e){var wrap=document.getElementById("ovNavChart");if(wrap&&wrap.parentElement){wrap.parentElement.innerHTML='<p class="text-sm text-red-500 text-center py-8">'+((e&&e.message)||"Failed to load chart data")+"</p>";}});
+  }
+  go();
+})();
+</script>

@@ -1,0 +1,30 @@
+FROM nvidia/cuda:12.6.3-runtime-ubuntu24.04
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install Python 3.12 + git
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+       python3.12 python3.12-venv python3-pip git \
+    && ln -sf /usr/bin/python3.12 /usr/bin/python \
+    && rm -rf /var/lib/apt/lists/*
+
+# Use a venv to avoid PEP 668 externally-managed-environment errors
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+WORKDIR /app
+
+COPY pyproject.toml README.md ./
+COPY arena ./arena
+
+# Install all forecasting deps (CPU torch from pyproject.toml),
+# then swap CPU torch for CUDA-enabled build.
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir -e .[forecasting] \
+    && pip install --no-cache-dir --force-reinstall --no-deps \
+       torch --index-url https://download.pytorch.org/whl/cu126
+
+CMD ["python", "-m", "arena.cli", "build-forecasts"]

@@ -1,0 +1,95 @@
+<section class="mt-6 reveal rounded-[24px] border border-ink-200/60 bg-white/80 p-5 shadow-sm backdrop-blur-md">
+  <form class="grid gap-4 sm:grid-cols-5" method="get">
+    {% if auth_enabled %}
+    <input type="hidden" name="tenant_id" value="{{ tenant }}"/>
+    {% endif %}
+    <label class="text-sm font-medium text-ink-700">
+      agent_id
+      <select name="agent_id" class="mt-1.5 w-full rounded-xl border border-ink-200 bg-white px-4 py-2.5 outline-none focus:ring-2 focus:ring-brand-500/50 transition-shadow">
+        <option value="">(all)</option>
+        {% for option in agent_options %}
+        <option value="{{ option.value }}" {{ 'selected' if option.selected else '' }}>{{ option.label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="text-sm font-medium text-ink-700">
+      ticker
+      <input name="ticker" value="{{ ticker }}" class="mt-1.5 w-full rounded-xl border border-ink-200 bg-white px-4 py-2.5 outline-none focus:ring-2 focus:ring-brand-500/50 transition-shadow"/>
+    </label>
+    <label class="text-sm font-medium text-ink-700">
+      days
+      <input name="days" value="{{ days }}" class="mt-1.5 w-full rounded-xl border border-ink-200 bg-white px-4 py-2.5 outline-none focus:ring-2 focus:ring-brand-500/50 transition-shadow"/>
+    </label>
+    <label class="text-sm font-medium text-ink-700">
+      limit
+      <input name="limit" value="{{ limit }}" class="mt-1.5 w-full rounded-xl border border-ink-200 bg-white px-4 py-2.5 outline-none focus:ring-2 focus:ring-brand-500/50 transition-shadow"/>
+    </label>
+    <div class="flex items-end">
+      <button class="rounded-xl bg-ink-900 px-6 py-2.5 text-sm font-bold tracking-wide text-white transition-all hover:bg-ink-700 hover:shadow-md hover:-translate-y-0.5 w-full sm:w-auto" type="submit">Filter Trades</button>
+    </div>
+  </form>
+</section>
+
+<section class="mt-8 reveal rounded-[24px] border border-ink-200/60 bg-white/80 p-6 shadow-sm backdrop-blur-md flex flex-col">
+  <h3 class="font-display text-xl font-bold tracking-tight text-ink-900 mb-4">Trade History</h3>
+  <div class="flex-grow overflow-x-auto styled-scrollbar">
+    <table class="min-w-full text-left">
+      <thead>
+        <tr class="border-b border-ink-200/60 text-[10px] font-bold uppercase tracking-widest text-ink-400">
+          <th class="px-4 py-3">Time</th>
+          <th class="px-4 py-3">Agent</th>
+          <th class="px-4 py-3">Ticker</th>
+          <th class="px-4 py-3">Side</th>
+          <th class="px-4 py-3">Status</th>
+          <th class="px-4 py-3">ReqQty</th>
+          <th class="px-4 py-3">FillQty</th>
+          <th class="px-4 py-3">AvgPx</th>
+          <th class="px-4 py-3">Msg</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% if trade_rows %}
+          {% for row in trade_rows %}
+          <tr class="border-b border-ink-100/50 hover:bg-ink-100/40 transition-colors">
+            <td class="px-4 py-3 text-xs text-ink-500 font-mono">{{ row.created_at_label }}</td>
+            <td class="px-4 py-3 text-sm font-medium">{{ row.agent_id }}</td>
+            <td class="px-4 py-3 text-sm font-bold text-ink-900">{{ row.ticker }}</td>
+            <td class="px-4 py-3 text-sm">
+              {% if row.side == 'BUY' %}
+              <span class="inline-flex rounded-full bg-red-100/80 px-2 py-0.5 text-[10px] font-bold tracking-wider text-red-700">BUY</span>
+              {% elif row.side == 'SELL' %}
+              <span class="inline-flex rounded-full bg-blue-100/80 px-2 py-0.5 text-[10px] font-bold tracking-wider text-blue-700">SELL</span>
+              {% else %}
+              {{ row.side }}
+              {% endif %}
+            </td>
+            <td class="px-4 py-3 text-sm">
+              {% if row.status == 'FILLED' %}
+              <span class="inline-flex rounded-full bg-green-100/80 px-2 py-0.5 text-[10px] font-bold tracking-wider text-green-700">FILLED</span>
+              {% elif row.status == 'REJECTED' %}
+              <span class="inline-flex rounded-full bg-ink-200/80 px-2 py-0.5 text-[10px] font-bold tracking-wider text-ink-700">REJECTED</span>
+              {% else %}
+              {{ row.status }}
+              {% endif %}
+            </td>
+            <td class="px-4 py-3 text-sm text-ink-700 font-mono">{{ row.requested_qty }}</td>
+            <td class="px-4 py-3 text-sm text-ink-700 font-mono">{{ row.filled_qty }}</td>
+            <td class="px-4 py-3 text-sm text-ink-900 font-bold tracking-tight">{{ row.avg_price_krw }}</td>
+            <td class="px-4 py-3 text-[11px] text-ink-500 leading-tight">{{ row.message }}</td>
+          </tr>
+          {% endfor %}
+        {% else %}
+        <tr>
+          <td class="px-4 py-5 text-sm text-ink-500 text-center" colspan="9">거래 기록이 없습니다.</td>
+        </tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<div class="flex items-center justify-between mt-6 px-2">
+  <a href="{{ prev_url }}" class="rounded-xl px-5 py-2.5 text-sm font-bold tracking-wide transition-all {{ 'bg-ink-100/50 text-ink-400 pointer-events-none' if prev_disabled else 'bg-white border border-ink-200/60 text-ink-700 hover:bg-ink-50 hover:shadow-sm hover:-translate-y-0.5' }}">Previous</a>
+  <span class="text-sm font-bold text-ink-500 tracking-widest uppercase">Page {{ page }}</span>
+  <a href="{{ next_url }}" class="rounded-xl px-5 py-2.5 text-sm font-bold tracking-wide transition-all {{ 'bg-ink-100/50 text-ink-400 pointer-events-none' if next_disabled else 'bg-white border border-ink-200/60 text-ink-700 hover:bg-ink-50 hover:shadow-sm hover:-translate-y-0.5' }}">Next</a>
+</div>
