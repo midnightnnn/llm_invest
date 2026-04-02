@@ -4,6 +4,7 @@ from datetime import date, datetime, timezone
 from types import SimpleNamespace
 
 import arena.cli as cli
+import pytest
 from arena.config import load_settings
 
 
@@ -78,11 +79,12 @@ def test_resolve_batch_tenants_uses_repo_when_env_missing(monkeypatch) -> None:
     assert cli._resolve_batch_tenants(repo, fallback="local") == ["tenant-a", "tenant-b"]
 
 
-def test_resolve_batch_tenants_falls_back_when_none_found(monkeypatch) -> None:
+def test_resolve_batch_tenants_raises_when_none_found(monkeypatch) -> None:
     monkeypatch.delenv("ARENA_PUBLIC_DEMO_TENANT", raising=False)
     monkeypatch.delenv("ARENA_BATCH_TENANTS", raising=False)
     repo = _FakeRepo(tenants=[])
-    assert cli._resolve_batch_tenants(repo, fallback="Tenant-Z") == ["tenant-z"]
+    with pytest.raises(RuntimeError, match="no runtime tenants resolved"):
+        cli._resolve_batch_tenants(repo, fallback="Tenant-Z")
 
 
 def test_resolve_batch_tenants_appends_public_demo_tenant(monkeypatch) -> None:

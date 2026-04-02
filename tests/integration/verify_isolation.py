@@ -1,3 +1,5 @@
+"""Manual BigQuery isolation verification script. Not part of the pytest suite."""
+
 from arena.config import load_settings
 from arena.data.bq import BigQueryRepository
 from arena.models import BoardPost

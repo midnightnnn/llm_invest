@@ -44,29 +44,6 @@ def mentioned_tickers(orders: list[dict[str, Any]]) -> list[str]:
             out.append(ticker)
     return out
 
-
-def empty_market_output(agent_id: str) -> AgentOutput:
-    """Returns fallback output when market rows are missing."""
-    post = BoardPost(
-        agent_id=agent_id,
-        title="거래 없음",
-        body="시장 데이터가 비어있습니다. ETL 동기화를 기다리는 중입니다.",
-        tickers=[],
-    )
-    return AgentOutput(intents=[], board_post=post)
-
-
-def failed_hold_output(agent_id: str, reason: str) -> AgentOutput:
-    """Returns HOLD output when the model call fails."""
-    post = BoardPost(
-        agent_id=agent_id,
-        title="임시 HOLD",
-        body=f"모델 호출 불안정으로 이번 사이클은 HOLD 처리했습니다. 사유: {reason}",
-        tickers=[],
-    )
-    return AgentOutput(intents=[], board_post=post)
-
-
 def draft_phase_output(
     *,
     agent_id: str,

@@ -667,7 +667,13 @@ class MemoryBQStore:
         WHERE tenant_id = @tenant_id
           AND agent_id = @agent_id
           AND event_type = 'trade_execution'
-          AND summary LIKE CONCAT(@ticker, ' BUY%')
+          AND (
+            (
+              UPPER(COALESCE(JSON_VALUE(payload_json, '$.intent.ticker'), '')) = @ticker
+              AND UPPER(COALESCE(JSON_VALUE(payload_json, '$.intent.side'), '')) = 'BUY'
+            )
+            OR summary LIKE CONCAT(@ticker, ' BUY%')
+          )
           AND trading_mode = @trading_mode
         ORDER BY created_at DESC
         LIMIT @limit
@@ -677,7 +683,7 @@ class MemoryBQStore:
             {
                 "tenant_id": tenant,
                 "agent_id": agent_id,
-                "ticker": ticker,
+                "ticker": str(ticker or "").strip().upper(),
                 "limit": limit,
                 "trading_mode": trading_mode,
             },

@@ -101,6 +101,11 @@ def _render_agent_card(
     aid = html.escape(str(entry["id"]))
     provider = str(entry.get("provider") or "")
     model = html.escape(str(entry.get("model") or ""))
+    try:
+        capital_krw = max(float(entry.get("capital_krw") or tenant_settings.sleeve_capital_krw), 0.0)
+    except (TypeError, ValueError):
+        capital_krw = float(tenant_settings.sleeve_capital_krw)
+    capital_value = html.escape(str(int(round(capital_krw))))
     has_key = bool(api_status.get(aid) or api_status.get(provider))
     key_badge = (
         '<span class="inline-block rounded-full bg-green-100 px-2 py-0.5 text-[10px] font-bold text-green-700">KEY OK</span>'
@@ -162,9 +167,10 @@ def _render_agent_card(
         '<button type="button" class="agent-remove-btn text-red-400 hover:text-red-600 text-lg font-bold px-1 transition-colors" title="Remove">&times;</button>'
         "</div></div>"
         f'<input type="hidden" data-field="provider" value="{provider}"/>'
-        '<div class="grid gap-x-3 gap-y-1 grid-cols-2 sm:grid-cols-3 items-end">'
+        '<div class="grid gap-x-3 gap-y-1 grid-cols-2 sm:grid-cols-4 items-end">'
         f'<label class="text-[10px] font-semibold uppercase tracking-widest text-ink-400">Market<span class="field-tip">?<span class="tip-body">에이전트가 거래할 시장. US(나스닥+NYSE) 또는 KOSPI. 복수 선택 시 양쪽 모두 거래합니다.</span></span><div class="mt-0.5 flex gap-1.5 flex-wrap agent-market-pills">{market_pills}</div></label>'
         f'<label class="text-[10px] font-semibold uppercase tracking-widest text-ink-400">Model<span class="field-tip">?<span class="tip-body">LLM 모델 ID. 예: gpt-5.2, gemini-3-flash-preview, claude-sonnet-4-6</span></span><input type="text" data-field="model" value="{model}" class="mt-0.5 block w-full rounded-lg border border-ink-200 bg-white px-2 py-1.5 text-sm" placeholder="model"/></label>'
+        f'<label class="text-[10px] font-semibold uppercase tracking-widest text-ink-400">Capital ₩<span class="field-tip">?<span class="tip-body">가상 배정 자본금(원). 저장 시 agent별 자본 기준과 NAV가 즉시 다시 맞춰집니다.</span></span><input type="number" data-field="capital" value="{capital_value}" class="mt-0.5 block w-full rounded-lg border border-ink-200 bg-white px-2 py-1.5 text-sm text-right" min="0" step="100000"/></label>'
         f'<label class="text-[10px] font-semibold uppercase tracking-widest text-ink-400">API Key<span class="click-tip">?<span class="tip-body">{provider_key_help.get(provider, provider_api_key_help_html(provider))}</span></span><input type="password" data-field="api_key" placeholder="&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;" class="mt-0.5 block w-full rounded-lg border border-ink-200 bg-white px-2 py-1.5 text-xs" autocomplete="off"/></label>'
         "</div></div>"
         '<div class="agent-detail hidden border-t border-ink-200/40 px-4 py-4 space-y-4 bg-ink-50/30">'
@@ -260,10 +266,13 @@ def build_agents_panel(
         + "var id=card.dataset.agentId;"
         + 'var provider=card.querySelector("[data-field=provider]").value;'
         + 'var model=card.querySelector("[data-field=model]").value.trim();'
+        + 'var capitalInput=card.querySelector("[data-field=capital]");'
+        + "var capitalValue=DEFAULT_CAP;"
+        + 'if(capitalInput){var parsedCapital=parseFloat(capitalInput.value);if(isFinite(parsedCapital)&&parsedCapital>0){capitalValue=parsedCapital;}}'
         + 'var apiKey=card.querySelector("[data-field=api_key]").value.trim();'
         + 'var mktArr=[];card.querySelectorAll(".market-pill.pill-on").forEach(function(p){mktArr.push(p.getAttribute("data-market"));});'
         + "var targetMarket=mktArr.join(',');"
-        + 'var obj={id:id,provider:provider,model:model,capital_krw:DEFAULT_CAP,api_key:apiKey||"",target_market:targetMarket};'
+        + 'var obj={id:id,provider:provider,model:model,capital_krw:capitalValue,api_key:apiKey||"",target_market:targetMarket};'
         + 'var ta=card.querySelector("[data-field=system_prompt]");'
         + "if(ta&&ta.value.trim())obj.system_prompt=ta.value.trim();"
         + "var rp={};"

@@ -22,17 +22,27 @@ except Exception:  # pragma: no cover - optional dependency/runtime environment
     StreamableHTTPConnectionParams = None  # type: ignore[assignment]
 
 
-def _parse_json_list(raw: str | None) -> list[Any]:
+def _parse_json_list(raw: str | None, *, field_name: str = "json_list") -> list[Any]:
     """Safely parses a JSON array; returns [] on parse/type mismatch."""
     text = str(raw or "").strip()
     if not text:
         return []
     try:
         parsed = json.loads(text)
-    except Exception:
+    except Exception as exc:
+        logger.warning(
+            "[yellow]tool config JSON parse failed[/yellow] field=%s err=%s",
+            field_name,
+            str(exc),
+        )
         return []
     if isinstance(parsed, list):
         return parsed
+    logger.warning(
+        "[yellow]tool config JSON type mismatch[/yellow] field=%s expected=array actual=%s",
+        field_name,
+        type(parsed).__name__,
+    )
     return []
 
 
@@ -49,7 +59,7 @@ def _load_disabled_tool_ids(repo: BigQueryRepository, tenant_id: str) -> set[str
         return set()
 
     out: set[str] = set()
-    for item in _parse_json_list(raw):
+    for item in _parse_json_list(raw, field_name="disabled_tools"):
         token = str(item or "").strip()
         if token:
             out.add(token)
@@ -81,7 +91,7 @@ def _load_mcp_toolsets(repo: BigQueryRepository, tenant_id: str) -> list[Any]:
         )
         return []
 
-    rows = _parse_json_list(raw)
+    rows = _parse_json_list(raw, field_name="mcp_servers")
     toolsets: list[Any] = []
     for row in rows:
         if not isinstance(row, dict):

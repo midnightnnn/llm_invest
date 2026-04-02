@@ -291,12 +291,13 @@ def _render_agent_tools_section(
         "saveBtn.textContent='Saving...';"
         "saveBtn.disabled=true;"
         "fetch('/admin/agents/save-one',{method:'POST',headers:{'Content-Type':'application/json'},"
-        "body:JSON.stringify({tenant_id:TENANT,agent:{agent_id:agentId,disabled_tools:disabled}})})"
+        "body:JSON.stringify({tenant_id:TENANT,agent:{id:agentId,disabled_tools:disabled}})})"
         ".then(function(r){return r.json();})"
         ".then(function(d){"
         "saveBtn.textContent='Save';"
         "saveBtn.disabled=false;"
-        "saveBtn.classList.add('hidden');"
+        "if(d&&d.ok){saveBtn.classList.add('hidden');return;}"
+        "if(d&&d.message){window.alert(d.message);}"
         "})"
         ".catch(function(){"
         "saveBtn.textContent='Save';"
@@ -451,8 +452,8 @@ function toggleAgent(agentId,toolId){
   if(idx>=0){d.splice(idx,1);}else{d.push(tidL);}
   AGENTS_DISABLED[agentId]=d;
   fetch('/admin/agents/save-one',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({tenant_id:TENANT,agent:{agent_id:agentId,disabled_tools:d}})
-  });
+    body:JSON.stringify({tenant_id:TENANT,agent:{id:agentId,disabled_tools:d}})
+  }).then(function(r){return r.json();}).then(function(resp){if(resp&&!resp.ok&&resp.message){console.error(resp.message);}});
 }
 
 function selectTool(tid){

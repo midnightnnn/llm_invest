@@ -46,3 +46,6 @@ llm-arena = "arena.cli:main"
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+markers = [
+    "integration: opt-in tests that require external services such as BigQuery or Vertex AI",
+]

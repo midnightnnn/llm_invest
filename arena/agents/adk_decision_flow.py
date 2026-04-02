@@ -161,13 +161,10 @@ def build_board_prompt(orders_summary: str) -> str:
 
 
 def parse_board_response(text: str) -> dict[str, Any]:
-    """Parses board response JSON, falling back to plain text body."""
+    """Parses board response JSON."""
     if not text or not text.strip():
         return {}
-    try:
-        return _parse_json_text(text)
-    except Exception:
-        return {"board_title": "거래 아이디어", "board_body": text.strip()[:1800]}
+    return _parse_json_text(text)
 
 
 def parse_decision_response(text: str) -> dict[str, Any]:

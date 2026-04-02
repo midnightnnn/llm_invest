@@ -169,6 +169,32 @@ class ContextBuilder:
         if token and token not in keywords:
             keywords.append(token)
 
+    def _extract_summary_ticker_keywords(self, summary: object) -> list[str]:
+        """Best-effort ticker extraction from summary text only."""
+        keywords: list[str] = []
+        for token in _TICKER_TOKEN_RE.findall(str(summary or "")):
+            if token in _MEMORY_TICKER_STOPWORDS:
+                continue
+            self._append_keyword(keywords, token)
+            if len(keywords) >= 4:
+                break
+        return keywords[:4]
+
+    @staticmethod
+    def _summary_side_fallback_allowed(event_type: object) -> bool:
+        """Allows summary keyword side inference only for execution-like memory rows."""
+        token = str(event_type or "").strip().lower()
+        return token in {"trade_execution"}
+
+    @staticmethod
+    def _extract_summary_side(summary: object) -> str:
+        """Returns a BUY/SELL/HOLD token only when the summary states it explicitly."""
+        normalized = f" {str(summary or '').upper()} "
+        for token in ("BUY", "SELL", "HOLD"):
+            if f" {token} " in normalized:
+                return token
+        return ""
+
     def _collect_ticker_keywords_from_value(self, value: Any, keywords: list[str], *, depth: int = 0) -> None:
         """Walks compact tool args/results and extracts ticker-like fields."""
         if len(keywords) >= 12 or depth > 3:
@@ -284,41 +310,48 @@ class ContextBuilder:
             lines.append(line)
         return "\n".join(lines)
 
-    def _extract_memory_tickers(self, row: dict[str, Any]) -> list[str]:
-        """Extracts likely ticker symbols from payload first, then summary text."""
-        keywords: list[str] = []
+    def _extract_memory_tickers(self, row: dict[str, Any]) -> tuple[list[str], list[str], str]:
+        """Extracts canonical tickers first, then summary-derived fallback tickers."""
+        canonical: list[str] = []
+        sources: list[str] = []
         context_tags = row.get("context_tags")
         if isinstance(context_tags, dict):
             for token in context_tags.get("tickers") or []:
-                self._append_keyword(keywords, token)
-                if len(keywords) >= 4:
-                    return keywords[:4]
+                self._append_keyword(canonical, token)
+                if len(canonical) >= 4:
+                    break
+            if canonical:
+                sources.append("context_tags")
         payload = self._parse_memory_payload(row)
         if payload:
-            self._collect_ticker_keywords_from_value(payload, keywords)
-        if not keywords:
-            summary = str(row.get("summary") or "")
-            for token in _TICKER_TOKEN_RE.findall(summary):
-                if token in _MEMORY_TICKER_STOPWORDS:
-                    continue
-                self._append_keyword(keywords, token)
-                if len(keywords) >= 4:
-                    break
-        return keywords[:4]
+            before = list(canonical)
+            self._collect_ticker_keywords_from_value(payload, canonical)
+            canonical = canonical[:4]
+            if canonical and canonical != before:
+                sources.append("payload")
+            elif canonical and "context_tags" not in sources:
+                sources.append("payload")
+        if canonical:
+            return canonical[:4], [], "+".join(sources)
 
-    def _extract_memory_side(self, row: dict[str, Any]) -> str:
-        """Returns BUY/SELL/HOLD when a memory row clearly encodes one."""
+        derived = self._extract_summary_ticker_keywords(row.get("summary"))
+        if derived:
+            return [], derived, "summary_regex"
+        return [], [], ""
+
+    def _extract_memory_side(self, row: dict[str, Any]) -> tuple[str, str, str]:
+        """Returns canonical side first, then summary-derived fallback side."""
         payload = self._parse_memory_payload(row)
         intent = payload.get("intent") if isinstance(payload, dict) else None
         if isinstance(intent, dict):
             token = str(intent.get("side") or "").strip().upper()
             if token in {"BUY", "SELL", "HOLD"}:
-                return token
-        summary = str(row.get("summary") or "").upper()
-        for token in ("BUY", "SELL", "HOLD"):
-            if f" {token} " in f" {summary} ":
-                return token
-        return ""
+                return token, "", "payload"
+        if self._summary_side_fallback_allowed(row.get("event_type")):
+            token = self._extract_summary_side(row.get("summary"))
+            if token:
+                return "", token, "summary_keyword"
+        return "", "", ""
 
     def _normalize_memory_row(self, row: dict[str, Any]) -> dict[str, Any]:
         """Adds retrieval-time metadata used for reranking and prompt compression."""
@@ -401,8 +434,16 @@ class ContextBuilder:
         except (TypeError, ValueError):
             pass
         normalized["memory_tier"] = self._memory_tier_for_row(normalized)
-        normalized["tickers"] = self._extract_memory_tickers(normalized)
-        normalized["side"] = self._extract_memory_side(normalized)
+        canonical_tickers, derived_tickers, ticker_source = self._extract_memory_tickers(normalized)
+        normalized["canonical_tickers"] = canonical_tickers
+        normalized["derived_tickers"] = derived_tickers
+        normalized["ticker_source"] = ticker_source
+        normalized["tickers"] = canonical_tickers or derived_tickers
+        canonical_side, derived_side, side_source = self._extract_memory_side(normalized)
+        normalized["canonical_side"] = canonical_side
+        normalized["derived_side"] = derived_side
+        normalized["side_source"] = side_source
+        normalized["side"] = canonical_side or derived_side
         return normalized
 
     def _outcome_decisiveness_bonus(self, outcome_score: Any) -> float:
@@ -689,7 +730,7 @@ class ContextBuilder:
             return 0.0
         row_tickers = {
             str(token or "").strip().upper()
-            for token in (row.get("tickers") or [])
+            for token in (row.get("canonical_tickers") or [])
             if str(token or "").strip()
         }
         overlap = row_tickers & active_tickers
@@ -825,12 +866,18 @@ class ContextBuilder:
     def _format_memory_line(self, row: dict[str, Any]) -> str:
         """Formats one compact memory line for prompt injection."""
         bits: list[str] = []
-        tickers = [str(t).strip().upper() for t in (row.get("tickers") or []) if str(t).strip()]
-        if tickers:
-            bits.append("/".join(tickers[:2]))
-        side = str(row.get("side") or "").strip().upper()
-        if side:
-            bits.append(side)
+        canonical_tickers = [str(t).strip().upper() for t in (row.get("canonical_tickers") or []) if str(t).strip()]
+        derived_tickers = [str(t).strip().upper() for t in (row.get("derived_tickers") or []) if str(t).strip()]
+        if canonical_tickers:
+            bits.append("/".join(canonical_tickers[:2]))
+        elif derived_tickers:
+            bits.append(f"~{'/'.join(derived_tickers[:2])}")
+        canonical_side = str(row.get("canonical_side") or "").strip().upper()
+        derived_side = str(row.get("derived_side") or "").strip().upper()
+        if canonical_side:
+            bits.append(canonical_side)
+        elif derived_side:
+            bits.append(f"~{derived_side}")
         created_date = str(row.get("created_date") or "").strip()
         if created_date:
             bits.append(created_date)
@@ -1727,9 +1774,6 @@ class ContextBuilder:
             _target_market = self.settings.kis_target_market
         _is_us_market = _target_market.lower().strip() in {"us", "nasdaq", "nyse", "amex"}
         _fx = snapshot.usd_krw_rate if snapshot.usd_krw_rate > 0 else 0.0
-        if _fx <= 0:
-            _fx = self.settings.usd_krw_rate
-            logger.warning("[yellow]context fx using config fallback[/yellow] rate=%.2f", _fx)
 
         def _fmt_krw(v: float) -> str:
             try:
@@ -1750,7 +1794,7 @@ class ContextBuilder:
             return f"{_fmt_krw(krw_val)} KRW"
 
         def _currency_label() -> str:
-            return "USD" if _is_us_market else "KRW"
+            return "USD" if _is_us_market and _fx > 0 else "KRW"
 
         def _to_display(krw_val: float) -> float:
             """Convert KRW amount to display currency."""
@@ -1894,7 +1938,11 @@ class ContextBuilder:
         }
         if _is_us_market and _fx > 0:
             order_budget["usd_krw_rate"] = _fx
-            order_budget["cash_usd"] = snapshot.cash_foreign if snapshot.cash_foreign > 0 else cash_krw / _fx
+        if _is_us_market:
+            if snapshot.cash_foreign > 0:
+                order_budget["cash_usd"] = snapshot.cash_foreign
+            elif _fx > 0:
+                order_budget["cash_usd"] = cash_krw / _fx
 
         sleeve_state = {
             "display_currency": _currency_label(),
@@ -1988,8 +2036,17 @@ class ContextBuilder:
             )
         # Explicit cash breakdown so agents never confuse KRW vs USD
         if _is_us_market:
-            usd_cash = snapshot.cash_foreign if snapshot.cash_foreign > 0 else (cash_krw / _fx if _fx > 0 else 0.0)
-            perf_lines.append(f"Cash ${_fmt_usd(usd_cash)} USD (={_fmt_krw(cash_krw)} KRW equivalent)")
+            if snapshot.cash_foreign > 0:
+                if _fx > 0:
+                    perf_lines.append(
+                        f"Cash ${_fmt_usd(snapshot.cash_foreign)} USD (={_fmt_krw(cash_krw)} KRW equivalent)"
+                    )
+                else:
+                    perf_lines.append(
+                        f"Cash ${_fmt_usd(snapshot.cash_foreign)} USD | KRW equivalent unavailable (FX unavailable)"
+                    )
+            else:
+                perf_lines.append(f"Cash {_fmt_krw(cash_krw)} KRW")
         else:
             if snapshot.cash_foreign > 0:
                 perf_lines.append(f"Cash {_fmt_krw(cash_krw)} KRW | Foreign ${_fmt_usd(snapshot.cash_foreign)} USD (not available for KOSPI)")

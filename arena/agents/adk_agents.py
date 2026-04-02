@@ -3,12 +3,10 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
-import re
 import threading
 import time
 import warnings
 from concurrent.futures import TimeoutError as FutureTimeoutError
-from dataclasses import replace
 from typing import Any
 
 from google.adk import Runner
@@ -16,20 +14,16 @@ from google.adk import Runner
 from arena.agents.adk_agent_flow import (
     cycle_phase,
     draft_phase_output,
-    empty_market_output,
     execution_phase_output,
     execution_resume_session_id,
     extract_decision_payload,
-    failed_hold_output,
     retry_policy_from_env,
 )
 from arena.agents.adk_context_tools import _ContextTools
 from arena.agents.adk_models import (
     _has_credentials,
     _is_gemini_quota_error,
-    _is_vertex_model_access_error,
     _normalize_gemini_model,
-    _normalize_vertex_anthropic_model,
     _resolve_model,
 )
 from arena.agents.adk_order_support import (
@@ -96,9 +90,6 @@ from arena.tools.registry import ToolEntry, ToolRegistry
 from arena.providers.registry import get_provider_spec
 
 logger = logging.getLogger(__name__)
-_KOSPI_NAME_WITH_TICKER = re.compile(r"(?P<name>[가-힣][-가-힣A-Za-z0-9&., ]{0,40})\((?P<ticker>\d{6})\)")
-_KOSPI_TICKER_WITH_NAME = re.compile(r"(?P<ticker>\d{6})\s+(?P<name>[가-힣][-가-힣A-Za-z0-9&., ]{0,40})")
-_UNGROUNDED_TEMPORAL_TOKENS = ("전날", "어제", "지난번")
 
 # Reduce noisy third-party warnings during iterative trading cycles.
 warnings.filterwarnings("ignore", message="Pydantic serializer warnings", category=UserWarning)
@@ -141,12 +132,6 @@ def _is_retryable_adk_error(exc: Exception) -> bool:
         "empty response",
     ]
     return any(marker in text for marker in markers)
-
-
-def _normalize_company_name(value: str) -> str:
-    """Normalizes company names for exact-ish comparison without spacing noise."""
-    token = str(value or "").strip()
-    return re.sub(r"\s+", "", token)
 
 
 def _extract_known_ticker_names(context: dict[str, Any]) -> dict[str, str]:
@@ -193,36 +178,6 @@ def _extract_known_ticker_names(context: dict[str, Any]) -> dict[str, str]:
             add(ticker, name)
 
     return out
-
-
-def _ungrounded_board_text_reason(
-    text: str,
-    *,
-    execution_summary: str,
-    ticker_names: dict[str, str],
-) -> str:
-    """Returns a short reason when board text includes facts we cannot verify."""
-    token = str(text or "").strip()
-    if not token:
-        return ""
-
-    for marker in _UNGROUNDED_TEMPORAL_TOKENS:
-        if marker in token and marker not in execution_summary:
-            return f"unguarded_temporal_marker:{marker}"
-
-    for pattern in (_KOSPI_NAME_WITH_TICKER, _KOSPI_TICKER_WITH_NAME):
-        for match in pattern.finditer(token):
-            ticker = str(match.group("ticker") or "").strip().upper()
-            name = str(match.group("name") or "").strip()
-            if not ticker or not name:
-                continue
-            expected = str(ticker_names.get(ticker) or "").strip()
-            if not expected:
-                return f"unguarded_company_name:{ticker}"
-            if _normalize_company_name(name) != _normalize_company_name(expected):
-                return f"mismatched_company_name:{ticker}:{name}"
-
-    return ""
 
 
 class _ADKDecisionRunner:
@@ -654,7 +609,6 @@ class AdkTradingAgent:
         self.sleeve_capital_krw = settings.agent_capitals.get(agent_id, settings.sleeve_capital_krw)
         self.default_universe = settings.default_universe
         self._runner_settings = settings
-        self._claude_vertex_fallback_used = False
         self._gemini_direct_fallback_used = False
         self._draft_session_id: str | None = None
         self._execution_session_id: str | None = None
@@ -672,34 +626,6 @@ class AdkTradingAgent:
             tenant_id=self.tenant_id,
             agent_config=self.agent_config,
         )
-
-    def _fallback_claude_vertex_to_direct(self, exc: Exception) -> bool:
-        """Switches Claude from Vertex to direct Anthropic when Vertex access is unavailable."""
-        if self.provider.strip().lower() not in {"claude", "anthropic"}:
-            return False
-        if self._claude_vertex_fallback_used:
-            return False
-        if not self._runner_settings.anthropic_use_vertexai:
-            return False
-        if not _is_vertex_model_access_error(exc):
-            return False
-        if not self.settings.anthropic_api_key:
-            logger.warning(
-                "[yellow]Claude Vertex fallback skipped[/yellow] agent=%s reason=no_anthropic_api_key",
-                self.agent_id,
-            )
-            return False
-
-        self._claude_vertex_fallback_used = True
-        self._runner_settings = replace(self._runner_settings, anthropic_use_vertexai=False)
-        self.runner = self._build_runner(settings=self._runner_settings)
-        logger.warning(
-            "[yellow]Claude Vertex unavailable, switching to direct Anthropic[/yellow] agent=%s model=%s err=%s",
-            self.agent_id,
-            self.settings.anthropic_model,
-            str(exc),
-        )
-        return True
 
     def _fallback_gemini_to_direct(self, exc: Exception) -> bool:
         """Switches Gemini to direct API when Vertex path is rate-limited."""
@@ -740,7 +666,9 @@ class AdkTradingAgent:
         rows = latest_rows(context.get("market_features", []))
         row_map = market_row_by_ticker(rows)
         if not rows:
-            return empty_market_output(self.agent_id)
+            raise RuntimeError(
+                f"market_features missing for agent={self.agent_id} cycle_id={str(context.get('cycle_id') or '').strip()}"
+            )
 
         logger.info("[blue]ADK decision start[/blue] agent=%s provider=%s", self.agent_id, self.provider)
         retry_limit, retry_delay = retry_policy_from_env()
@@ -760,8 +688,6 @@ class AdkTradingAgent:
                 break
             except Exception as exc:
                 last_exc = exc
-                if self._fallback_claude_vertex_to_direct(exc):
-                    continue
                 if self._fallback_gemini_to_direct(exc):
                     continue
                 should_retry = _is_retryable_adk_error(exc) and attempt < retry_limit
@@ -786,7 +712,7 @@ class AdkTradingAgent:
                 break
         if decision is None:
             reason = str(last_exc) if last_exc else "unknown"
-            return failed_hold_output(self.agent_id, reason)
+            raise RuntimeError(f"ADK decision failed for agent={self.agent_id}: {reason}") from last_exc
         logger.info("[blue]ADK decision received[/blue] agent=%s provider=%s", self.agent_id, self.provider)
 
         cycle_id = str(context.get("cycle_id", "")).strip()
@@ -856,11 +782,7 @@ class AdkTradingAgent:
                 board_decision = self.runner.decide_board(session_id, execution_summary)
                 logger.info("[blue]Board generation complete[/blue] agent=%s", self.agent_id)
         except Exception as exc:
-            logger.warning(
-                "[yellow]Board generation failed, using fallback[/yellow] agent=%s err=%s",
-                self.agent_id,
-                str(exc),
-            )
+            raise RuntimeError(f"board generation failed for agent={self.agent_id}: {exc}") from exc
         finally:
             self._execution_session_id = None
 
@@ -870,25 +792,6 @@ class AdkTradingAgent:
 
         title = str(board_decision.get("board_title", "")).strip()[:120] or str(initial_post.title or "").strip()[:120] or "거래 아이디어"
         body = str(board_decision.get("board_body", "")).strip()[:1800] or execution_summary
-        title_issue = _ungrounded_board_text_reason(
-            title,
-            execution_summary=execution_summary,
-            ticker_names=self._board_ticker_names,
-        )
-        body_issue = _ungrounded_board_text_reason(
-            body,
-            execution_summary=execution_summary,
-            ticker_names=self._board_ticker_names,
-        )
-        if title_issue or body_issue:
-            logger.warning(
-                "[yellow]Board post not fact-grounded, using fallback[/yellow] agent=%s title_issue=%s body_issue=%s",
-                self.agent_id,
-                title_issue or "-",
-                body_issue or "-",
-            )
-            title = str(initial_post.title or "").strip()[:120] or "거래 아이디어"
-            body = execution_summary
         tickers: list[str] = []
         for token in [*list(getattr(initial_post, "tickers", []) or []), *[intent.ticker for intent in intents]]:
             clean = str(token or "").strip().upper()

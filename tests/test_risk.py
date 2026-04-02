@@ -197,6 +197,24 @@ def test_risk_rejects_ticker_market_mismatch() -> None:
     assert "ticker_market_mismatch" in decision.policy_hits
 
 
+def test_risk_handles_multi_market_ticker_validation() -> None:
+    base = _settings()
+    engine = RiskEngine(replace(base, kis_target_market="us,kospi"))
+
+    us_intent = OrderIntent(agent_id="a", ticker="AAPL", side=Side.BUY, quantity=1, price_krw=100_000, rationale="test")
+    us_decision = engine.evaluate(us_intent, _snapshot(), daily_turnover_krw=0, daily_order_count=0, last_trade_at=None, now=utc_now())
+    assert us_decision.allowed is True
+
+    kr_intent = OrderIntent(agent_id="a", ticker="000660", side=Side.BUY, quantity=1, price_krw=70_000, rationale="test")
+    kr_decision = engine.evaluate(kr_intent, _snapshot(), daily_turnover_krw=0, daily_order_count=0, last_trade_at=None, now=utc_now())
+    assert kr_decision.allowed is True
+
+    bad_intent = OrderIntent(agent_id="a", ticker="???", side=Side.BUY, quantity=1, price_krw=70_000, rationale="test")
+    bad_decision = engine.evaluate(bad_intent, _snapshot(), daily_turnover_krw=0, daily_order_count=0, last_trade_at=None, now=utc_now())
+    assert bad_decision.allowed is False
+    assert "ticker_market_mismatch" in bad_decision.policy_hits
+
+
 def test_risk_allows_buy_when_sleeve_equity_above_target_if_cash_buffer_ok() -> None:
     """Allows buys above target sleeve equity when other risk checks pass."""
     base = _settings()

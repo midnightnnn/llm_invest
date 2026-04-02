@@ -284,6 +284,114 @@ def test_memory_compaction_agent_supports_deepseek_helper_from_provider_payload(
     assert captured["base_url"] == "https://api.deepseek.com/v1"
 
 
+def test_memory_compaction_agent_retries_transient_helper_errors(monkeypatch) -> None:
+    repo = _FakeRepo()
+    memory_store = _FakeMemoryStore()
+    settings = _settings()
+    agent = MemoryCompactionAgent(settings=settings, repo=repo, memory_store=memory_store)
+
+    calls = {"count": 0}
+    sleeps: list[float] = []
+
+    async def _fake_acompletion(**kwargs):
+        _ = kwargs
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise RuntimeError("503 high demand")
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": '{"reflections":[]}',
+                    }
+                }
+            ]
+        }
+
+    async def _fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(memory_compaction_module, "retry_policy_from_env", lambda: (2, 0.5))
+    monkeypatch.setattr(memory_compaction_module.litellm, "acompletion", _fake_acompletion)
+    monkeypatch.setattr(memory_compaction_module.asyncio, "sleep", _fake_sleep)
+
+    out = asyncio.run(agent._collect_response_text(prompt="PROMPT"))
+
+    assert out == '{"reflections":[]}'
+    assert calls["count"] == 2
+    assert sleeps == [0.5]
+
+
+def test_memory_compaction_agent_retries_empty_response(monkeypatch) -> None:
+    repo = _FakeRepo()
+    memory_store = _FakeMemoryStore()
+    settings = _settings()
+    agent = MemoryCompactionAgent(settings=settings, repo=repo, memory_store=memory_store)
+
+    calls = {"count": 0}
+    sleeps: list[float] = []
+
+    async def _fake_acompletion(**kwargs):
+        _ = kwargs
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return {"choices": [{"message": {"content": ""}}]}
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": '{"reflections":[]}',
+                    }
+                }
+            ]
+        }
+
+    async def _fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(memory_compaction_module, "retry_policy_from_env", lambda: (1, 0.25))
+    monkeypatch.setattr(memory_compaction_module.litellm, "acompletion", _fake_acompletion)
+    monkeypatch.setattr(memory_compaction_module.asyncio, "sleep", _fake_sleep)
+
+    out = asyncio.run(agent._collect_response_text(prompt="PROMPT"))
+
+    assert out == '{"reflections":[]}'
+    assert calls["count"] == 2
+    assert sleeps == [0.25]
+
+
+def test_memory_compaction_agent_raises_after_retry_budget_exhausted(monkeypatch) -> None:
+    repo = _FakeRepo()
+    memory_store = _FakeMemoryStore()
+    settings = _settings()
+    agent = MemoryCompactionAgent(settings=settings, repo=repo, memory_store=memory_store)
+
+    calls = {"count": 0}
+    sleeps: list[float] = []
+
+    async def _fake_acompletion(**kwargs):
+        _ = kwargs
+        calls["count"] += 1
+        raise RuntimeError("503 high demand")
+
+    async def _fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(memory_compaction_module, "retry_policy_from_env", lambda: (2, 0.5))
+    monkeypatch.setattr(memory_compaction_module.litellm, "acompletion", _fake_acompletion)
+    monkeypatch.setattr(memory_compaction_module.asyncio, "sleep", _fake_sleep)
+
+    try:
+        asyncio.run(agent._collect_response_text(prompt="PROMPT"))
+    except RuntimeError as exc:
+        assert "503 high demand" in str(exc)
+    else:
+        raise AssertionError("expected retry exhaustion to re-raise the last helper error")
+
+    assert calls["count"] == 3
+    assert sleeps == [0.5, 1.0]
+
+
 def test_memory_compaction_agent_saves_reflections_from_cycle_outputs(monkeypatch) -> None:
     repo = _FakeRepo()
     repo.configs[("global", "memory_compactor_prompt")] = (

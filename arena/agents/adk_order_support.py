@@ -11,10 +11,14 @@ from arena.models import ExecutionReport, OrderIntent, Side
 from arena.open_trading.exchange_codes import (
     instrument_id_us_order_exchange,
     normalize_us_order_exchange,
+    parse_target_markets,
     target_market_default_us_order_exchange,
 )
 
 logger = logging.getLogger(__name__)
+
+_US_TARGET_MARKETS = {"nasdaq", "nyse", "amex", "us"}
+_KR_TARGET_MARKETS = {"kospi", "kosdaq"}
 
 
 def latest_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -87,6 +91,53 @@ def _display_ticker(ticker: str, ticker_names: dict[str, str] | None = None) -> 
     return token
 
 
+def _configured_markets(settings: Settings) -> set[str]:
+    return set(parse_target_markets(settings.kis_target_market))
+
+
+def _allows_us_market(settings: Settings) -> bool:
+    return bool(_configured_markets(settings) & _US_TARGET_MARKETS)
+
+
+def _allows_kr_market(settings: Settings) -> bool:
+    return bool(_configured_markets(settings) & _KR_TARGET_MARKETS)
+
+
+def _is_korean_ticker(ticker: str) -> bool:
+    token = str(ticker or "").strip().upper()
+    return token.isdigit() and len(token) == 6
+
+
+def _infer_market_from_identity(
+    settings: Settings,
+    *,
+    ticker: str,
+    exchange_code: str = "",
+    instrument_id: str = "",
+    quote_currency: str = "",
+) -> str:
+    if _allows_us_market(settings):
+        us_exchange = normalize_us_order_exchange(exchange_code) or instrument_id_us_order_exchange(instrument_id)
+        if us_exchange:
+            return "us"
+    if _allows_kr_market(settings) and str(exchange_code or "").strip().upper() == "KRX":
+        return "kospi"
+
+    token = str(ticker or "").strip().upper()
+    if token:
+        if _is_korean_ticker(token) and _allows_kr_market(settings):
+            return "kospi"
+        if not token[:1].isdigit() and _allows_us_market(settings):
+            return "us"
+
+    currency = str(quote_currency or "").strip().upper()
+    if currency == "USD" and _allows_us_market(settings):
+        return "us"
+    if currency == "KRW" and _allows_kr_market(settings):
+        return "kospi"
+    return ""
+
+
 def resolve_order_price(
     settings: Settings,
     *,
@@ -97,9 +148,20 @@ def resolve_order_price(
     row = market_row or {}
     quote_currency = str(row.get("quote_currency") or "").strip().upper()
     if not quote_currency:
-        if settings.kis_target_market in {"nasdaq", "nyse", "amex", "us"}:
+        inferred_market = _infer_market_from_identity(
+            settings,
+            ticker=str(row.get("ticker") or ""),
+            exchange_code=str(row.get("exchange_code") or ""),
+            instrument_id=str(row.get("instrument_id") or ""),
+        )
+        if not inferred_market:
+            if _allows_us_market(settings) and not _allows_kr_market(settings):
+                inferred_market = "us"
+            elif _allows_kr_market(settings) and not _allows_us_market(settings):
+                inferred_market = "kospi"
+        if inferred_market == "us":
             quote_currency = "USD"
-        else:
+        elif inferred_market == "kospi":
             quote_currency = "KRW"
 
     try:
@@ -124,16 +186,20 @@ def resolve_order_price(
             native_price = stored_price_krw
         return max(stored_price_krw, native_price, 0.0), native_price or None, "KRW", 1.0
 
-    fx_rate = live_fx if live_fx > 0 else stored_fx if stored_fx > 0 else max(settings.usd_krw_rate, 1.0)
+    fx_rate = live_fx if live_fx > 0 else stored_fx if stored_fx > 0 else 0.0
     if native_price > 0:
-        price_krw = native_price * max(fx_rate, 1.0)
-        return float(price_krw), float(native_price), quote_currency, float(max(fx_rate, 1.0))
+        if fx_rate > 0:
+            price_krw = native_price * fx_rate
+            return float(price_krw), float(native_price), quote_currency, float(fx_rate)
+        if stored_price_krw > 0:
+            return float(stored_price_krw), float(native_price), quote_currency, 0.0
+        return 0.0, float(native_price), quote_currency, 0.0
 
     if stored_price_krw > 0:
-        inferred_native = stored_price_krw / max(fx_rate, 1.0)
-        return float(stored_price_krw), float(inferred_native), quote_currency, float(max(fx_rate, 1.0))
+        inferred_native = (stored_price_krw / fx_rate) if fx_rate > 0 else None
+        return float(stored_price_krw), inferred_native, quote_currency, float(fx_rate)
 
-    return 0.0, None, quote_currency, float(max(fx_rate, 1.0))
+    return 0.0, None, quote_currency, float(fx_rate)
 
 
 def format_orders_summary(
@@ -231,11 +297,18 @@ def _resolve_exchange_identity(
         or (position.get("instrument_id") if isinstance(position, dict) else "")
         or ""
     ).strip()
-    if settings.kis_target_market in {"nasdaq", "nyse", "amex", "us"} and not exchange_code:
+    inferred_market = _infer_market_from_identity(
+        settings,
+        ticker=ticker,
+        exchange_code=exchange_code,
+        instrument_id=instrument_id,
+        quote_currency=str((market_row or {}).get("quote_currency") or ""),
+    )
+    if inferred_market == "us" and not exchange_code:
         exchange_code = normalize_us_order_exchange(instrument_id_us_order_exchange(instrument_id))
-    if settings.kis_target_market in {"nasdaq", "nyse", "amex", "us"} and not exchange_code:
+    if inferred_market == "us" and not exchange_code:
         exchange_code = target_market_default_us_order_exchange(settings.kis_target_market)
-    if settings.kis_target_market == "kospi" and not exchange_code:
+    if inferred_market == "kospi" and not exchange_code:
         exchange_code = "KRX"
     if not instrument_id and exchange_code:
         instrument_id = f"{exchange_code}:{ticker}"
@@ -403,7 +476,14 @@ def build_order_intents(
             market_row=market_row,
             position=position if isinstance(position, dict) else {},
         )
-        if settings.kis_target_market in {"nasdaq", "nyse", "amex", "us"} and not exchange_code:
+        inferred_market = _infer_market_from_identity(
+            settings,
+            ticker=ticker,
+            exchange_code=exchange_code,
+            instrument_id=instrument_id,
+            quote_currency=quote_currency,
+        )
+        if inferred_market == "us" and not exchange_code:
             logger.warning(
                 "[yellow]ADK skipped intent[/yellow] agent=%s ticker=%s reason=unresolved_exchange",
                 agent_id,

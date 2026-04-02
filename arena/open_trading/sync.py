@@ -456,15 +456,17 @@ class MarketDataSyncService:
 
         rows: list[dict[str, object]] = []
         krw_closes: list[float] = []
-        fx_rate = max(float(default_fx), 1.0) if quote_currency != "KRW" else 1.0
+        fx_rate = float(default_fx) if quote_currency != "KRW" else 1.0
 
         for idx, (as_of_ts, native_close) in enumerate(series):
             if quote_currency != "KRW":
                 mapped_fx = float((fx_by_date or {}).get(as_of_ts.date()) or 0.0)
                 if mapped_fx > 0:
                     fx_rate = mapped_fx
-                close_price_krw = float(native_close * max(fx_rate, 1.0))
-                fx_used = float(max(fx_rate, 1.0))
+                if fx_rate <= 0:
+                    continue
+                close_price_krw = float(native_close * fx_rate)
+                fx_used = float(fx_rate)
             else:
                 close_price_krw = float(native_close)
                 fx_used = 1.0
@@ -553,35 +555,33 @@ class MarketDataSyncService:
             return float(self._usd_krw_latest_fx)
 
         symbol = str(self.settings.usd_krw_fx_symbol or "").strip().upper()
-        if symbol:
-            today = datetime.now(timezone.utc).date()
-            start = (today - timedelta(days=7)).strftime("%Y%m%d")
-            end = today.strftime("%Y%m%d")
-            try:
-                fx_rows = self.client.get_usd_krw_daily_chart(
-                    symbol=symbol,
-                    start_date=start,
-                    end_date=end,
-                    market_div_code=self.settings.usd_krw_fx_market_div_code,
-                    period="D",
-                    max_pages=4,
-                )
-                fx_series = self._extract_chart_series(
-                    fx_rows,
-                    close_keys=("ovrs_nmix_prpr", "clos"),
-                )
-                if fx_series:
-                    self._usd_krw_latest_fx = float(fx_series[-1][1])
-                    return float(self._usd_krw_latest_fx)
-            except Exception as exc:
-                logger.warning("[yellow]USD/KRW latest FX fetch failed[/yellow] symbol=%s err=%s", symbol, str(exc))
+        if not symbol:
+            raise RuntimeError("USD/KRW FX symbol not configured")
 
-        fallback = max(self.settings.usd_krw_rate, 1.0)
-        logger.warning(
-            "[yellow]USD/KRW fx using config fallback[/yellow] rate=%.2f (no FX API symbol configured or API failed)",
-            fallback,
-        )
-        self._usd_krw_latest_fx = fallback
+        today = datetime.now(timezone.utc).date()
+        start = (today - timedelta(days=7)).strftime("%Y%m%d")
+        end = today.strftime("%Y%m%d")
+        try:
+            fx_rows = self.client.get_usd_krw_daily_chart(
+                symbol=symbol,
+                start_date=start,
+                end_date=end,
+                market_div_code=self.settings.usd_krw_fx_market_div_code,
+                period="D",
+                max_pages=4,
+            )
+            fx_series = self._extract_chart_series(
+                fx_rows,
+                close_keys=("ovrs_nmix_prpr", "clos"),
+            )
+        except Exception as exc:
+            logger.warning("[yellow]USD/KRW latest FX fetch failed[/yellow] symbol=%s err=%s", symbol, str(exc))
+            raise RuntimeError(f"USD/KRW latest FX fetch failed for symbol={symbol}") from exc
+
+        if not fx_series:
+            raise RuntimeError(f"USD/KRW latest FX unavailable for symbol={symbol}")
+
+        self._usd_krw_latest_fx = float(fx_series[-1][1])
         return float(self._usd_krw_latest_fx)
 
     def _quote_exchange_candidates(self, preferred_excd: str = "") -> list[str]:
@@ -665,9 +665,12 @@ class MarketDataSyncService:
                 continue
             instrument_id = f"{order_excd}:{ticker}"
             fx_by_date = self._ensure_usd_krw_daily_fx(candles)
-            # If daily FX chart unavailable, use live rate instead of stale settings default
+            fallback_fx = 0.0
             if fx_by_date:
-                fallback_fx = max(self.settings.usd_krw_rate, 1.0)
+                for _, rate in sorted(fx_by_date.items()):
+                    if float(rate) > 0:
+                        fallback_fx = float(rate)
+                        break
             else:
                 fallback_fx = self._latest_usd_krw_fx_rate()
             rows = self._build_feature_rows(
@@ -792,7 +795,7 @@ class MarketDataSyncService:
             quote_meta = {
                 "last_usd": float(last),
                 "rate_pct": float(rate),
-                "fx_rate": float(max(fx_rate, 1.0)),
+                "fx_rate": float(fx_rate),
                 "exchange_code": order_excd,
                 "instrument_id": instrument_id,
             }
@@ -1270,6 +1273,42 @@ class AccountSyncService:
         self.settings = settings
         self.repo = repo
         self.client = client or OpenTradingClient(settings)
+        self._usd_krw_latest_fx: float | None = None
+
+    def _latest_usd_krw_fx_rate(self) -> float:
+        """Returns the freshest available USD/KRW rate for account valuation."""
+        if self._usd_krw_latest_fx is not None and self._usd_krw_latest_fx > 0:
+            return float(self._usd_krw_latest_fx)
+
+        symbol = str(self.settings.usd_krw_fx_symbol or "").strip().upper()
+        if not symbol:
+            raise RuntimeError("USD/KRW FX symbol not configured")
+
+        today = datetime.now(timezone.utc).date()
+        start = (today - timedelta(days=7)).strftime("%Y%m%d")
+        end = today.strftime("%Y%m%d")
+        try:
+            fx_rows = self.client.get_usd_krw_daily_chart(
+                symbol=symbol,
+                start_date=start,
+                end_date=end,
+                market_div_code=self.settings.usd_krw_fx_market_div_code,
+                period="D",
+                max_pages=4,
+            )
+            fx_series = MarketDataSyncService._extract_chart_series(
+                fx_rows,
+                close_keys=("ovrs_nmix_prpr", "clos"),
+            )
+        except Exception as exc:
+            logger.warning("[yellow]USD/KRW latest FX fetch failed[/yellow] symbol=%s err=%s", symbol, str(exc))
+            raise RuntimeError(f"USD/KRW latest FX fetch failed for symbol={symbol}") from exc
+
+        if not fx_series:
+            raise RuntimeError(f"USD/KRW latest FX unavailable for symbol={symbol}")
+
+        self._usd_krw_latest_fx = float(fx_series[-1][1])
+        return float(self._usd_krw_latest_fx)
 
     def _resolve_overseas_order_exchange(
         self,
@@ -1411,7 +1450,12 @@ class AccountSyncService:
         if callable(loader) and tickers:
             try:
                 instrument_map = loader(tickers)
-            except Exception:
+            except Exception as exc:
+                logger.warning(
+                    "[yellow]instrument_map load failed[/yellow] tickers=%d err=%s",
+                    len(tickers),
+                    str(exc),
+                )
                 instrument_map = {}
 
         positions: dict[str, Position] = {}
@@ -1448,7 +1492,7 @@ class AccountSyncService:
                 _to_float(summary.get("wdrw_psbl_tot_amt"), default=0.0),
             )
         if cash_krw <= 0:
-            cash_krw = cash_foreign * max(live_fx, 1.0)
+            cash_krw = cash_foreign * live_fx
 
         total_equity_krw = cash_krw + sum(pos.market_value_krw() for pos in positions.values())
         if len(rows_by_market_code) > 1:
@@ -1526,19 +1570,17 @@ class AccountSyncService:
         # Use actual orderable cash (주문가능현금) instead of dnca_tot_amt
         dnca = _to_float(summary.get("dnca_tot_amt"), default=0.0)
         try:
-            cash_krw = self.client.get_domestic_orderable_cash()
+            cash_krw = float(self.client.get_domestic_orderable_cash())
         except Exception as exc:
-            logger.warning("Orderable cash query failed, falling back to dnca_tot_amt: %s", exc)
-            cash_krw = 0.0
+            err = str(exc).strip() or exc.__class__.__name__
+            raise RuntimeError(f"domestic orderable cash query failed: {err}") from exc
         if dnca > 0 and cash_krw != dnca:
             logger.info(
                 "[yellow]Cash divergence[/yellow] dnca_tot_amt=%.0f orderable=%.0f diff=%.0f",
                 dnca, cash_krw, dnca - cash_krw,
             )
-        if cash_krw <= 0:
-            cash_krw = dnca
-        if cash_krw <= 0:
-            cash_krw = _to_float(summary.get("prvs_rcdl_excc_amt"), default=0.0)
+        if cash_krw < 0:
+            raise RuntimeError(f"domestic orderable cash must be non-negative, got {cash_krw}")
 
         total_equity_krw = _to_float(summary.get("tot_evlu_amt"), default=0.0)
         if total_equity_krw <= 0:
@@ -1627,25 +1669,16 @@ class BrokerTradeSyncService:
         self.client = client or OpenTradingClient(settings)
 
     def _fallback_fx_rate(self) -> float:
-        """Returns best-effort FX rate when API doesn't provide one.
-
-        Tries the latest account snapshot first, falls back to config with warning.
-        """
+        """Returns the latest account snapshot FX rate when available."""
         loader = getattr(self.repo, "latest_account_snapshot", None)
         if callable(loader):
             try:
                 snap = loader()
                 if snap is not None and float(getattr(snap, "usd_krw_rate", 0.0) or 0.0) > 0:
                     return float(snap.usd_krw_rate)
-            except Exception:
-                pass
-        rate = max(self.settings.usd_krw_rate, 1.0)
-        if rate > 0:
-            logger.warning(
-                "[yellow]broker_trade fx using config fallback[/yellow] rate=%.2f (no API or snapshot FX)",
-                rate,
-            )
-        return rate
+            except Exception as exc:
+                logger.warning("[yellow]broker_trade snapshot fx lookup failed[/yellow] err=%s", str(exc))
+        return 0.0
 
     def _parsed_markets(self) -> set[str]:
         return {m.strip() for m in str(self.settings.kis_target_market or "").split(",") if m.strip()}
@@ -1971,6 +2004,13 @@ class BrokerCashSyncService(BrokerTradeSyncService):
             _to_float(row.get("exrt"), default=0.0),
         )
         fx_rate = api_fx if api_fx > 0 else self._fallback_fx_rate()
+        if fx_rate <= 0:
+            logger.warning(
+                "[yellow]Broker cash skipped (no FX)[/yellow] exchange=%s date=%s",
+                exchange_code,
+                _pick_str(row, ["ord_dt", "ORD_DT", "trad_dt", "TRAD_DT"]),
+            )
+            return None
         gross_native = qty * max(price_native, 0.0)
         signed_native = self._signed_trade_notional(side, gross_native)
         if abs(signed_native) <= 1e-9:
@@ -2095,6 +2135,13 @@ class BrokerCashSyncService(BrokerTradeSyncService):
             + _to_float(row.get("frcr_fee1"), default=0.0)
         )
         if fee_usd > 0:
+            if fx_rate <= 0:
+                logger.warning(
+                    "[yellow]Broker cash fee skipped (no FX)[/yellow] exchange=%s date=%s",
+                    exchange_code,
+                    _pick_str(row, ["trad_dt", "TRAD_DT", "ord_dt", "ORD_DT"]),
+                )
+                return out
             payload = {"kind": "fee_usd", "exchange_code": exchange_code, "row": row}
             event = self._cash_event(
                 event_id=self._stable_event_id(f"cashfee:us:{exchange_code}:usd", payload),
@@ -2211,7 +2258,7 @@ class BrokerCashSyncService(BrokerTradeSyncService):
                     "snapshot_at": snapshot_at,
                     "cash_krw": _to_float(row.get("cash_krw"), default=0.0),
                     "cash_foreign": _to_float(row.get("cash_foreign"), default=0.0),
-                    "usd_krw_rate": _to_float(row.get("usd_krw_rate"), default=0.0) or self._fallback_fx_rate(),
+                    "usd_krw_rate": _to_float(row.get("usd_krw_rate"), default=0.0),
                     "cash_foreign_currency": str(row.get("cash_foreign_currency") or "USD").strip().upper() or "USD",
                 }
 
@@ -2227,10 +2274,17 @@ class BrokerCashSyncService(BrokerTradeSyncService):
             prev = latest_by_day[prev_day]
             curr = latest_by_day[curr_day]
 
-            prev_fx = max(float(prev["usd_krw_rate"]), 1.0)
-            curr_fx = max(float(curr["usd_krw_rate"]), 1.0)
+            prev_fx = float(prev["usd_krw_rate"] or 0.0)
+            curr_fx = float(curr["usd_krw_rate"] or 0.0)
             prev_usd = float(prev["cash_foreign"])
             curr_usd = float(curr["cash_foreign"])
+            if (prev_usd > 0 or curr_usd > 0) and (prev_fx <= 0 or curr_fx <= 0):
+                logger.warning(
+                    "[yellow]Broker cash residual inference skipped (missing FX)[/yellow] prev_day=%s curr_day=%s",
+                    prev_day.isoformat(),
+                    curr_day.isoformat(),
+                )
+                continue
             prev_domestic = float(prev["cash_krw"]) - (prev_usd * prev_fx)
             curr_domestic = float(curr["cash_krw"]) - (curr_usd * curr_fx)
 

@@ -88,6 +88,12 @@ class _MemoryStore:
         self.thesis_calls.append((intent, decision, report, snapshot_before))
 
 
+class _BrokenMemoryStore(_MemoryStore):
+    def record_execution(self, *, intent, decision, report):
+        _ = (intent, decision, report)
+        raise RuntimeError("memory boom")
+
+
 class _RiskEngine:
     def __init__(self) -> None:
         self.settings = type("Settings", (), {"trading_mode": "live"})()
@@ -214,3 +220,40 @@ def test_process_order_error_logs_tenant(caplog) -> None:
 
     assert report.status == ExecutionStatus.ERROR
     assert "tenant=tenant-k" in caplog.text
+
+
+def test_process_preserves_broker_report_when_memory_sync_fails(caplog) -> None:
+    repo = _Repo()
+    memory = _BrokenMemoryStore()
+    gateway = ExecutionGateway(repo=repo, risk_engine=_RiskEngine(), broker=_FilledBroker(), memory_store=memory)
+    snapshot = AccountSnapshot(cash_krw=1_000_000.0, total_equity_krw=1_000_000.0, positions={})
+    intent = type(
+        "Intent",
+        (),
+        {
+            "agent_id": "gpt",
+            "ticker": "AAPL",
+            "trading_mode": "live",
+            "exchange_code": "NASD",
+            "instrument_id": "NASD:AAPL",
+            "side": Side.BUY,
+            "quantity": 2.0,
+            "price_krw": 100_000.0,
+            "price_native": 75.0,
+            "quote_currency": "USD",
+            "fx_rate": 1333.0,
+            "rationale": "test",
+            "strategy_refs": ["momentum"],
+            "created_at": utc_now(),
+            "intent_id": "intent_live",
+            "cycle_id": "cycle_live",
+            "notional_krw": 200_000.0,
+        },
+    )()
+
+    with caplog.at_level(logging.WARNING):
+        report = gateway.process(intent, snapshot)
+
+    assert report.status == ExecutionStatus.FILLED
+    assert len(repo.writes) == 1
+    assert "preserving broker result" in caplog.text

@@ -9,18 +9,43 @@ from arena.models import AccountSnapshot, OrderIntent, RiskDecision, Side
 _US_TICKER_RE = re.compile(r"^[A-Z][A-Z0-9.\-]{0,9}$")
 
 
-def _ticker_matches_market(ticker: str, market: str) -> bool:
-    """Checks whether a ticker format matches the configured target market."""
+def _target_market_tokens(market: str) -> list[str]:
+    out: list[str] = []
+    for token in str(market or "").split(","):
+        normalized = str(token or "").strip().lower()
+        if normalized and normalized not in out:
+            out.append(normalized)
+    return out
+
+
+def _ticker_matches_one_market(ticker: str, market: str) -> bool:
     token = ticker.strip().upper()
     if not token:
         return False
 
     if market in {"nasdaq", "nyse", "amex", "us"}:
         return bool(_US_TICKER_RE.fullmatch(token))
-    if market == "kospi":
+    if market in {"kospi", "kosdaq"}:
         return token.isdigit() and len(token) == 6
 
     return True
+
+
+def _ticker_matches_market(ticker: str, market: str) -> bool:
+    """Checks whether a ticker format matches the configured target market."""
+    markets = _target_market_tokens(market)
+    if not markets:
+        return _ticker_matches_one_market(ticker, market)
+
+    recognized = False
+    for candidate in markets:
+        if candidate in {"nasdaq", "nyse", "amex", "us", "kospi", "kosdaq"}:
+            recognized = True
+            if _ticker_matches_one_market(ticker, candidate):
+                return True
+    if recognized:
+        return False
+    return _ticker_matches_one_market(ticker, market)
 
 
 class RiskEngine:

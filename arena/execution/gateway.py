@@ -48,6 +48,100 @@ class ExecutionGateway:
                 return tenant
         return _runtime_tenant()
 
+    def _append_runtime_warning(self, *, action: str, detail: dict[str, object]) -> None:
+        """Best-effort audit trail for degraded but non-fatal runtime paths."""
+        append = getattr(self.repo, "append_runtime_audit_log", None)
+        if not callable(append):
+            return
+        try:
+            append(
+                action=action,
+                status="warning",
+                tenant_id=self._tenant_label(),
+                detail=detail,
+            )
+        except Exception as exc:
+            logger.warning(
+                "[yellow]Runtime audit append failed[/yellow] action=%s err=%s",
+                action,
+                str(exc),
+            )
+
+    def _sync_execution_memory(
+        self,
+        *,
+        intent: OrderIntent,
+        decision: RiskDecision,
+        report: ExecutionReport,
+        snapshot_before: AccountSnapshot | None,
+        phase: str,
+    ) -> list[str]:
+        """Best-effort memory/thesis sync that never overwrites broker truth."""
+        if self.memory_store is None:
+            return []
+
+        tenant = self._tenant_label()
+        failures: list[str] = []
+
+        try:
+            self.memory_store.record_execution(intent=intent, decision=decision, report=report)
+        except Exception as exc:
+            failures.append("record_execution")
+            logger.warning(
+                "[yellow]Execution memory sync failed; preserving broker result[/yellow] tenant=%s phase=%s intent=%s order=%s err=%s",
+                tenant,
+                phase,
+                intent.intent_id,
+                report.order_id,
+                str(exc),
+            )
+            self._append_runtime_warning(
+                action="execution_memory_sync",
+                detail={
+                    "phase": phase,
+                    "intent_id": intent.intent_id,
+                    "order_id": report.order_id,
+                    "agent_id": intent.agent_id,
+                    "ticker": intent.ticker,
+                    "stage": "record_execution",
+                    "error": str(exc),
+                },
+            )
+
+        record_thesis_lifecycle = getattr(self.memory_store, "record_thesis_lifecycle", None)
+        if callable(record_thesis_lifecycle):
+            try:
+                record_thesis_lifecycle(
+                    intent=intent,
+                    decision=decision,
+                    report=report,
+                    snapshot_before=snapshot_before,
+                )
+            except Exception as exc:
+                failures.append("record_thesis_lifecycle")
+                logger.warning(
+                    "[yellow]Execution thesis sync failed; preserving broker result[/yellow] tenant=%s phase=%s intent=%s order=%s err=%s",
+                    tenant,
+                    phase,
+                    intent.intent_id,
+                    report.order_id,
+                    str(exc),
+                )
+                self._append_runtime_warning(
+                    action="execution_memory_sync",
+                    detail={
+                        "phase": phase,
+                        "intent_id": intent.intent_id,
+                        "order_id": report.order_id,
+                        "agent_id": intent.agent_id,
+                        "ticker": intent.ticker,
+                        "stage": "record_thesis_lifecycle",
+                        "error": str(exc),
+                    },
+                )
+
+        return failures
+
     def process(self, intent: OrderIntent, snapshot: AccountSnapshot) -> ExecutionReport:
         """Processes one intent through risk validation and broker execution."""
         if not str(intent.trading_mode or "").strip():
@@ -120,15 +214,13 @@ class ExecutionGateway:
                 created_at=now,
             )
             self.repo.write_execution_report(intent, report)
-            self.memory_store.record_execution(intent=intent, decision=decision, report=report)
-            record_thesis_lifecycle = getattr(self.memory_store, "record_thesis_lifecycle", None)
-            if callable(record_thesis_lifecycle):
-                record_thesis_lifecycle(
-                    intent=intent,
-                    decision=decision,
-                    report=report,
-                    snapshot_before=snapshot,
-                )
+            self._sync_execution_memory(
+                intent=intent,
+                decision=decision,
+                report=report,
+                snapshot_before=snapshot,
+                phase="process_rejected",
+            )
             return report
 
         report = self.broker.place_order(
@@ -136,15 +228,13 @@ class ExecutionGateway:
             fx_rate=snapshot.usd_krw_rate if snapshot.usd_krw_rate > 0 else None,
         )
         self.repo.write_execution_report(intent, report)
-        self.memory_store.record_execution(intent=intent, decision=decision, report=report)
-        record_thesis_lifecycle = getattr(self.memory_store, "record_thesis_lifecycle", None)
-        if callable(record_thesis_lifecycle):
-            record_thesis_lifecycle(
-                intent=intent,
-                decision=decision,
-                report=report,
-                snapshot_before=snapshot,
-            )
+        self._sync_execution_memory(
+            intent=intent,
+            decision=decision,
+            report=report,
+            snapshot_before=snapshot,
+            phase="process_allowed",
+        )
 
         if report.status in {ExecutionStatus.FILLED, ExecutionStatus.SIMULATED}:
             logger.info(
@@ -226,17 +316,27 @@ class ExecutionGateway:
 
         logger.info("[cyan]Reconcile scan[/cyan] submitted=%d lookback_hours=%d", len(rows), lookback_hours)
 
+        tenant = self._tenant_label()
         snapshot_fx: float | None = None
+        snapshot_lookup_error = ""
         latest_snapshot = getattr(self.repo, "latest_account_snapshot", None)
         if callable(latest_snapshot):
             try:
                 snapshot = latest_snapshot()
-            except Exception:
+            except Exception as exc:
                 snapshot = None
+                snapshot_lookup_error = str(exc)
+                logger.warning(
+                    "[yellow]Reconcile snapshot lookup failed; continuing without snapshot FX[/yellow] tenant=%s err=%s",
+                    tenant,
+                    snapshot_lookup_error,
+                )
             if snapshot is not None and float(getattr(snapshot, "usd_krw_rate", 0.0) or 0.0) > 0:
                 snapshot_fx = float(snapshot.usd_krw_rate)
 
         updated = 0
+        reconcile_failed_orders: list[str] = []
+        memory_sync_failed_orders: list[str] = []
         for row in rows:
             try:
                 report = reconcile(
@@ -254,6 +354,9 @@ class ExecutionGateway:
                     str(row.get("order_id") or ""),
                     str(exc),
                 )
+                token = str(row.get("order_id") or "").strip()
+                if token:
+                    reconcile_failed_orders.append(token)
                 continue
 
             if report is None:
@@ -288,27 +391,15 @@ class ExecutionGateway:
             )
             report.order_id = str(row.get("order_id") or report.order_id)
             self.repo.write_execution_report(intent, report)
-            if self.memory_store is not None:
-                try:
-                    self.memory_store.record_execution(
-                        intent=intent,
-                        decision=RiskDecision(allowed=True, reason="reconciled", policy_hits=[]),
-                        report=report,
-                    )
-                    record_thesis_lifecycle = getattr(self.memory_store, "record_thesis_lifecycle", None)
-                    if callable(record_thesis_lifecycle):
-                        record_thesis_lifecycle(
-                            intent=intent,
-                            decision=RiskDecision(allowed=True, reason="reconciled", policy_hits=[]),
-                            report=report,
-                            snapshot_before=None,
-                        )
-                except Exception as exc:
-                    logger.warning(
-                        "[yellow]Reconcile memory sync failed[/yellow] order=%s err=%s",
-                        report.order_id,
-                        str(exc),
-                    )
+            failures = self._sync_execution_memory(
+                intent=intent,
+                decision=RiskDecision(allowed=True, reason="reconciled", policy_hits=[]),
+                report=report,
+                snapshot_before=None,
+                phase="reconcile_submitted",
+            )
+            if failures:
+                memory_sync_failed_orders.append(report.order_id)
             updated += 1
 
         if updated > 0:
@@ -316,5 +407,25 @@ class ExecutionGateway:
                 "[cyan]Submitted reconciled[/cyan] updated=%d scanned=%d",
                 updated,
                 len(rows),
+            )
+        if snapshot_lookup_error or reconcile_failed_orders or memory_sync_failed_orders:
+            logger.warning(
+                "[yellow]Submitted reconcile completed with warnings[/yellow] tenant=%s scanned=%d updated=%d reconcile_failed=%d memory_sync_failed=%d",
+                tenant,
+                len(rows),
+                updated,
+                len(reconcile_failed_orders),
+                len(memory_sync_failed_orders),
+            )
+            self._append_runtime_warning(
+                action="reconcile_submitted_orders",
+                detail={
+                    "trading_mode": reconcile_trading_mode,
+                    "scanned": len(rows),
+                    "updated": updated,
+                    "reconcile_failed_orders": reconcile_failed_orders[:10],
+                    "memory_sync_failed_orders": memory_sync_failed_orders[:10],
+                    "snapshot_lookup_error": snapshot_lookup_error,
+                },
             )
         return updated

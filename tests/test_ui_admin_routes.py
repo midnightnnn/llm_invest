@@ -604,6 +604,19 @@ def test_admin_routes_save_config(monkeypatch) -> None:
     assert mcp_save.status_code == 303
 
 
+def test_admin_agents_exposes_invalid_runtime_config_keys(monkeypatch) -> None:
+    client, repo = _client_with_repo(monkeypatch)
+    repo.set_config("local", "risk_policy", "{bad json")
+    repo.set_config("local", "disabled_tools", "{\"not\":\"a list\"}")
+    repo.set_config("local", "mcp_servers", "{\"not\":\"a list\"}")
+
+    response = client.get("/admin/agents")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["invalid_runtime_config_keys"] == ["risk_policy", "disabled_tools", "mcp_servers"]
+
+
 def test_admin_agent_save_one_preserves_default_agents_when_agents_config_missing(monkeypatch) -> None:
     monkeypatch.setenv("ARENA_AGENT_IDS", "gpt,gemini,claude")
     client, repo = _client_with_repo(monkeypatch)
@@ -780,6 +793,80 @@ def test_admin_agent_save_one_accepts_registry_backed_adk_provider(monkeypatch) 
     assert response.json()["ok"] is True
     saved = json.loads(repo.get_config("local", "agents_config") or "[]")
     assert any(str(entry.get("provider")) == "deepseek" for entry in saved if isinstance(entry, dict))
+
+
+def test_admin_agent_save_one_partial_update_preserves_existing_fields(monkeypatch) -> None:
+    client, repo = _client_with_repo(monkeypatch)
+    repo.set_config(
+        "local",
+        "agents_config",
+        json.dumps(
+            [
+                {
+                    "id": "gpt",
+                    "provider": "gpt",
+                    "model": "gpt-5.4",
+                    "capital_krw": 1500000,
+                    "target_market": "kospi",
+                    "system_prompt": "keep",
+                    "risk_policy": {"max_order_krw": 123},
+                }
+            ]
+        ),
+    )
+
+    response = client.post(
+        "/admin/agents/save-one",
+        json={
+            "tenant_id": "local",
+            "agent": {
+                "agent_id": "gpt",
+                "disabled_tools": ["screen_market"],
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    saved = json.loads(repo.get_config("local", "agents_config") or "[]")
+    assert len(saved) == 1
+    entry = saved[0]
+    assert entry["id"] == "gpt"
+    assert entry["provider"] == "gpt"
+    assert entry["model"] == "gpt-5.4"
+    assert entry["capital_krw"] == 1500000
+    assert entry["target_market"] == "kospi"
+    assert entry["system_prompt"] == "keep"
+    assert entry["risk_policy"] == {"max_order_krw": 123}
+    assert entry["disabled_tools"] == ["screen_market"]
+
+
+def test_admin_agent_save_one_syncs_runtime_state(monkeypatch) -> None:
+    monkeypatch.setenv("ARENA_AGENT_IDS", "gpt,gemini,claude")
+    client, repo = _client_with_repo(monkeypatch)
+
+    response = client.post(
+        "/admin/agents/save-one",
+        json={
+            "tenant_id": "local",
+            "agent": {
+                "id": "gpt",
+                "provider": "gpt",
+                "model": "gpt-5.4",
+                "capital_krw": 2000000,
+                "target_market": "us",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert repo.capital_sync_calls
+    last = repo.capital_sync_calls[-1]
+    assert last["tenant_id"] == "local"
+    assert float(last["target_capitals"]["gpt"]) == 2000000.0
+    assert repo.nav_upsert_calls
+    assert {str(row["agent_id"]) for row in repo.nav_upsert_calls} == {"gpt", "gemini", "claude"}
 
 
 def test_admin_agent_remove_one_persists_removed_default_agent(monkeypatch) -> None:
@@ -1057,6 +1144,27 @@ def test_api_memory_graph_exposes_runtime_stats_and_select_fields(monkeypatch) -
     assert access_curve_node["options"] == ["sqrt", "log", "capped_linear"]
     assert tuning_mode_node["type"] == "select"
     assert tuning_mode_node["options"] == ["shadow", "bounded_ema"]
+
+
+def test_memory_graph_runtime_payload_marks_invalid_tuning_state(monkeypatch) -> None:
+    class _MemoryStatsRepo(_DummyRepo):
+        def fetch_rows(self, sql: str, params: dict | None = None) -> list[dict]:
+            self.fetch_calls.append((sql, params))
+            return []
+
+    monkeypatch.setenv("ARENA_UI_SETTINGS_ENABLED", "true")
+    monkeypatch.setenv("ARENA_UI_AUTH_ENABLED", "false")
+    repo = _MemoryStatsRepo()
+    repo.set_config("local", "memory_forgetting_tuning_state", "[1,2,3]")
+    app = _build_app(repo=repo, settings=load_settings())
+    client = DirectRouteClient(app)
+
+    response = client.get("/api/memory/graph", params={"tenant_id": "local"})
+
+    assert response.status_code == 200
+    runtime = response.json()["meta"]["runtime"]
+    assert runtime["forgetting_tuning_state"] == {}
+    assert runtime["invalid_config_keys"] == ["memory_forgetting_tuning_state"]
 
 
 def test_admin_tools_lists_core_and_optional(monkeypatch) -> None:

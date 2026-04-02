@@ -330,8 +330,9 @@ def _resolve_batch_tenants(repo: BigQueryRepository, *, fallback: str = "local")
         return tenants
     if demo_tenant:
         return [demo_tenant]
-    token = str(fallback or "local").strip().lower() or "local"
-    return [token]
+    raise RuntimeError(
+        f"no runtime tenants resolved and no demo tenant configured (fallback={str(fallback or '').strip().lower() or 'local'})"
+    )
 
 
 def _task_shard_spec() -> tuple[int, int] | None:

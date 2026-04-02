@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import threading
 import time
@@ -17,6 +18,8 @@ from arena.providers import (
     runtime_row_api_key_status,
 )
 from arena.tools.default_registry import build_default_registry
+
+logger = logging.getLogger(__name__)
 
 
 def _safe_float(value: object, default: float = 0.0) -> float:
@@ -42,30 +45,60 @@ def _to_bool_token(value: object, default: bool = False) -> bool:
     return token in {"1", "true", "yes", "y", "on"}
 
 
-def _parse_json_array(raw: object) -> list[Any]:
+def _parse_json_array_state(raw: object, *, field_name: str) -> tuple[list[Any], bool]:
     text = str(raw or "").strip()
     if not text:
-        return []
+        return [], False
     try:
         parsed = json.loads(text)
-    except Exception:
-        return []
+    except Exception as exc:
+        logger.warning(
+            "[yellow]UI runtime JSON parse failed[/yellow] field=%s err=%s",
+            field_name,
+            str(exc),
+        )
+        return [], True
     if isinstance(parsed, list):
-        return parsed
-    return []
+        return parsed, False
+    logger.warning(
+        "[yellow]UI runtime JSON type mismatch[/yellow] field=%s expected=array actual=%s",
+        field_name,
+        type(parsed).__name__,
+    )
+    return [], True
+
+
+def _parse_json_array(raw: object) -> list[Any]:
+    parsed, _invalid = _parse_json_array_state(raw, field_name="json_array")
+    return parsed
+
+
+def _parse_json_object_state(raw: object, *, field_name: str) -> tuple[dict[str, Any], bool]:
+    text = str(raw or "").strip()
+    if not text:
+        return {}, False
+    try:
+        parsed = json.loads(text)
+    except Exception as exc:
+        logger.warning(
+            "[yellow]UI runtime JSON parse failed[/yellow] field=%s err=%s",
+            field_name,
+            str(exc),
+        )
+        return {}, True
+    if isinstance(parsed, dict):
+        return parsed, False
+    logger.warning(
+        "[yellow]UI runtime JSON type mismatch[/yellow] field=%s expected=object actual=%s",
+        field_name,
+        type(parsed).__name__,
+    )
+    return {}, True
 
 
 def _parse_json_object(raw: object) -> dict[str, Any]:
-    text = str(raw or "").strip()
-    if not text:
-        return {}
-    try:
-        parsed = json.loads(text)
-    except Exception:
-        return {}
-    if isinstance(parsed, dict):
-        return parsed
-    return {}
+    parsed, _invalid = _parse_json_object_state(raw, field_name="json_object")
+    return parsed
 
 
 def _mask_account_display(account_no: str) -> str:
@@ -237,7 +270,11 @@ class UIRuntime:
 
         agent_ids = [str(x).strip().lower() for x in tenant_settings.agent_ids if str(x).strip()]
 
-        risk_raw = _parse_json_object(cfg.get("risk_policy"))
+        invalid_runtime_config_keys: list[str] = []
+
+        risk_raw, risk_invalid = _parse_json_object_state(cfg.get("risk_policy"), field_name="risk_policy")
+        if risk_invalid:
+            invalid_runtime_config_keys.append("risk_policy")
         risk = {
             "max_order_krw": _safe_float(risk_raw.get("max_order_krw"), tenant_settings.max_order_krw),
             "max_daily_turnover_ratio": _safe_float(risk_raw.get("max_daily_turnover_ratio"), tenant_settings.max_daily_turnover_ratio),
@@ -250,15 +287,27 @@ class UIRuntime:
 
         sleeve_capital_krw = float(tenant_settings.sleeve_capital_krw)
 
+        disabled_tools_values, disabled_tools_invalid = _parse_json_array_state(
+            cfg.get("disabled_tools"),
+            field_name="disabled_tools",
+        )
+        if disabled_tools_invalid:
+            invalid_runtime_config_keys.append("disabled_tools")
         disabled_tools_raw = sorted(
             {
                 str(x).strip()
-                for x in _parse_json_array(cfg.get("disabled_tools"))
+                for x in disabled_tools_values
                 if str(x).strip()
             }
         )
+        mcp_server_values, mcp_servers_invalid = _parse_json_array_state(
+            cfg.get("mcp_servers"),
+            field_name="mcp_servers",
+        )
+        if mcp_servers_invalid:
+            invalid_runtime_config_keys.append("mcp_servers")
         mcp_servers: list[dict[str, Any]] = []
-        for item in _parse_json_array(cfg.get("mcp_servers")):
+        for item in mcp_server_values:
             if isinstance(item, dict):
                 mcp_servers.append(
                     {
@@ -393,6 +442,7 @@ class UIRuntime:
             "sleeve_capital_krw": sleeve_capital_krw,
             "disabled_tools": disabled_tools,
             "mcp_servers": mcp_servers,
+            "invalid_runtime_config_keys": invalid_runtime_config_keys,
             "tool_entries": tool_entries,
             "agents_config": agents_config,
             "api_key_status": api_key_status,

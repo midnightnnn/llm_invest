@@ -10,6 +10,7 @@ from fastapi import FastAPI, Form, Query, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from arena.config import Settings
+from arena.market_sources import live_market_sources_for_markets
 from arena.providers import canonical_provider, list_adk_provider_specs, provider_alias_map, runtime_row_api_key_status
 
 logger = logging.getLogger(__name__)
@@ -154,6 +155,111 @@ def register_admin_settings_routes(app: FastAPI, *, deps: AdminSettingsRouteDeps
             repo.set_config(tenant, "kis_target_market", next_market, updated_by)
         return next_market or current_market
 
+    def _live_market_sources_for_market_value(
+        *,
+        tenant_settings: Settings,
+        market_value: str,
+    ) -> list[str] | None:
+        if not _is_live_mode(tenant_settings):
+            return None
+        sources = live_market_sources_for_markets(market_value)
+        if sources:
+            return sources
+        return _live_market_sources(tenant_settings)
+
+    def _sync_agent_runtime_state(
+        *,
+        tenant: str,
+        tenant_settings: Settings,
+        entries: list[dict[str, Any]],
+        updated_by: str,
+        sources: list[str] | None,
+    ) -> dict[str, Any]:
+        parsed_agent_ids = [str(entry.get("id") or "").strip().lower() for entry in entries if str(entry.get("id") or "").strip()]
+        sync_summary: dict[str, Any] = {"agents": len(parsed_agent_ids)}
+        if not parsed_agent_ids:
+            return sync_summary
+
+        capitals = [_safe_float(entry.get("capital_krw"), tenant_settings.sleeve_capital_krw) for entry in entries]
+        avg_capital = sum(capitals) / len(capitals) if capitals else tenant_settings.sleeve_capital_krw
+        target_capitals = {
+            str(entry.get("id") or "").strip().lower(): _safe_float(entry.get("capital_krw"), tenant_settings.sleeve_capital_krw)
+            for entry in entries
+            if str(entry.get("id") or "").strip()
+        }
+
+        tenant_is_live = _is_live_mode(tenant_settings)
+        sync_capitals = getattr(repo, "retarget_agent_capitals_preserve_positions", None)
+        sync_sleeves = getattr(repo, "retarget_agent_sleeves_preserve_positions", None)
+        sync_fn = sync_capitals if callable(sync_capitals) else sync_sleeves
+        if callable(sync_fn):
+            sync_kwargs = {
+                "agent_ids": parsed_agent_ids,
+                "target_sleeve_capital_krw": avg_capital,
+                "target_capitals": target_capitals,
+                "include_simulated": not tenant_is_live,
+                "sources": sources,
+                "tenant_id": tenant,
+            }
+            if sync_fn is sync_capitals:
+                sync_kwargs["created_by"] = updated_by
+            try:
+                sync_out = sync_fn(**sync_kwargs)
+                over_target_agents = sorted(
+                    [aid for aid, meta in dict(sync_out or {}).items() if bool(dict(meta).get("over_target"))]
+                )
+                sync_summary["over_target_agents"] = over_target_agents
+            except Exception as retarget_exc:
+                logger.warning(
+                    "[yellow]Sleeve retarget after agents save failed[/yellow] tenant=%s err=%s",
+                    tenant,
+                    str(retarget_exc),
+                )
+                sync_summary["retarget_error"] = str(retarget_exc)
+
+        build_sleeve = getattr(repo, "build_agent_sleeve_snapshot", None)
+        upsert_nav = getattr(repo, "upsert_agent_nav_daily", None)
+        if callable(build_sleeve) and callable(upsert_nav):
+            nav_date = datetime.now(timezone.utc).date()
+            nav_updated = 0
+            nav_failed: list[str] = []
+            for aid in parsed_agent_ids:
+                try:
+                    snap, baseline, meta = build_sleeve(
+                        agent_id=aid,
+                        sources=sources,
+                        include_simulated=not tenant_is_live,
+                        tenant_id=tenant,
+                    )
+                    upsert_nav(
+                        nav_date=nav_date,
+                        agent_id=aid,
+                        nav_krw=float(snap.total_equity_krw),
+                        baseline_equity_krw=float(baseline),
+                        cash_krw=float(snap.cash_krw),
+                        market_value_krw=sum(pos.market_value_krw() for pos in snap.positions.values()),
+                        capital_flow_krw=float((meta or {}).get("capital_flow_krw") or 0.0)
+                        + float((meta or {}).get("manual_cash_adjustment_krw") or 0.0),
+                        fx_source=str((meta or {}).get("fx_source") or ""),
+                        valuation_source=str((meta or {}).get("valuation_source") or "agent_sleeve_snapshot"),
+                        tenant_id=tenant,
+                    )
+                    nav_updated += 1
+                except Exception as nav_exc:
+                    nav_failed.append(aid)
+                    logger.warning(
+                        "[yellow]Agent NAV sync after agents save failed[/yellow] tenant=%s agent=%s err=%s",
+                        tenant,
+                        aid,
+                        str(nav_exc),
+                    )
+            sync_summary["nav_sync"] = {
+                "updated": nav_updated,
+                "failed_agents": nav_failed,
+                "nav_date": nav_date.isoformat(),
+            }
+        return sync_summary
+
     def _build_agent_remove_warning(
         *,
         tenant: str,
@@ -218,6 +324,61 @@ def register_admin_settings_routes(app: FastAPI, *, deps: AdminSettingsRouteDeps
         if has_api_key:
             message += " 저장된 API key 자체는 삭제되지 않습니다."
         return message
+
+    def _build_single_agent_entry(
+        *,
+        agent_data: dict[str, Any],
+        existing_entry: dict[str, Any] | None,
+        tenant_settings: Settings,
+        allowed_providers: set[str],
+        provider_aliases: dict[str, str],
+    ) -> tuple[str, str, dict[str, Any], str]:
+        current = dict(existing_entry or {})
+        aid = str(agent_data.get("id") or agent_data.get("agent_id") or current.get("id") or "").strip().lower()
+        if not aid:
+            raise ValueError("agent.id is required")
+
+        provider_raw = agent_data.get("provider") if "provider" in agent_data else current.get("provider")
+        provider = canonical_provider(str(provider_raw or "").strip().lower())
+        if not provider:
+            provider = provider_aliases.get(aid, "")
+        if provider not in allowed_providers:
+            raise ValueError(f"invalid provider: {provider}")
+
+        model = str(agent_data.get("model") if "model" in agent_data else current.get("model") or "").strip()
+        capital_raw = agent_data.get("capital_krw") if "capital_krw" in agent_data else current.get("capital_krw")
+        capital = _safe_float(capital_raw, tenant_settings.sleeve_capital_krw)
+        if capital <= 0:
+            capital = _safe_float(current.get("capital_krw"), tenant_settings.sleeve_capital_krw)
+        if capital <= 0:
+            capital = tenant_settings.sleeve_capital_krw
+
+        target_market = (
+            str(agent_data.get("target_market") if "target_market" in agent_data else current.get("target_market") or "")
+            .strip()
+            .lower()
+        )
+        system_prompt = str(agent_data.get("system_prompt") if "system_prompt" in agent_data else current.get("system_prompt") or "").strip()
+        risk_policy = agent_data.get("risk_policy") if "risk_policy" in agent_data else current.get("risk_policy")
+        disabled_tools_raw = agent_data.get("disabled_tools") if "disabled_tools" in agent_data else current.get("disabled_tools")
+
+        entry: dict[str, Any] = {
+            "id": aid,
+            "provider": provider,
+            "model": model,
+            "capital_krw": capital,
+        }
+        if target_market:
+            entry["target_market"] = target_market
+        if system_prompt:
+            entry["system_prompt"] = system_prompt
+        if isinstance(risk_policy, dict) and risk_policy:
+            entry["risk_policy"] = risk_policy
+        if isinstance(disabled_tools_raw, list):
+            entry["disabled_tools"] = [str(x).strip() for x in disabled_tools_raw if str(x).strip()]
+
+        raw_api_key = str(agent_data.get("api_key") or "").strip()
+        return aid, provider, entry, raw_api_key
 
     @app.get("/admin/prompt")
     def admin_prompt_get(
@@ -300,6 +461,7 @@ def register_admin_settings_routes(app: FastAPI, *, deps: AdminSettingsRouteDeps
                 "agent_ids": vm["agent_ids"],
                 "agent_models": vm["agent_models"],
                 "agents_config": vm["agents_config"],
+                "invalid_runtime_config_keys": vm.get("invalid_runtime_config_keys", []),
                 "api_key_status": vm.get("api_key_status", {}),
                 "research_status": vm.get("research_status", {}),
             }
@@ -325,7 +487,6 @@ def register_admin_settings_routes(app: FastAPI, *, deps: AdminSettingsRouteDeps
             return _settings_redirect(tenant, ok=False, msg="tenant access denied")
         tenant_settings = _settings_for_tenant(tenant)
         tenant_is_live = _is_live_mode(tenant_settings)
-        tenant_live_sources = _live_market_sources(tenant_settings) if tenant_is_live else None
 
         raw_entries = _parse_json_array(agents_config_json)
         if not raw_entries:
@@ -412,9 +573,6 @@ def register_admin_settings_routes(app: FastAPI, *, deps: AdminSettingsRouteDeps
                 tenant_settings=tenant_settings,
                 updated_by=user_email or updated_by,
             )
-            capitals = [entry["capital_krw"] for entry in entries]
-            avg_capital = sum(capitals) / len(capitals) if capitals else tenant_settings.sleeve_capital_krw
-            _invalidate_tenant_cache(tenant, "runtime", "memory", "portfolio")
 
             if api_keys and credential_store is not None:
                 credential_store.save_model_keys(
@@ -423,77 +581,17 @@ def register_admin_settings_routes(app: FastAPI, *, deps: AdminSettingsRouteDeps
                     providers=api_keys,
                 )
 
-            target_capitals = {entry["id"]: entry["capital_krw"] for entry in entries}
-            sync_summary: dict[str, Any] = {"agents": len(parsed_agent_ids)}
-            sync_capitals = getattr(repo, "retarget_agent_capitals_preserve_positions", None)
-            sync_sleeves = getattr(repo, "retarget_agent_sleeves_preserve_positions", None)
-            sync_fn = sync_capitals if callable(sync_capitals) else sync_sleeves
-            if callable(sync_fn) and parsed_agent_ids:
-                sync_kwargs = {
-                    "agent_ids": parsed_agent_ids,
-                    "target_sleeve_capital_krw": avg_capital,
-                    "target_capitals": target_capitals,
-                    "include_simulated": not tenant_is_live,
-                    "sources": tenant_live_sources,
-                    "tenant_id": tenant,
-                }
-                if sync_fn is sync_capitals:
-                    sync_kwargs["created_by"] = user_email or updated_by
-                try:
-                    sync_out = sync_fn(**sync_kwargs)
-                    over_target_agents = sorted(
-                        [aid for aid, meta in dict(sync_out or {}).items() if bool(dict(meta).get("over_target"))]
-                    )
-                    sync_summary["over_target_agents"] = over_target_agents
-                except Exception as retarget_exc:
-                    logger.warning(
-                        "[yellow]Sleeve retarget after agents save failed[/yellow] tenant=%s err=%s",
-                        tenant,
-                        str(retarget_exc),
-                    )
-                    sync_summary["retarget_error"] = str(retarget_exc)
-
-            build_sleeve = getattr(repo, "build_agent_sleeve_snapshot", None)
-            upsert_nav = getattr(repo, "upsert_agent_nav_daily", None)
-            if callable(build_sleeve) and callable(upsert_nav) and parsed_agent_ids:
-                nav_date = datetime.now(timezone.utc).date()
-                nav_updated = 0
-                nav_failed: list[str] = []
-                for aid in parsed_agent_ids:
-                    try:
-                        snap, baseline, meta = build_sleeve(
-                            agent_id=aid,
-                            sources=tenant_live_sources,
-                            include_simulated=not tenant_is_live,
-                            tenant_id=tenant,
-                        )
-                        upsert_nav(
-                            nav_date=nav_date,
-                            agent_id=aid,
-                            nav_krw=float(snap.total_equity_krw),
-                            baseline_equity_krw=float(baseline),
-                            cash_krw=float(snap.cash_krw),
-                            market_value_krw=sum(pos.market_value_krw() for pos in snap.positions.values()),
-                            capital_flow_krw=float((meta or {}).get("capital_flow_krw") or 0.0)
-                            + float((meta or {}).get("manual_cash_adjustment_krw") or 0.0),
-                            fx_source=str((meta or {}).get("fx_source") or ""),
-                            valuation_source=str((meta or {}).get("valuation_source") or "agent_sleeve_snapshot"),
-                            tenant_id=tenant,
-                        )
-                        nav_updated += 1
-                    except Exception as nav_exc:
-                        nav_failed.append(aid)
-                        logger.warning(
-                            "[yellow]Agent NAV sync after agents save failed[/yellow] tenant=%s agent=%s err=%s",
-                            tenant,
-                            aid,
-                            str(nav_exc),
-                        )
-                sync_summary["nav_sync"] = {
-                    "updated": nav_updated,
-                    "failed_agents": nav_failed,
-                    "nav_date": nav_date.isoformat(),
-                }
+            sync_summary = _sync_agent_runtime_state(
+                tenant=tenant,
+                tenant_settings=tenant_settings,
+                entries=agents_config_for_db,
+                updated_by=user_email or updated_by,
+                sources=_live_market_sources_for_market_value(
+                    tenant_settings=tenant_settings,
+                    market_value=synced_market,
+                ),
+            )
+            _invalidate_tenant_cache(tenant, "runtime", "memory", "portfolio")
 
             repo.append_runtime_audit_log(
                 action="admin_agents_save",
@@ -532,7 +630,10 @@ def register_admin_settings_routes(app: FastAPI, *, deps: AdminSettingsRouteDeps
 
         requested_tenant = str(body.get("tenant_id") or "local")
         agent_data = body.get("agent", {})
-        if not isinstance(agent_data, dict) or not agent_data.get("id"):
+        if not isinstance(agent_data, dict):
+            return JSONResponse({"ok": False, "message": "agent.id is required"}, status_code=400)
+        aid = str(agent_data.get("id") or agent_data.get("agent_id") or "").strip().lower()
+        if not aid:
             return JSONResponse({"ok": False, "message": "agent.id is required"}, status_code=400)
 
         _, user_email, tenant, _, redirect = _resolve_admin_context(
@@ -549,33 +650,23 @@ def register_admin_settings_routes(app: FastAPI, *, deps: AdminSettingsRouteDeps
         allowed_providers = {spec.provider_id for spec in list_adk_provider_specs()}
         _prov_alias = provider_alias_map()
 
-        aid = str(agent_data.get("id") or "").strip().lower()
-        provider = canonical_provider(str(agent_data.get("provider") or "").strip().lower())
-        if not provider:
-            provider = _prov_alias.get(aid, "")
-        if provider not in allowed_providers:
-            return JSONResponse({"ok": False, "message": f"invalid provider: {provider}"}, status_code=400)
-
-        model = str(agent_data.get("model") or "").strip()
-        capital = _safe_float(agent_data.get("capital_krw"), tenant_settings.sleeve_capital_krw)
-        if capital <= 0:
-            capital = tenant_settings.sleeve_capital_krw
-        target_market = str(agent_data.get("target_market") or "").strip().lower()
-
-        new_entry: dict[str, Any] = {"id": aid, "provider": provider, "model": model, "capital_krw": capital}
-        if target_market:
-            new_entry["target_market"] = target_market
-        if agent_data.get("system_prompt"):
-            new_entry["system_prompt"] = str(agent_data["system_prompt"]).strip()
-        if isinstance(agent_data.get("risk_policy"), dict) and agent_data["risk_policy"]:
-            new_entry["risk_policy"] = agent_data["risk_policy"]
-        if isinstance(agent_data.get("disabled_tools"), list):
-            new_entry["disabled_tools"] = [str(x).strip() for x in agent_data["disabled_tools"] if str(x).strip()]
-
-        raw_api_key = str(agent_data.get("api_key") or "").strip()
-
         try:
             existing_entries, _ = _load_agent_entries_for_update(tenant)
+            existing_entry = next(
+                (
+                    dict(entry)
+                    for entry in existing_entries
+                    if isinstance(entry, dict) and str(entry.get("id") or "").strip().lower() == aid
+                ),
+                None,
+            )
+            aid, provider, new_entry, raw_api_key = _build_single_agent_entry(
+                agent_data=agent_data,
+                existing_entry=existing_entry,
+                tenant_settings=tenant_settings,
+                allowed_providers=allowed_providers,
+                provider_aliases=_prov_alias,
+            )
 
             found = False
             for index, entry in enumerate(existing_entries):
@@ -603,23 +694,42 @@ def register_admin_settings_routes(app: FastAPI, *, deps: AdminSettingsRouteDeps
                 tenant_settings=tenant_settings,
                 updated_by=user_email or "ui-admin",
             )
-            _invalidate_tenant_cache(tenant, "runtime", "memory", "portfolio")
 
             if raw_api_key and credential_store is not None:
                 credential_store.save_model_keys(
                     tenant_id=tenant,
                     updated_by=user_email or "ui-admin",
-                    providers={provider: {"api_key": raw_api_key, "model": model} if model else {"api_key": raw_api_key}},
+                    providers={provider: {"api_key": raw_api_key, "model": new_entry["model"]} if new_entry["model"] else {"api_key": raw_api_key}},
                 )
+
+            sync_summary = _sync_agent_runtime_state(
+                tenant=tenant,
+                tenant_settings=tenant_settings,
+                entries=agents_config_for_db,
+                updated_by=user_email or "ui-admin",
+                sources=_live_market_sources_for_market_value(
+                    tenant_settings=tenant_settings,
+                    market_value=synced_market,
+                ),
+            )
+            _invalidate_tenant_cache(tenant, "runtime", "memory", "portfolio")
 
             repo.append_runtime_audit_log(
                 action="admin_agent_save_one",
                 status="ok",
                 user_email=user_email or "ui-admin",
                 tenant_id=tenant,
-                detail={"agent_id": aid, "provider": provider, "kis_target_market": synced_market},
+                detail={
+                    "agent_id": aid,
+                    "provider": provider,
+                    "kis_target_market": synced_market,
+                    "updated_fields": sorted(str(key) for key in agent_data.keys()),
+                    "sync": sync_summary,
+                },
             )
             return JSONResponse({"ok": True, "message": f"Agent '{aid}' saved"})
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
         except Exception as exc:
             repo.append_runtime_audit_log(
                 action="admin_agent_save_one",
@@ -747,7 +857,13 @@ def register_admin_settings_routes(app: FastAPI, *, deps: AdminSettingsRouteDeps
         if redirect:
             return redirect
         vm = _current_admin_view_model(tenant)
-        return JSONResponse({"tenant_id": tenant, "risk_policy": vm["risk"]})
+        return JSONResponse(
+            {
+                "tenant_id": tenant,
+                "risk_policy": vm["risk"],
+                "invalid_runtime_config_keys": vm.get("invalid_runtime_config_keys", []),
+            }
+        )
 
     @app.post("/admin/risk")
     def admin_risk_save(
@@ -832,6 +948,7 @@ def register_admin_settings_routes(app: FastAPI, *, deps: AdminSettingsRouteDeps
                 "tenant_id": tenant,
                 "disabled_tools": vm["disabled_tools"],
                 "tool_entries": vm["tool_entries"],
+                "invalid_runtime_config_keys": vm.get("invalid_runtime_config_keys", []),
             }
         )
 
@@ -903,7 +1020,13 @@ def register_admin_settings_routes(app: FastAPI, *, deps: AdminSettingsRouteDeps
         if redirect:
             return redirect
         vm = _current_admin_view_model(tenant)
-        return JSONResponse({"tenant_id": tenant, "mcp_servers": vm["mcp_servers"]})
+        return JSONResponse(
+            {
+                "tenant_id": tenant,
+                "mcp_servers": vm["mcp_servers"],
+                "invalid_runtime_config_keys": vm.get("invalid_runtime_config_keys", []),
+            }
+        )
 
     @app.post("/admin/tools/mcp")
     def admin_mcp_save(

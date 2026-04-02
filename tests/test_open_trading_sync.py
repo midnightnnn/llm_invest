@@ -145,6 +145,9 @@ class FakeClient:
             [{"dnca_tot_amt": "500000", "tot_evlu_amt": "710000"}],
         )
 
+    def get_domestic_orderable_cash(self):
+        return 500000.0
+
 
 class FakeBrokerTradeRepo:
     def __init__(self):
@@ -304,6 +307,18 @@ def test_market_sync_nasdaq_builds_rows() -> None:
     assert repo.latest_instrument_map_calls == [["AAPL", "SPY", "QQQ", "DIA"]]
 
 
+def test_market_sync_nasdaq_fails_without_live_fx() -> None:
+    repo = FakeRepo()
+    settings = _settings("nasdaq", ["AAPL"])
+    service = MarketDataSyncService(settings=settings, repo=repo, client=FakeClient())
+
+    result = service.sync_market_features()
+
+    assert result.inserted_rows == 0
+    assert "AAPL" in result.failed_tickers
+    assert not repo.rows
+
+
 def test_market_sync_kospi_builds_rows() -> None:
     repo = FakeRepo()
     settings = _settings("kospi", ["005930"])
@@ -384,6 +399,55 @@ def test_account_sync_overseas_persists_snapshot() -> None:
     assert "AAPL" in snapshot.positions
     assert snapshot.usd_krw_rate == pytest.approx(1300.0)
     assert repo.snapshot is snapshot
+
+
+def test_account_sync_overseas_raises_without_live_fx() -> None:
+    repo = FakeRepo()
+    settings = _settings("nasdaq", ["AAPL"])
+
+    class MissingFxClient(FakeClient):
+        def get_overseas_present_balance(self, *, tr_mket_cd=None, max_pages=8):
+            _ = (tr_mket_cd, max_pages)
+            return (
+                [
+                    {
+                        "pdno": "AAPL",
+                        "cblc_qty13": "2",
+                        "ccld_qty_smtl1": "2",
+                        "ord_psbl_qty1": "2",
+                        "avg_unpr3": "100",
+                        "ovrs_now_pric1": "120",
+                        "ovrs_excg_cd": "NASD",
+                        "tr_crcy_cd": "USD",
+                    }
+                ],
+                [],
+                [{"tot_dncl_amt": "1000000", "frcr_use_psbl_amt": "1000", "tot_asst_amt": "1312000"}],
+            )
+
+    with pytest.raises(RuntimeError, match="USD/KRW FX symbol not configured"):
+        AccountSyncService(settings=settings, repo=repo, client=MissingFxClient()).sync_account_snapshot()
+
+
+def test_account_sync_domestic_uses_orderable_cash_without_summary_fallback() -> None:
+    repo = FakeRepo()
+    settings = _settings("kospi", ["005930"])
+    snapshot = AccountSyncService(settings=settings, repo=repo, client=FakeClient()).sync_account_snapshot()
+
+    assert snapshot.cash_krw == pytest.approx(500000.0)
+    assert "005930" in snapshot.positions
+
+
+def test_account_sync_domestic_failure_preserves_orderable_cash_cause() -> None:
+    class FailingOrderableCashClient(FakeClient):
+        def get_domestic_orderable_cash(self):
+            raise RuntimeError("KIS rt_cd=1 msg_cd=OPSQ0002 msg=invalid input path=/uapi/domestic-stock/v1/trading/inquire-psbl-order")
+
+    repo = FakeRepo()
+    settings = _settings("kospi", ["005930"])
+
+    with pytest.raises(RuntimeError, match="domestic orderable cash query failed: KIS rt_cd=1 msg_cd=OPSQ0002"):
+        AccountSyncService(settings=settings, repo=repo, client=FailingOrderableCashClient()).sync_account_snapshot()
 
 
 def test_account_sync_overseas_prefers_current_quantity_over_carry_quantity() -> None:
@@ -504,6 +568,22 @@ def test_account_sync_overseas_probes_missing_exchange_code() -> None:
 
     assert snapshot.positions["KO"].exchange_code == "NYSE"
     assert snapshot.positions["KO"].instrument_id == "NYSE:KO"
+
+
+def test_account_sync_overseas_logs_instrument_map_failure(caplog) -> None:
+    class RepoWithBrokenInstrumentMap(FakeRepo):
+        def latest_instrument_map(self, tickers):
+            self.latest_instrument_map_calls.append(list(tickers))
+            raise RuntimeError("boom")
+
+    repo = RepoWithBrokenInstrumentMap()
+    settings = _settings("nasdaq", ["AAPL"])
+
+    with caplog.at_level("WARNING"):
+        snapshot = AccountSyncService(settings=settings, repo=repo, client=FakeClient()).sync_account_snapshot()
+
+    assert snapshot.positions["AAPL"].exchange_code == "NASD"
+    assert "instrument_map load failed" in caplog.text
 
 
 def test_quote_sync_us_rows_include_native_price_and_fx() -> None:
@@ -759,6 +839,32 @@ def test_broker_cash_sync_normalizes_overseas_rows() -> None:
     second = service.sync_broker_cash_events(days=3)
     assert second.inserted_events == 0
     assert second.skipped_existing == 1
+
+
+def test_broker_cash_sync_skips_us_rows_without_fx() -> None:
+    repo = FakeBrokerCashRepo()
+    settings = _settings("us", ["AAPL"])
+    client = FakeBrokerTradeClient(
+        overseas={
+            "NASD": [
+                {
+                    "ODNO": "12345",
+                    "PDNO": "AAPL",
+                    "SLL_BUY_DVSN": "02",
+                    "CCLD_QTY": "2",
+                    "CCLD_UNPR": "100.50",
+                    "ORD_DT": "20260311",
+                    "ORD_TMD": "153045",
+                }
+            ]
+        }
+    )
+    service = BrokerCashSyncService(settings=settings, repo=repo, client=client)
+
+    result = service.sync_broker_cash_events(days=3)
+
+    assert result.inserted_events == 0
+    assert repo.appended_cash_rows == []
 
 
 def test_broker_cash_sync_normalizes_domestic_rows() -> None:

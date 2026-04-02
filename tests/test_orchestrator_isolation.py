@@ -159,6 +159,22 @@ class _ExecAgent:
         )
 
 
+class _ExecAgentFinalizeFails(_ExecAgent):
+    def finalize_board_post(self, *, cycle_id: str, initial_post: BoardPost, intents, reports):
+        _ = (cycle_id, initial_post, intents, reports)
+        self.finalize_calls += 1
+        raise RuntimeError("board finalize boom")
+
+
+class _ExecAgentGenerateFails:
+    def __init__(self, agent_id: str):
+        self.agent_id = agent_id
+
+    def generate(self, context: dict) -> AgentOutput:
+        _ = context
+        raise RuntimeError("generate boom")
+
+
 def _settings(*, trading_mode: str = "live") -> Settings:
     return Settings(
         google_cloud_project="p",
@@ -312,3 +328,44 @@ def test_orchestrator_publishes_board_after_execution() -> None:
     assert agent.finalize_calls == 1
     assert board.published
     assert board.published[0].body == "FILLED:AAPL"
+
+
+def test_orchestrator_keeps_reports_when_board_finalize_fails() -> None:
+    repo = FakeRepo()
+    board = FakeBoardStore()
+    agent = _ExecAgentFinalizeFails("gpt")
+    gateway = _ExecGateway(repo, board.events)
+    orchestrator = ArenaOrchestrator(
+        settings=_settings(trading_mode="paper"),
+        context_builder=FakeContextBuilder(),
+        board_store=board,
+        gateway=gateway,
+        agents=[agent],
+    )
+
+    reports = orchestrator.run_cycle(snapshot=None)
+
+    assert len(reports) == 1
+    assert reports[0].status.value == "FILLED"
+    assert board.events == ["process:AAPL"]
+    assert board.published == []
+
+
+def test_orchestrator_returns_error_report_when_agent_generation_fails() -> None:
+    repo = FakeRepo()
+    board = FakeBoardStore()
+    agent = _ExecAgentGenerateFails("gpt")
+    orchestrator = ArenaOrchestrator(
+        settings=_settings(trading_mode="paper"),
+        context_builder=FakeContextBuilder(),
+        board_store=board,
+        gateway=FakeGateway(repo),
+        agents=[agent],
+    )
+
+    reports = orchestrator.run_cycle(snapshot=None)
+
+    assert len(reports) == 1
+    assert reports[0].status.value == "ERROR"
+    assert "execution bootstrap failed" in reports[0].message
+    assert board.published == []

@@ -8,6 +8,7 @@ from typing import Any
 
 import litellm
 
+from arena.agents.adk_agent_flow import retry_policy_from_env
 from arena.agents.support_model import (
     resolve_helper_api_key,
     resolve_helper_base_url,
@@ -34,6 +35,32 @@ _COMPACTION_INSTRUCTION = (
     "사실을 꾸며내지 말고 입력에 있는 정보만 사용하세요. "
     "반드시 JSON만 반환하세요."
 )
+
+
+def _is_retryable_compaction_error(exc: Exception) -> bool:
+    """Returns True when helper-model failures look transient."""
+    text = f"{type(exc).__name__}: {exc}".strip().lower()
+    if not text:
+        return False
+    markers = [
+        "resource_exhausted",
+        "resource exhausted",
+        "quota",
+        "429",
+        "503",
+        "service unavailable",
+        "serviceunavailable",
+        "unavailable",
+        "high demand",
+        "deadline",
+        "timed out",
+        "timeout",
+        "temporarily",
+        "temporary",
+        "internal",
+        "empty response",
+    ]
+    return any(marker in text for marker in markers)
 
 def _trim_text(value: Any, *, max_len: int) -> str:
     text = str(value or "").replace("\n", " ").strip()
@@ -490,8 +517,32 @@ class MemoryCompactionAgent:
             request_kwargs["temperature"] = temperature
         if self.base_url:
             request_kwargs["base_url"] = self.base_url
-        response = await litellm.acompletion(**request_kwargs)
-        return _extract_response_text(response)
+        retry_limit, retry_delay = retry_policy_from_env()
+        for attempt in range(retry_limit + 1):
+            try:
+                response = await asyncio.wait_for(
+                    litellm.acompletion(**request_kwargs),
+                    timeout=self.settings.llm_timeout_seconds,
+                )
+                text = _extract_response_text(response)
+                if not text.strip():
+                    raise ValueError("empty response")
+                return text
+            except Exception as exc:
+                should_retry = _is_retryable_compaction_error(exc) and attempt < retry_limit
+                if should_retry:
+                    sleep_s = retry_delay * float(attempt + 1)
+                    logger.warning(
+                        "[yellow]Memory compaction retry[/yellow] provider=%s model=%s attempt=%d sleep=%.1fs err=%s",
+                        self.provider,
+                        self.model,
+                        attempt + 1,
+                        sleep_s,
+                        str(exc),
+                    )
+                    await asyncio.sleep(sleep_s)
+                    continue
+                raise
 
     def _sanitize_reflections(
         self,
@@ -596,10 +647,7 @@ class MemoryCompactionAgent:
             return []
 
         prompt = self._build_prompt(agent_id=agent_id, cycle_id=cycle_id, inputs=inputs)
-        raw_text = await asyncio.wait_for(
-            self._collect_response_text(prompt=prompt),
-            timeout=self.settings.llm_timeout_seconds,
-        )
+        raw_text = await self._collect_response_text(prompt=prompt)
         parsed = _parse_json_object(raw_text)
         known_event_ids = {
             str(row.get("event_id") or "").strip()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from datetime import date, datetime
 from typing import Any
@@ -18,6 +19,7 @@ from arena.tools.allocation import optimize_hrp
 
 _PEER_LESSON_SOURCES = frozenset({"memory_compaction", "thesis_chain_compaction"})
 _PUBLIC_RESEARCH_CATEGORIES = ("global_market", "geopolitical", "sector_trends")
+logger = logging.getLogger(__name__)
 
 
 class _ContextTools:
@@ -520,8 +522,12 @@ class _ContextTools:
                     "days": int(rets_or_reason.shape[0]),
                     "value": round(float((cum / running_max - 1.0).min()), 6),
                 }
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(
+                "[yellow]projected MDD calculation failed[/yellow] agent=%s err=%s",
+                self.agent_id,
+                str(exc),
+            )
 
         return plan
 
@@ -615,8 +621,12 @@ class _ContextTools:
                 cum = np.cumprod(1.0 + port_rets)
                 running_max = np.maximum.accumulate(cum)
                 out["mdd"] = {"days": mdd_n, "value": round(float((cum / running_max - 1.0).min()), 6)}
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(
+                "[yellow]portfolio diagnosis MDD calculation failed[/yellow] agent=%s err=%s",
+                self.agent_id,
+                str(exc),
+            )
 
         perf = self._context.get("performance") or {}
         if isinstance(perf, dict) and perf:
@@ -710,8 +720,13 @@ class _ContextTools:
                                 f"Alpha comparison is unreliable."
                             )
                         out["benchmark"] = bench_info
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning(
+                        "[yellow]portfolio benchmark calculation failed[/yellow] agent=%s benchmark=%s err=%s",
+                        self.agent_id,
+                        bench,
+                        str(exc),
+                    )
 
         out["rebalance_plan"] = self._build_hrp_rebalance_plan(weights)
         return out

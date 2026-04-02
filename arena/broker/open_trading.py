@@ -14,6 +14,7 @@ from arena.open_trading.exchange_codes import (
     instrument_id_us_order_exchange,
     normalize_us_order_exchange as _normalize_us_order_exchange_token,
     order_to_quote_exchange as _order_to_quote_exchange,
+    parse_target_markets,
     target_market_default_us_order_exchange,
     us_order_exchange_candidates,
 )
@@ -124,6 +125,20 @@ class KISOpenTradingBroker:
             return target_default
         return ""
 
+    def _configured_markets(self) -> list[str]:
+        return parse_target_markets(self.settings.kis_target_market)
+
+    def _allows_us_market(self) -> bool:
+        return any(market in {"nasdaq", "nyse", "amex", "us"} for market in self._configured_markets())
+
+    def _allows_kospi_market(self) -> bool:
+        return any(market in {"kospi", "kosdaq"} for market in self._configured_markets())
+
+    @staticmethod
+    def _is_kospi_ticker(ticker: str) -> bool:
+        token = str(ticker or "").strip().upper()
+        return token.isdigit() and len(token) == 6
+
     def _live_slippage_bps(self, intent: OrderIntent) -> float:
         """Returns dynamic slippage buffer in bps based on order notional."""
         base = max(float(self.settings.live_slippage_bps_base), 0.0)
@@ -148,6 +163,46 @@ class KISOpenTradingBroker:
             "Ensure account snapshot has usd_krw_rate before placing US orders."
         )
 
+    def _infer_market(
+        self,
+        *,
+        ticker: str = "",
+        exchange_code: str = "",
+        instrument_id: str = "",
+        quote_currency: str = "",
+    ) -> str:
+        """Infers one concrete order market from the runtime config plus order identity."""
+        if self._allows_us_market():
+            us_exchange = _normalize_us_order_exchange_token(exchange_code) or instrument_id_us_order_exchange(instrument_id)
+            if us_exchange:
+                return "us"
+        if self._allows_kospi_market() and str(exchange_code or "").strip().upper() == "KRX":
+            return "kospi"
+
+        token = str(ticker or "").strip().upper()
+        if token:
+            if self._is_kospi_ticker(token) and self._allows_kospi_market():
+                return "kospi"
+            if not token[:1].isdigit() and self._allows_us_market():
+                return "us"
+
+        currency = str(quote_currency or "").strip().upper()
+        if currency == "USD" and self._allows_us_market():
+            return "us"
+        if currency == "KRW" and self._allows_kospi_market():
+            return "kospi"
+
+        if self._allows_us_market() and not self._allows_kospi_market():
+            return "us"
+        if self._allows_kospi_market() and not self._allows_us_market():
+            return "kospi"
+        raise ValueError(
+            "unable to infer order market "
+            f"(target_market={self.settings.kis_target_market} ticker={token or '-'} "
+            f"exchange_code={str(exchange_code or '').strip().upper() or '-'} "
+            f"instrument_id={str(instrument_id or '').strip() or '-'})"
+        )
+
     def _to_order_payload(
         self,
         intent: OrderIntent,
@@ -165,7 +220,14 @@ class KISOpenTradingBroker:
         else:
             adjusted_price_krw = float(intent.price_krw) * max(0.01, 1.0 - bps / 10_000.0)
 
-        if self.settings.kis_target_market in {"nasdaq", "nyse", "amex", "us"}:
+        market = self._infer_market(
+            ticker=intent.ticker,
+            exchange_code=intent.exchange_code or "",
+            instrument_id=intent.instrument_id or "",
+            quote_currency=intent.quote_currency or "",
+        )
+
+        if market == "us":
             fx = self._resolved_fx_rate(intent, fx_rate)
             local_raw = max(adjusted_price_krw / fx, 0.0001)
             local_tick = _infer_us_tick_size(local_raw)
@@ -174,18 +236,10 @@ class KISOpenTradingBroker:
             order_exchange = _normalize_us_order_exchange(exchange_hint, self._default_us_order_exchange())
             return "us", qty, local_limit, local_limit * fx, bps, order_exchange, fx
 
-        if self.settings.kis_target_market == "kospi":
+        if market == "kospi":
             local_limit = _round_to_tick(adjusted_price_krw, _infer_krx_tick_size(adjusted_price_krw), intent.side)
             return "kospi", qty, local_limit, local_limit, bps, "KRX", 1.0
 
-        raise ValueError(f"unsupported market for open-trading broker: {self.settings.kis_target_market}")
-
-    def _infer_market(self) -> str:
-        """Infers order market from runtime setting."""
-        if self.settings.kis_target_market in {"nasdaq", "nyse", "amex", "us"}:
-            return "us"
-        if self.settings.kis_target_market == "kospi":
-            return "kospi"
         raise ValueError(f"unsupported market for open-trading broker: {self.settings.kis_target_market}")
 
     def _fetch_live_price(self, *, ticker: str, market: str, exchange_code: str) -> float:
@@ -355,7 +409,10 @@ class KISOpenTradingBroker:
         """Attempts one-shot reconciliation for prior SUBMITTED orders."""
         _ = side  # kept for interface completeness/logging extension.
         try:
-            market = self._infer_market()
+            market = self._infer_market(
+                ticker=ticker,
+                exchange_code=exchange_code,
+            )
         except ValueError:
             return None
         qty = max(1, int(math.floor(float(requested_qty))))

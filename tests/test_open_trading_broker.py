@@ -137,6 +137,54 @@ def test_to_order_payload_requires_exchange_for_mixed_us_market() -> None:
         broker._to_order_payload(intent)
 
 
+def test_to_order_payload_accepts_combo_market_with_us_exchange() -> None:
+    settings = _settings()
+    settings.kis_target_market = "us,kospi"
+    broker = KISOpenTradingBroker(settings=settings)
+    intent = OrderIntent(
+        agent_id="gpt",
+        ticker="AAPL",
+        side=Side.BUY,
+        quantity=1.0,
+        price_krw=145_000,
+        rationale="test",
+        fx_rate=1300.0,
+        exchange_code="NASD",
+    )
+
+    market, qty, _local_limit, _limit_krw, _bps, order_exchange, fx_rate = broker._to_order_payload(intent)
+
+    assert market == "us"
+    assert qty == 1
+    assert order_exchange == "NASD"
+    assert fx_rate == 1300.0
+
+
+def test_to_order_payload_accepts_combo_market_with_krx_exchange() -> None:
+    settings = _settings()
+    settings.kis_target_market = "us,kospi"
+    broker = KISOpenTradingBroker(settings=settings)
+    intent = OrderIntent(
+        agent_id="gpt",
+        ticker="005930",
+        side=Side.BUY,
+        quantity=1.0,
+        price_krw=70_000,
+        rationale="test",
+        exchange_code="KRX",
+        quote_currency="KRW",
+    )
+
+    market, qty, local_limit, limit_krw, _bps, order_exchange, fx_rate = broker._to_order_payload(intent)
+
+    assert market == "kospi"
+    assert qty == 1
+    assert local_limit == 70100.0
+    assert limit_krw == 70100.0
+    assert order_exchange == "KRX"
+    assert fx_rate == 1.0
+
+
 def test_live_slippage_bps_is_capped() -> None:
     s = _settings()
     s.live_slippage_bps_base = 5.0

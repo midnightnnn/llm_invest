@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import json
+import logging
 from pathlib import Path
 from typing import Any, Callable
 
@@ -28,24 +29,55 @@ from arena.ui.http import html_response, json_response
 _VENDOR_DIR = Path(__file__).resolve().parent / "vendor"
 _THREE_JS_PATH = _VENDOR_DIR / "three.min.js"
 _FORCE_GRAPH_JS_PATH = _VENDOR_DIR / "3d-force-graph.min.js"
+logger = logging.getLogger(__name__)
+
+
+def _load_json_config_with_state(
+    repo: BigQueryRepository,
+    *,
+    tenant_id: str,
+    config_key: str,
+) -> tuple[dict[str, Any], bool]:
+    getter = getattr(repo, "get_config", None)
+    if not callable(getter):
+        return {}, False
+    try:
+        raw = getter(tenant_id, config_key)
+    except Exception as exc:
+        logger.warning(
+            "[yellow]memory config load failed[/yellow] tenant=%s key=%s err=%s",
+            tenant_id,
+            config_key,
+            str(exc),
+        )
+        return {}, True
+    text = str(raw or "").strip()
+    if not text:
+        return {}, False
+    try:
+        parsed = json.loads(text)
+    except Exception as exc:
+        logger.warning(
+            "[yellow]memory config JSON parse failed[/yellow] tenant=%s key=%s err=%s",
+            tenant_id,
+            config_key,
+            str(exc),
+        )
+        return {}, True
+    if isinstance(parsed, dict):
+        return parsed, False
+    logger.warning(
+        "[yellow]memory config JSON type mismatch[/yellow] tenant=%s key=%s expected=object actual=%s",
+        tenant_id,
+        config_key,
+        type(parsed).__name__,
+    )
+    return {}, True
 
 
 def _load_json_config(repo: BigQueryRepository, *, tenant_id: str, config_key: str) -> dict[str, Any]:
-    getter = getattr(repo, "get_config", None)
-    if not callable(getter):
-        return {}
-    try:
-        raw = getter(tenant_id, config_key)
-    except Exception:
-        return {}
-    text = str(raw or "").strip()
-    if not text:
-        return {}
-    try:
-        parsed = json.loads(text)
-    except Exception:
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
+    parsed, _invalid = _load_json_config_with_state(repo, tenant_id=tenant_id, config_key=config_key)
+    return parsed
 
 
 def _ratio(numerator: int, denominator: int) -> float:
@@ -251,7 +283,7 @@ def _graph_payload(
         stats = cached_fetch(stats_key, _stats_payload, repo, tenant_id=tenant, trading_mode=settings.trading_mode)
     else:
         stats = _stats_payload(repo, tenant_id=tenant, trading_mode=settings.trading_mode)
-    tuning_state = _load_json_config(
+    tuning_state, tuning_state_invalid = _load_json_config_with_state(
         repo,
         tenant_id=tenant,
         config_key=MEMORY_FORGETTING_TUNING_STATE_CONFIG_KEY,
@@ -276,6 +308,7 @@ def _graph_payload(
         "event_types": stats.get("counts_by_event_type") or {},
         "memory_tiers": stats.get("counts_by_memory_tier") or {},
         "forgetting_tuning_state": tuning_state,
+        "invalid_config_keys": [MEMORY_FORGETTING_TUNING_STATE_CONFIG_KEY] if tuning_state_invalid else [],
     }
     return graph
 

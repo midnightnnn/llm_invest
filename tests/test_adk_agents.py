@@ -17,13 +17,15 @@ from arena.agents.adk_agents import (
     _ContextTools,
     _has_credentials,
     _is_gemini_quota_error,
-    _is_vertex_model_access_error,
     _load_disabled_tool_ids,
-    _normalize_vertex_anthropic_model,
     _resolve_disabled_tool_ids,
     _resolve_model,
     _system_prompt,
     _user_prompt,
+)
+from arena.agents.adk_models import (
+    _is_vertex_model_access_error,
+    _normalize_vertex_anthropic_model,
 )
 from arena.agents.adk_agent_flow import (
     draft_phase_output,
@@ -220,11 +222,9 @@ def test_build_tool_summary_memory_record_keeps_token_usage_even_without_events(
     assert payload["analysis_funnel"]["discovered_nonheld"] == 0
 
 
-def test_parse_board_response_falls_back_to_plain_text_body() -> None:
-    out = parse_board_response("plain board body")
-
-    assert out["board_title"] == "거래 아이디어"
-    assert out["board_body"] == "plain board body"
+def test_parse_board_response_raises_on_plain_text_body() -> None:
+    with pytest.raises(Exception):
+        parse_board_response("plain board body")
 
 
 def test_retry_policy_from_env_clamps_extreme_values(monkeypatch) -> None:
@@ -312,6 +312,26 @@ def test_resolve_order_price_prefers_live_fx_for_us_quotes() -> None:
     assert native_price == pytest.approx(10.0)
     assert quote_currency == "USD"
     assert fx_rate == pytest.approx(1400.0)
+
+
+def test_resolve_order_price_returns_zero_when_us_fx_is_missing() -> None:
+    settings = load_settings()
+    settings.kis_target_market = "nasdaq"
+    settings.usd_krw_rate = 1300.0
+
+    price_krw, native_price, quote_currency, fx_rate = resolve_order_price(
+        settings,
+        market_row={
+            "close_price_native": 10.0,
+            "fx_rate_used": 0.0,
+        },
+        portfolio={"usd_krw_rate": 0.0},
+    )
+
+    assert price_krw == pytest.approx(0.0)
+    assert native_price == pytest.approx(10.0)
+    assert quote_currency == "USD"
+    assert fx_rate == pytest.approx(0.0)
 
 
 def test_format_orders_summary_includes_hold_rows() -> None:
@@ -432,6 +452,74 @@ def test_build_order_intents_defaults_single_market_us_exchange() -> None:
     assert len(intents) == 1
     assert intents[0].exchange_code == "NASD"
     assert intents[0].instrument_id == "NASD:AAPL"
+
+
+def test_resolve_order_price_multi_market_infers_usd_from_exchange_identity() -> None:
+    settings = load_settings()
+    settings.kis_target_market = "us,kospi"
+
+    price_krw, native_price, quote_currency, fx_rate = resolve_order_price(
+        settings,
+        market_row={
+            "ticker": "AAPL",
+            "exchange_code": "NAS",
+            "instrument_id": "NASD:AAPL",
+            "close_price_native": 100.0,
+            "fx_rate_used": 1300.0,
+        },
+        portfolio={},
+    )
+
+    assert price_krw == 130000.0
+    assert native_price == 100.0
+    assert quote_currency == "USD"
+    assert fx_rate == 1300.0
+
+
+def test_build_order_intents_multi_market_defaults_korean_exchange() -> None:
+    settings = load_settings()
+    settings.trading_mode = "paper"
+    settings.kis_target_market = "us,kospi"
+    settings.max_order_krw = 2_000_000.0
+    settings.max_position_ratio = 1.0
+
+    intents, tickers_mentioned = build_order_intents(
+        repo=_RepoForAdkGenerate(),
+        settings=settings,
+        agent_id="gpt",
+        sleeve_capital_krw=2_000_000.0,
+        cycle_id="cycle_order_combo_kr",
+        context={
+            "portfolio": {
+                "cash_krw": 2_000_000.0,
+                "total_equity_krw": 2_000_000.0,
+                "positions": {},
+            },
+            "order_budget": {"max_buy_notional_krw": 2_000_000.0},
+        },
+        orders=[
+            {
+                "ticker": "005930",
+                "side": "BUY",
+                "size_ratio": 0.5,
+                "rationale": "combo-market KRX inference",
+            }
+        ],
+        row_map={
+            "005930": {
+                "ticker": "005930",
+                "exchange_code": "",
+                "instrument_id": "",
+                "close_price_krw": 70000.0,
+                "quote_currency": "KRW",
+            }
+        },
+    )
+
+    assert tickers_mentioned == {"005930"}
+    assert len(intents) == 1
+    assert intents[0].exchange_code == "KRX"
+    assert intents[0].instrument_id == "KRX:005930"
 
 
 def test_build_order_intents_collects_feedback_events() -> None:
@@ -733,6 +821,13 @@ class _RepoForPortfolioDiagnosisExact(_RepoForPortfolioDiagnosis):
         )
 
 
+class _RepoForPortfolioDiagnosisRaises(_RepoForPortfolioDiagnosis):
+    def get_daily_closes(self, tickers, lookback_days, sources=None):
+        if int(lookback_days) <= 10:
+            raise RuntimeError("no closes")
+        return super().get_daily_closes(tickers, lookback_days, sources=sources)
+
+
 class _RepoForPeerLessons:
     def memory_events_by_ids_any_agent(self, *, event_ids, trading_mode="paper", tenant_id=None):
         _ = (trading_mode, tenant_id)
@@ -923,6 +1018,37 @@ def test_portfolio_diagnosis_aligns_benchmark_period_with_cumulative_return(monk
     assert out["benchmark"]["return"] == pytest.approx(0.20, abs=1e-6)
     assert out["benchmark"]["alpha_vs_benchmark"] == pytest.approx(0.10, abs=1e-6)
     assert "2026-01-01 -> 2026-01-02" in out["benchmark"]["note"]
+
+
+def test_portfolio_diagnosis_logs_warning_when_mdd_calculation_fails(caplog) -> None:
+    tool = _ContextTools.__new__(_ContextTools)
+    tool.repo = _RepoForPortfolioDiagnosisRaises()
+    tool.settings = load_settings()
+    tool.settings.kis_target_market = "nasdaq"
+    tool.agent_id = "gpt"
+    tool._context = {
+        "portfolio": {
+            "cash_krw": 1_000.0,
+            "positions": {
+                "AAPL": {"quantity": 10.0, "avg_price_krw": 100.0},
+                "MSFT": {"quantity": 5.0, "avg_price_krw": 200.0},
+            },
+        },
+        "market_features": [
+            {"ticker": "AAPL", "close_price_krw": 110.0, "volatility_20d": 0.2, "ret_20d": 0.08, "ret_5d": 0.03},
+            {"ticker": "MSFT", "close_price_krw": 208.0, "volatility_20d": 0.1, "ret_20d": 0.04, "ret_5d": 0.01},
+        ],
+        "risk_policy": {
+            "min_cash_buffer_ratio": 0.10,
+            "max_position_ratio": 0.60,
+        },
+    }
+
+    with caplog.at_level("WARNING"):
+        out = tool.portfolio_diagnosis(mdd_days=5, top_n=2)
+
+    assert "mdd" not in out
+    assert "portfolio diagnosis MDD calculation failed" in caplog.text
 
 
 def test_compact_portfolio_diagnosis_includes_rebalance_plan_summary() -> None:
@@ -1250,6 +1376,12 @@ class _FakeKospiRunner(_FakeRunner):
         }
 
 
+class _FailRunner:
+    def decide_orders(self, *, context, default_universe, resume_session_id=None):
+        _ = (context, default_universe, resume_session_id)
+        raise RuntimeError("runner boom")
+
+
 def test_generate_reprices_us_order_with_live_fx(monkeypatch) -> None:
     runner = _FakeRunner()
     monkeypatch.setattr(AdkTradingAgent, "_build_runner", lambda self, *, settings: runner)
@@ -1300,6 +1432,60 @@ def test_generate_reprices_us_order_with_live_fx(monkeypatch) -> None:
     assert intent.quote_currency == "USD"
     assert intent.fx_rate == pytest.approx(1450.0)
     assert runner.board_calls == []
+
+
+def test_generate_raises_when_market_features_missing(monkeypatch) -> None:
+    monkeypatch.setattr(AdkTradingAgent, "_build_runner", lambda self, *, settings: _FakeRunner())
+    settings = load_settings()
+    settings.trading_mode = "paper"
+    settings.kis_target_market = "us"
+    settings.default_universe = ["AAPL"]
+
+    agent = AdkTradingAgent(
+        agent_id="gpt",
+        provider="gpt",
+        settings=settings,
+        repo=_RepoForAdkGenerate(),
+        registry=object(),
+    )
+
+    with pytest.raises(RuntimeError, match="market_features missing"):
+        agent.generate({"cycle_phase": "execution", "cycle_id": "cycle_missing_rows", "market_features": []})
+
+
+def test_generate_raises_when_decision_fails(monkeypatch) -> None:
+    monkeypatch.setattr(AdkTradingAgent, "_build_runner", lambda self, *, settings: _FailRunner())
+    settings = load_settings()
+    settings.trading_mode = "paper"
+    settings.kis_target_market = "us"
+    settings.default_universe = ["AAPL"]
+
+    agent = AdkTradingAgent(
+        agent_id="gpt",
+        provider="gpt",
+        settings=settings,
+        repo=_RepoForAdkGenerate(),
+        registry=object(),
+    )
+
+    with pytest.raises(RuntimeError, match="ADK decision failed"):
+        agent.generate(
+            {
+                "cycle_phase": "execution",
+                "cycle_id": "cycle_decision_fail",
+                "market_features": [
+                    {
+                        "ticker": "AAPL",
+                        "exchange_code": "NASD",
+                        "instrument_id": "NASD:AAPL",
+                        "close_price_krw": 130000.0,
+                        "close_price_native": 100.0,
+                        "quote_currency": "USD",
+                        "fx_rate_used": 1300.0,
+                    }
+                ],
+            }
+        )
 
 
 def test_finalize_board_post_uses_execution_summary(monkeypatch) -> None:
@@ -1377,7 +1563,7 @@ def test_finalize_board_post_uses_execution_summary(monkeypatch) -> None:
     assert post.body == summary
 
 
-def test_finalize_board_post_falls_back_when_board_invents_kospi_name_or_timing(monkeypatch) -> None:
+def test_finalize_board_post_keeps_freeform_board_text(monkeypatch) -> None:
     runner = _FakeKospiRunner()
     monkeypatch.setattr(AdkTradingAgent, "_build_runner", lambda self, *, settings: runner)
     settings = load_settings()
@@ -1445,11 +1631,9 @@ def test_finalize_board_post_falls_back_when_board_invents_kospi_name_or_timing(
     )
 
     assert len(runner.board_calls) == 1
-    assert post.title == "거래 아이디어"
-    assert "이번 사이클 실제 실행 결과" in post.body
-    assert "남해화학(025860) BUY 48주 FILLED" in post.body
-    assert "이녹스첨단소재" not in post.body
-    assert "전날" not in post.body
+    assert post.title == "이녹스첨단소재를 다시 담다"
+    assert "**이녹스첨단소재(025860)** BUY 48주 체결" in post.body
+    assert "전날 27주에 이어 오늘 48주." in post.body
 
 
 def test_generate_skips_mixed_us_order_when_exchange_is_unresolved(monkeypatch) -> None:

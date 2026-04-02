@@ -246,6 +246,26 @@ def test_context_builder_loads_ticker_names_for_current_positions() -> None:
     assert "Long-horizon compounding" in context["investment_style_context"]
 
 
+def test_context_builder_uses_krw_display_when_us_fx_is_unavailable() -> None:
+    repo = FakeRepo()
+    settings = _settings()
+    builder = ContextBuilder(repo=repo, memory=FakeMemory(), board=FakeBoard(), settings=settings)
+    snapshot = AccountSnapshot(
+        cash_krw=1_000_000,
+        total_equity_krw=1_200_000,
+        usd_krw_rate=0.0,
+        cash_foreign=500.0,
+        cash_foreign_currency="USD",
+        positions={},
+    )
+
+    context = builder.build(agent_id="gpt", snapshot=snapshot)
+
+    assert context["performance"]["display_currency"] == "KRW"
+    assert "usd_krw_rate" not in context["order_budget"]
+    assert context["order_budget"]["cash_usd"] == pytest.approx(500.0)
+
+
 def test_context_builder_falls_back_to_runtime_universe_candidates() -> None:
     repo = FakeRepo()
     settings = _settings()
@@ -580,9 +600,50 @@ def test_context_builder_ticker_display_uses_context_tags_and_avoids_plain_words
     )
 
     assert reflection["tickers"] == ["AAPL"]
+    assert reflection["canonical_tickers"] == ["AAPL"]
+    assert reflection["derived_tickers"] == []
+    assert reflection["ticker_source"] == "context_tags"
     assert "IN" not in reflection["tickers"]
     assert "BULL" not in reflection["tickers"]
     assert note["tickers"] == ["AAPL"]
+    assert note["canonical_tickers"] == []
+    assert note["derived_tickers"] == ["AAPL"]
+    assert note["ticker_source"] == "summary_regex"
+    assert note["side"] == ""
+
+
+def test_context_builder_keeps_summary_fallback_derived_but_out_of_ticker_bonus() -> None:
+    repo = FakeRepo()
+    builder = ContextBuilder(repo=repo, memory=FakeMemory(), board=FakeBoard(), settings=_settings())
+
+    derived = builder._normalize_memory_row(
+        {
+            "event_id": "evt_note",
+            "created_at": "2026-03-12T00:00:00Z",
+            "agent_id": "gpt",
+            "event_type": "manual_note",
+            "summary": "AAPL liquidity looked fake around the open; wait for confirmation.",
+            "importance_score": 0.5,
+            "score": 0.5,
+        }
+    )
+    canonical = builder._normalize_memory_row(
+        {
+            "event_id": "evt_trade",
+            "created_at": "2026-03-12T00:00:00Z",
+            "agent_id": "gpt",
+            "event_type": "trade_execution",
+            "summary": "AAPL BUY qty=2 status=FILLED policy=ok broker=filled",
+            "importance_score": 0.5,
+            "score": 0.5,
+            "payload_json": '{"intent":{"ticker":"AAPL","side":"BUY"}}',
+        }
+    )
+
+    assert builder._memory_ticker_bonus(derived, {"AAPL"}) == 0.0
+    assert builder._memory_ticker_bonus(canonical, {"AAPL"}) > 0.0
+    assert "~AAPL" in builder._format_memory_line(derived)
+    assert "~BUY" not in builder._format_memory_line(derived)
 
 
 def test_context_builder_uses_temporal_tiers_when_hierarchy_enabled() -> None:
@@ -957,6 +1018,11 @@ def test_context_builder_hydrates_vector_hits_and_prefers_ticker_overlap() -> No
 
     assert context["memory_events"][0]["event_id"] == "evt_trade"
     assert context["memory_events"][0]["tickers"] == ["AAPL"]
+    assert context["memory_events"][0]["canonical_tickers"] == ["AAPL"]
+    assert context["memory_events"][0]["derived_tickers"] == []
+    assert context["memory_events"][0]["side"] == "BUY"
+    assert context["memory_events"][0]["canonical_side"] == "BUY"
+    assert context["memory_events"][0]["derived_side"] == ""
 
 
 def test_context_builder_falls_back_to_raw_vector_rows_when_bq_hydration_fails() -> None:
@@ -1005,7 +1071,16 @@ def test_context_builder_falls_back_to_raw_vector_rows_when_bq_hydration_fails()
     assert context["memory_events"][0]["event_id"] == "evt_trade"
     assert context["memory_events"][0]["event_type"] == "trade_execution"
     assert context["memory_events"][0]["tickers"] == ["AAPL"]
+    assert context["memory_events"][0]["canonical_tickers"] == []
+    assert context["memory_events"][0]["derived_tickers"] == ["AAPL"]
+    assert context["memory_events"][0]["ticker_source"] == "summary_regex"
+    assert context["memory_events"][0]["side"] == "BUY"
+    assert context["memory_events"][0]["canonical_side"] == ""
+    assert context["memory_events"][0]["derived_side"] == "BUY"
+    assert context["memory_events"][0]["side_source"] == "summary_keyword"
     assert "Similar Trades:" in context["memory_context"]
+    assert "~AAPL" in context["memory_context"]
+    assert "~BUY" in context["memory_context"]
 
 
 def test_context_builder_returns_empty_memory_when_state_query_has_no_vector_hits() -> None:

@@ -1,20 +1,24 @@
-import os
-import json
-from dotenv import load_dotenv
+from __future__ import annotations
 
-load_dotenv()
-os.environ["ARENA_TRADING_MODE"] = "paper"
-os.environ["ARENA_AGENT_IDS"] = "gemini,gpt"
-os.environ["ARENA_AGENT_MODE"] = "adk"
+import pytest
 
+from arena.board.store import BoardStore
 from arena.config import load_settings
+from arena.context import ContextBuilder
 from arena.data.bq import BigQueryRepository
 from arena.memory.store import MemoryStore
-from arena.board.store import BoardStore
-from arena.context import ContextBuilder
-from arena.models import AccountSnapshot, utc_now
+from arena.models import AccountSnapshot, Position
+from tests.integration.conftest import require_live_integration
 
-def main():
+pytestmark = pytest.mark.integration
+
+
+def test_context_builder_live_bq_smoke(monkeypatch: pytest.MonkeyPatch) -> None:
+    require_live_integration("GOOGLE_CLOUD_PROJECT")
+    monkeypatch.setenv("ARENA_TRADING_MODE", "paper")
+    monkeypatch.setenv("ARENA_AGENT_IDS", "gemini,gpt")
+    monkeypatch.setenv("ARENA_AGENT_MODE", "adk")
+
     settings = load_settings()
     repo = BigQueryRepository(
         project=settings.google_cloud_project,
@@ -23,40 +27,43 @@ def main():
     )
     memory = MemoryStore(repo)
     board = BoardStore(repo)
-    
     context_builder = ContextBuilder(
         repo=repo,
         memory=memory,
         board=board,
         settings=settings,
     )
-    
-    from arena.models import Position
     snapshot = AccountSnapshot(
-        as_of_ts=utc_now(),
-        cash_krw=1000000.0,
-        total_equity_krw=1000000.0,
+        cash_krw=1_000_000.0,
+        total_equity_krw=1_000_000.0,
+        usd_krw_rate=1_350.0,
         positions={
-            "TSLA": Position(ticker="TSLA", quantity=10, avg_price_krw=200, market_price_krw=210, currency="USD"),
-            "AAPL": Position(ticker="AAPL", quantity=5, avg_price_krw=150, market_price_krw=155, currency="USD")
-        }
+            "TSLA": Position(
+                ticker="TSLA",
+                quantity=10,
+                avg_price_krw=200.0,
+                market_price_krw=210.0,
+                quote_currency="USD",
+            ),
+            "AAPL": Position(
+                ticker="AAPL",
+                quantity=5,
+                avg_price_krw=150.0,
+                market_price_krw=155.0,
+                quote_currency="USD",
+            ),
+        },
     )
-    
-    # Let's seed a fake react_tools_summary if nothing exists? It will just read whatever is in BQ.
+
     ctx = context_builder.build(
         agent_id="gpt",
         snapshot=snapshot,
-        sleeve_baseline_equity_krw=1000000.0,
+        sleeve_baseline_equity_krw=1_000_000.0,
         sleeve_meta={},
     )
-    
-    print("Memory Rows Count:", len(ctx.get("memory_events", [])))
-    for r in ctx.get("memory_events", []):
-        print("-", r)
-        
-    print("Board Rows Count:", len(ctx.get("board_posts", [])))
-    for r in ctx.get("board_posts", []):
-        print("-", r)
 
-if __name__ == "__main__":
-    main()
+    assert ctx["agent_id"] == "gpt"
+    assert isinstance(ctx.get("memory_events"), list)
+    assert isinstance(ctx.get("board_posts"), list)
+    assert isinstance(ctx.get("memory_context"), str)
+    assert isinstance(ctx.get("board_context"), str)
