@@ -307,6 +307,29 @@ def test_settings_page_shows_shared_live_research_status(monkeypatch) -> None:
     assert "승인된 live tenant라서 midnightnnn의 operator-managed Gemini로 리서치 브리핑을 생성합니다." in response.text
 
 
+def test_settings_page_uses_tenant_model_secret_for_research_status(monkeypatch) -> None:
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("ARENA_RESEARCH_GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_GENAI_USE_VERTEXAI", raising=False)
+    client, repo = _client_with_repo(monkeypatch)
+    repo.runtime_credentials["local"] = {
+        "tenant_id": "local",
+        "model_secret_name": "models-local",
+        "has_gemini": True,
+    }
+
+    monkeypatch.setattr(
+        "arena.cli._load_secret_json",
+        lambda **kwargs: {"providers": {"gemini": {"api_key": "tenant-gemini-key"}}},
+    )
+
+    response = client.get("/settings")
+
+    assert response.status_code == 200
+    assert "이 테넌트는 Gemini native grounding으로 새로운 리서치 브리핑을 생성할 수 있습니다." in response.text
+    assert "Gemini 키가 없어 새로운 리서치 브리핑 생성은 비활성화됩니다." not in response.text
+
+
 def test_settings_page_renders_saved_mcp_rows(monkeypatch) -> None:
     client, repo = _client_with_repo(monkeypatch)
     repo.set_config(

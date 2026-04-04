@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from typing import Any, Callable
 
-from arena.cli_runtime import _apply_shared_research_gemini
+from arena.cli_runtime import _apply_shared_research_gemini, _apply_tenant_runtime_credentials
 from arena.config import Settings, apply_runtime_overrides, research_generation_status
 from arena.data.bq import BigQueryRepository
 from arena.providers import (
@@ -231,6 +231,7 @@ class UIRuntime:
 
         def _build() -> Settings:
             tenant_settings = deepcopy(self.settings)
+            _apply_tenant_runtime_credentials(tenant_settings, self.repo, tenant_id=tenant_norm)
             tenant_settings = apply_runtime_overrides(tenant_settings, self.repo, tenant_id=tenant_norm)
             _apply_shared_research_gemini(tenant_settings, self.repo, tenant_id=tenant_norm)
             return tenant_settings

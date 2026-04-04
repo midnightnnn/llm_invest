@@ -78,8 +78,8 @@ class _ContextTools:
 
     def _benchmark_period_basis(self, perf: dict[str, Any]) -> tuple[date | None, float | None, str]:
         candidates = (
-            ("cumulative_pnl_ratio", perf.get("initialized_at"), perf.get("cumulative_pnl_ratio")),
             ("current_sleeve_pnl_ratio", perf.get("current_sleeve_initialized_at"), perf.get("current_sleeve_pnl_ratio")),
+            ("cumulative_pnl_ratio", perf.get("initialized_at"), perf.get("cumulative_pnl_ratio")),
             ("pnl_ratio", perf.get("current_sleeve_initialized_at") or perf.get("initialized_at"), perf.get("pnl_ratio")),
         )
         for metric, raw_start, raw_return in candidates:
@@ -699,6 +699,12 @@ class _ContextTools:
                             bench_info["benchmark_end_date"] = benchmark_end_date
                         if agent_ret is not None:
                             bench_info["agent_return_metric"] = agent_metric or "pnl_ratio"
+                            if str(agent_metric or "").startswith("current_sleeve"):
+                                bench_info["comparison_scope"] = "current_sleeve"
+                            elif str(agent_metric or "").startswith("cumulative"):
+                                bench_info["comparison_scope"] = "cumulative"
+                            else:
+                                bench_info["comparison_scope"] = "portfolio"
                             bench_info["alpha_vs_benchmark"] = round(agent_ret - bench_ret, 6)
                         if exact_period_match:
                             if portfolio_start_date and benchmark_start_date and benchmark_start_date != portfolio_start_date:

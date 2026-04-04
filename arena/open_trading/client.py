@@ -21,6 +21,19 @@ PROD_BASE_URL = "https://openapi.koreainvestment.com:9443"
 PAPER_BASE_URL = "https://openapivts.koreainvestment.com:29443"
 
 
+def _to_float(value: object, default: float = 0.0) -> float:
+    """Converts mixed API values to float with safe fallback."""
+    try:
+        if value is None:
+            return default
+        text = str(value).strip().replace(",", "")
+        if not text:
+            return default
+        return float(text)
+    except (TypeError, ValueError):
+        return default
+
+
 class KISAPIError(RuntimeError):
     """Represents a failed Korea Investment Open API call."""
 

@@ -195,6 +195,27 @@ def test_get_usd_krw_daily_chart_uses_daily_chart_api(monkeypatch) -> None:
     assert rows[0]["ovrs_nmix_prpr"] == "1310.5"
 
 
+def test_get_domestic_orderable_cash_returns_nrcvb_buy_amt(monkeypatch) -> None:
+    client = OpenTradingClient(_settings(account_no="1234567801"))
+
+    def _fake_request(*, method, path, tr_id, params=None, tr_cont="", retry_on_401=True):
+        _ = (method, tr_id, params, tr_cont, retry_on_401)
+        assert path == "/uapi/domestic-stock/v1/trading/inquire-psbl-order"
+        return {
+            "rt_cd": "0",
+            "output": {
+                "nrcvb_buy_amt": "500000",
+                "ord_psbl_cash": "490000",
+                "ord_psbl_sbst": "0",
+                "ruse_psbl_amt": "0",
+            },
+        }, {}
+
+    monkeypatch.setattr(client, "_request", _fake_request)
+
+    assert client.get_domestic_orderable_cash() == pytest.approx(500000.0)
+
+
 def test_get_domestic_daily_price_pages_backward_by_end_date(monkeypatch) -> None:
     client = OpenTradingClient(_settings())
 

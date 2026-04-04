@@ -815,10 +815,12 @@ class _RepoForPortfolioDiagnosisExact(_RepoForPortfolioDiagnosis):
                 "sources": list(sources) if isinstance(sources, list) else sources,
             }
         )
-        return pd.DataFrame(
-            {"QQQ": [100.0, 110.0, 120.0]},
-            index=pd.to_datetime(["2026-01-02", "2026-01-03", "2026-03-27"]),
+        frame = pd.DataFrame(
+            {"QQQ": [90.0, 100.0, 100.0]},
+            index=pd.to_datetime(["2026-01-02", "2026-03-03", "2026-03-27"]),
         )
+        mask = (frame.index.date >= start) & (frame.index.date <= end)
+        return frame.loc[mask]
 
 
 class _RepoForPortfolioDiagnosisRaises(_RepoForPortfolioDiagnosis):
@@ -965,7 +967,7 @@ def test_portfolio_diagnosis_returns_derived_fields_not_raw_portfolio_echo() -> 
     assert out["rebalance_plan"]["rebalance_orders"]
 
 
-def test_portfolio_diagnosis_aligns_benchmark_period_with_cumulative_return(monkeypatch) -> None:
+def test_portfolio_diagnosis_aligns_benchmark_period_with_current_sleeve_return(monkeypatch) -> None:
     tool = _ContextTools.__new__(_ContextTools)
     repo = _RepoForPortfolioDiagnosisExact()
     tool.repo = repo
@@ -1005,19 +1007,20 @@ def test_portfolio_diagnosis_aligns_benchmark_period_with_cumulative_return(monk
     assert repo.frame_calls == [
         {
             "tickers": ["QQQ"],
-            "start": datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc).date(),
+            "start": datetime(2026, 3, 1, 0, 0, tzinfo=timezone.utc).date(),
             "end": datetime(2026, 3, 28, 0, 0, tzinfo=timezone.utc).date(),
             "sources": tool._sources(),
         }
     ]
     assert out["benchmark"]["period_alignment"] == "exact"
-    assert out["benchmark"]["portfolio_start_date"] == "2026-01-01"
-    assert out["benchmark"]["benchmark_start_date"] == "2026-01-02"
+    assert out["benchmark"]["portfolio_start_date"] == "2026-03-01"
+    assert out["benchmark"]["benchmark_start_date"] == "2026-03-03"
     assert out["benchmark"]["benchmark_end_date"] == "2026-03-27"
-    assert out["benchmark"]["agent_return_metric"] == "cumulative_pnl_ratio"
-    assert out["benchmark"]["return"] == pytest.approx(0.20, abs=1e-6)
-    assert out["benchmark"]["alpha_vs_benchmark"] == pytest.approx(0.10, abs=1e-6)
-    assert "2026-01-01 -> 2026-01-02" in out["benchmark"]["note"]
+    assert out["benchmark"]["agent_return_metric"] == "current_sleeve_pnl_ratio"
+    assert out["benchmark"]["comparison_scope"] == "current_sleeve"
+    assert out["benchmark"]["return"] == pytest.approx(0.0, abs=1e-6)
+    assert out["benchmark"]["alpha_vs_benchmark"] == pytest.approx(0.05, abs=1e-6)
+    assert "2026-03-01 -> 2026-03-03" in out["benchmark"]["note"]
 
 
 def test_portfolio_diagnosis_logs_warning_when_mdd_calculation_fails(caplog) -> None:
