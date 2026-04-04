@@ -82,10 +82,18 @@ GILD는 현재 활성 thesis 보유 중 (헬스케어 방어 포지션)
 ### 사전 요구사항
 
 - Python 3.12+
-- BigQuery + Firestore가 활성화된 GCP 프로젝트
-- LLM API 키 최소 1개 (OpenAI, Google AI, 또는 Anthropic)
+- GCP 프로젝트 ([BigQuery](https://console.cloud.google.com/bigquery) + [Firestore](https://console.cloud.google.com/firestore) API 활성화)
+- LLM API 키 최소 1개
 
-### 1. 클론 & 설치
+### 1. GCP 인증
+
+```bash
+gcloud auth login
+gcloud auth application-default login
+gcloud config set project YOUR_PROJECT_ID
+```
+
+### 2. 설치
 
 ```bash
 git clone https://github.com/your-username/LLm_arena.git
@@ -93,48 +101,45 @@ cd LLm_arena
 pip install -e .[dev]
 ```
 
-> **선택사항** — 예측 모델 설치 (PyTorch, NeuralForecast, Chronos, TimesFM):
-> ```bash
-> pip install -e .[dev,forecasting]
-> ```
+> 예측 모델도 쓰려면: `pip install -e .[dev,forecasting]`
 
-### 2. 설정
+### 3. 환경 설정
 
 ```bash
 cp .env.example .env
 ```
 
-`.env`에 인증 정보를 입력하세요:
+`.env`에서 아래 항목만 채우면 바로 실행 가능합니다:
 
 ```env
-# GCP (필수)
-GOOGLE_CLOUD_PROJECT=your-gcp-project
-BQ_DATASET=llm_arena
+# ── 필수 ──────────────────────────────────────
+GOOGLE_CLOUD_PROJECT=your-gcp-project   # GCP 프로젝트 ID
 
-# LLM 키 — 최소 1개
-OPENAI_API_KEY=sk-...
-GEMINI_API_KEY=AI...
-ANTHROPIC_API_KEY=sk-ant-...
+# 사용할 에이전트의 키만 입력 (최소 1개)
+OPENAI_API_KEY=sk-...                   # → GPT 에이전트
+GEMINI_API_KEY=AI...                    # → Gemini 에이전트
+ANTHROPIC_API_KEY=sk-ant-...            # → Claude 에이전트
 
-# 실거래 — 선택사항, 페이퍼 트레이딩은 이 키 없이도 동작
-KIS_API_KEY=...
-KIS_API_SECRET=...
-KIS_ACCOUNT_NO=...
+# ── 선택 ──────────────────────────────────────
+# 키를 넣은 에이전트만 자동 활성화됩니다.
+# 예: Gemini 키만 있으면 → ARENA_AGENT_IDS=gemini 로 설정
+ARENA_AGENT_IDS=gemini,gpt,claude       # 기본값: 3개 전부
+
+# KIS 증권 — 없으면 페이퍼 트레이딩으로 동작
+# KIS_API_KEY=...
+# KIS_API_SECRET=...
+# KIS_ACCOUNT_NO=...
 ```
 
-### 3. 초기화 & 실행
+### 4. 실행
 
 ```bash
-# 데이터베이스 테이블 생성
-llm-arena init-bq
-
-# 트레이딩 사이클 실행 (기본: 페이퍼 트레이딩)
-llm-arena run-pipeline --market us      # NASDAQ + NYSE
-llm-arena run-pipeline --market kospi   # KOSPI + KOSDAQ
-
-# 관리자 UI 실행
-llm-arena serve-ui                      # → http://localhost:8080
+llm-arena init-bq                       # BigQuery 테이블 생성 (최초 1회)
+llm-arena run-pipeline --market us      # 미국 시장 사이클 실행
+llm-arena serve-ui                      # 관리자 UI → http://localhost:8080
 ```
+
+> `run-pipeline`은 해당 시장 개장 시간에만 동작합니다. UI는 사이클 없이도 바로 열 수 있습니다.
 
 ### 4. 배포
 
@@ -249,32 +254,6 @@ scripts/           # 배포 스크립트
 
 ---
 
-## 동작 방식
-
-```mermaid
-flowchart TD
-    START(["⏰ 스케줄러 트리거<br>US 15:00 ET · KR 14:30 KST · 월–금"])
-    START --> HOL{"🗓️ 휴장일?"}
-    HOL -->|"예"| SKIP(["건너뜀"])
-    HOL -->|"아니오"| H["1 · 테넌트 런타임 준비<br><i>시크릿 + 설정</i>"]
-    H --> S["2 · 시장 데이터 + 브로커 동기화<br><i>시세 · 계좌 · 체결 · 잔고 · 배당</i>"]
-    S --> R["3 · 재조정 + 자동 복구"]
-    R --> F["4 · 예측 생성<br><i>뉴럴 + 파운데이션 모델</i>"]
-    F --> RS["5 · 리서치 에이전트<br><i>보유 종목 분석 + 등락 종목</i>"]
-    RS --> DRAFT["6 · 초안 라운드<br><i>3 에이전트 병렬 · 분석만</i>"]
-    DRAFT --> EXEC["7 · 실행 라운드<br><i>3 에이전트 병렬 · 실제 매매</i><br>OrderIntent → RiskEngine → Broker → KIS API"]
-    EXEC --> NAV["8 · 공식 NAV 기록 + 메모리 압축"]
-
-    classDef trigger fill:#dbeafe,stroke:#3b82f6,stroke-width:2px,color:#1e40af
-    classDef decision fill:#fef3c7,stroke:#d97706,stroke-width:2px,color:#92400e
-    classDef step fill:#f0fdf4,stroke:#22c55e,stroke-width:1.5px,color:#14532d
-    classDef skip fill:#fee2e2,stroke:#ef4444,stroke-width:1.5px,color:#991b1b
-
-    class START trigger
-    class HOL decision
-    class H,S,R,F,RS,DRAFT,EXEC,NAV step
-    class SKIP skip
-```
 ## 도구
 
 에이전트는 각 추론 단계에서 호출할 도구를 자율적으로 선택합니다.
@@ -320,9 +299,41 @@ flowchart TD
 
 ---
 
+## 슬리브 시스템
+
+하나의 증권 계좌 위에서 에이전트마다 독립적인 가상 포트폴리오를 운용합니다.
+![alt text](image-1.png)
+
+```mermaid
+graph TB
+    ACCOUNT["🏦 KIS 증권 계좌<br><i>실제 보유: AAPL 45주 · NVDA 30주 · 005930 50주</i>"]
+
+    subgraph SLEEVES[" 가상 슬리브 "]
+        direction LR
+        GPT["🟢 <b>GPT</b><br>₩500,000 배정<br>AAPL 20주 · NVDA 15주<br><i>NAV ₩612,400</i>"]
+        GEM["🔵 <b>Gemini</b><br>₩500,000 배정<br>AAPL 25주 · 005930 50주<br><i>NAV ₩543,800</i>"]
+        CLD["🟣 <b>Claude</b><br>₩500,000 배정<br>NVDA 15주<br><i>NAV ₩478,200</i>"]
+    end
+
+    GPT & GEM & CLD -->|"합산"| ACCOUNT
+
+    classDef account fill:#dbeafe,stroke:#3b82f6,stroke-width:2.5px,color:#1e40af
+    classDef sleeve fill:#ede9fe,stroke:#8b5cf6,stroke-width:1.5px,color:#4c1d95
+
+    class ACCOUNT account
+    class GPT,GEM,CLD sleeve
+```
+
+- **독립 회계** — 에이전트별 현금, 포지션, 실현/미실현 손익을 개별 추적
+- **자본 배분** — 관리자 UI에서 에이전트별 목표 자본을 설정하면 INJECTION/WITHDRAWAL 이벤트로 조정
+- **NAV 산출** — 시드 자본 → 체결 → 이체 → 배당 → 현금 조정을 시간순으로 리플레이해서 계산
+- **리스크 격리** — 한 에이전트의 손실이 다른 에이전트의 자본에 영향을 주지 않음
+
+---
+
 ## 메모리 시스템
 
-매 사이클의 경험이 인과 그래프로 연결됩니다. 리서치 → 보드 포스트 → 주문 → 체결 → 기억이 노드와 엣지로 이어지고, 시간이 지나면 중요하�� 않은 기억은 망각 곡선을 따라 자연스럽게 사라집니다.
+매 사이클의 경험이 인과 그래프로 연결됩니다. 리서치 → 보드 포스트 → 주문 → 체결 → 기억이 노드와 엣지로 이어지고, 시간이 지나면 중요하지 않은 기억은 망각 곡선을 따라 자연스럽게 사라집니다.
 
 ```mermaid
 graph LR
@@ -371,49 +382,19 @@ graph LR
 
 ---
 
-## CLI 레퍼런스
-
-| 명령어 | 설명 |
-|--------|------|
-| `init-bq` | BigQuery 테이블 생성 |
-| `run-pipeline --market us\|kospi` | 전체 파이프라인: 동기화 → 예측 → 매매 |
-| `run-shared-prep --market us` | 공유 동기화 + 예측 후 에이전트 디스패치 |
-| `run-agent-cycle --market us` | 에이전트 트레이딩 사이클만 실행 |
-| `serve-ui` | 관리자 UI 실행 (포트 8080) |
-| `recover-sleeves` | 체크포인트 재구성 + 재조정 |
-| `promote-tenant-live --tenant <id>` | 테넌트를 실거래로 승격 |
-| `set-tenant-simulated --tenant <id>` | 테넌트를 시뮬레이션 모드로 초기화 |
-
-`--live`로 실거래 모드, `--all-tenants`로 멀티 테넌트 일괄 실행.
-
-<details>
-<summary>동기화 및 유틸리티 명령어</summary>
-
-| 명령어 | 설명 |
-|--------|------|
-| `sync-market` | 시장 피처 동기화 |
-| `sync-market-quotes` | 최신 시세 동기화 |
-| `sync-account` | 브로커 계좌 스냅샷 동기화 |
-| `sync-broker-trades` | 브로커 체결 내역 동기화 |
-| `sync-broker-cash` | 브로커 현금 이벤트 동기화 |
-| `sync-dividends` | 배당 기록 동기화 |
-| `build-forecasts` | 수익률 예측 생성 |
-
-</details>
-
----
-
 ## 기술 스택
 
-| 레이어 | 기술 |
-|--------|------|
-| 에이전트 프레임워크 | [Google ADK](https://github.com/google/adk-python) (ReAct) |
-| LLM 제공사 | OpenAI, Google AI / Vertex AI, Anthropic |
-| 데이터베이스 | BigQuery (이벤트 스토어) + Firestore (벡터 검색) |
-| 증권사 | [KIS Open Trading API](https://apiportal.koreainvestment.com/) |
-| 예측 | NeuralForecast, Chronos, TimesFM, Lag-Llama |
-| UI | FastAPI + Jinja2 + HTMX |
-| 인프라 | GCP Cloud Run Jobs + Cloud Run Service |
+| 분류 | 기술 |
+|:---|:---|
+| **에이전트** | [Google ADK](https://github.com/google/adk-python) · ReAct · LiteLLM |
+| **LLM** | OpenAI (GPT) · Google Gemini · Anthropic (Claude) |
+| **임베딩** | Vertex AI `text-embedding-004` · Google Search Grounding |
+| **데이터** | BigQuery · Firestore (벡터 검색) · Secret Manager |
+| **증권** | [KIS Open Trading API](https://apiportal.koreainvestment.com/) — 미국 + 한국 듀얼 마켓 |
+| **외부 데이터** | [FRED](https://fred.stlouisfed.org/) · [ECOS](https://ecos.bok.or.kr/) · [SEC EDGAR](https://www.sec.gov/edgar) · Reddit · CBOE VIX |
+| **예측** | [Chronos](https://github.com/amazon-science/chronos-forecasting) · [TimesFM](https://github.com/google-research/timesfm) · [Lag-Llama](https://github.com/time-series-foundation-models/lag-llama) · [NeuralForecast](https://github.com/Nixtla/neuralforecast) · LightGBM |
+| **프론트엔드** | FastAPI · Jinja2 · HTMX · Tailwind CSS · Chart.js · ECharts · Three.js |
+| **인프라** | GCP Cloud Run · Cloud Scheduler · Cloud Build · Google OAuth 2.0 |
 
 ---
 
