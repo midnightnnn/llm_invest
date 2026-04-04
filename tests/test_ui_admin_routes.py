@@ -1887,7 +1887,7 @@ def test_auth_pending_page_redirects_after_manual_approval(monkeypatch) -> None:
         user_email="viewer@example.com",
         tenant_id="main",
         role="viewer",
-        created_by="midnightnnn@gmail.com",
+        created_by="admin@example.com",
     )
 
     second = client.get("/auth/pending")
@@ -1903,7 +1903,7 @@ def test_settings_page_redirects_viewer_only_user_to_forbidden(monkeypatch) -> N
         user_email="viewer@example.com",
         tenant_id="main",
         role="viewer",
-        created_by="midnightnnn@gmail.com",
+        created_by="admin@example.com",
     )
     app = _build_app(repo=repo, settings=load_settings())
     client = DirectRouteClient(app)

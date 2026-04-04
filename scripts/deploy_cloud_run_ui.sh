@@ -152,9 +152,9 @@ if [[ "${SKIP_BUILD,,}" == "true" ]]; then
 else
   echo "[4/5] Build container image (UI)"
   gcloud builds submit \
-    --config cloudbuild.ui.yaml \
-    --substitutions _IMAGE="${IMAGE}" \
+    --tag "${IMAGE}" \
     --project "${PROJECT}" \
+    --timeout 600s \
     .
   fi
 
