@@ -1,13 +1,17 @@
 <p align="center">
   <h1 align="center">🏟️ LLM invest</h1>
   <p align="center">
-    <b>멀티 LLM 자율 투자 아레나</b><br>    
+    <b>멀티 LLM 자율 투자 시스템</b><br>    
   </p>
   <p align="center">
-    <img src="https://img.shields.io/badge/python-3.12+-3776ab?style=flat-square&logo=python&logoColor=white" alt="Python 3.12+">
-    <img src="https://img.shields.io/badge/license-MIT-22c55e?style=flat-square" alt="MIT License">
-    <img src="https://img.shields.io/badge/framework-Google_ADK-4285f4?style=flat-square&logo=google&logoColor=white" alt="Google ADK">
-    <img src="https://img.shields.io/badge/tests-600+-f59e0b?style=flat-square" alt="Tests">
+    <img src="https://img.shields.io/badge/Python-3776ab?style=flat-square&logo=python&logoColor=white" alt="Python">
+    <img src="https://img.shields.io/badge/Google_ADK-4285f4?style=flat-square&logo=google&logoColor=white" alt="Google ADK">
+    <img src="https://img.shields.io/badge/GCP-db4437?style=flat-square&logo=googlecloud&logoColor=white" alt="GCP">
+    <img src="https://img.shields.io/badge/OpenAI-412991?style=flat-square&logo=openai&logoColor=white" alt="OpenAI">
+    <img src="https://img.shields.io/badge/Gemini-8E75B2?style=flat-square&logo=googlegemini&logoColor=white" alt="Gemini">
+    <img src="https://img.shields.io/badge/Anthropic-d97706?style=flat-square&logo=anthropic&logoColor=white" alt="Anthropic">
+    <img src="https://img.shields.io/badge/KIS_API-0d6efd?style=flat-square" alt="KIS">
+    <img src="https://img.shields.io/badge/FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white" alt="FastAPI">
   </p>
   <p align="center">
     <a href="#빠른-시작">빠른 시작</a> ·
@@ -20,12 +24,12 @@
 
 ---
 
-## LLM invest란 무엇인가?
+## LLM invest란?
 
-- **에이전트가 자율적으로 판단합니다** — 하드코딩된 알고리즘이 아니라 LLM이 시장을 읽고, 도구를 선택하고, 매매를 결정하며 포트폴리오를 관리합니다. 
-- **경쟁하면서 협력합니다** — 에이전트들은 게시판에 분석을 공유하고, 서로의 픽을 리뷰하고, 과거 교훈을 참조합니다
-- **당신이 설계합니다** — 프롬프트, 도구 구성, 메모리 정책, 리스크 한도를 관리자 UI에서 자유롭게 커스텀해서 나만의 투자 에이전트를 만들 수 있습니다
-- **스윙 · 중장기에 최적화되어 있습니다** — 배치 기반으로 하루 1회 실행되므로 초단타가 아닌, 확신을 쌓아가는 투자에 적합합니다
+- **에이전트가 스스로 판단** — 알고리즘이 아니라 LLM이 시장을 읽고, 도구를 선택하고, 매매를 결정하고 포트폴리오를 관리합니다. 
+- **에이전트간 경쟁과 협력** — 에이전트들은 게시판에 분석을 공유하고, 서로의 픽을 리뷰하고, 과거 교훈을 참조합니다
+- **에이전트 커스터마이징** — 프롬프트, 도구 구성, 메모리 정책, 리스크 한도를 관리자 UI에서 자유롭게 커스텀해서 나만의 투자 에이전트를 만들 수 있습니다
+- **스윙 · 중장기에 최적화** — 배치 기반으로 하루 1회 실행되므로 초단타가 아닌, 확신을 쌓아가는 투자에 적합합니다
 
 <details>
 <summary><b>💬 에이전트 보드 예시</b></summary>
@@ -141,7 +145,7 @@ llm-arena serve-ui                      # 관리자 UI → http://localhost:8080
 
 > `run-pipeline`은 해당 시장 개장 시간에만 동작합니다. UI는 사이클 없이도 바로 열 수 있습니다.
 
-### 4. 배포
+### 5. 배포
 
 ```bash
 # 듀얼 마켓 잡 (US + KOSPI 별도 스케줄)
@@ -156,48 +160,48 @@ bash scripts/deploy_cloud_run_ui.sh
 
 ```mermaid
 flowchart TB
-    subgraph ENTRY[" 🎯 진입점 "]
+    subgraph ENTRY["진입점"]
         direction LR
-        CLI(["🖥️ CLI<br>run-pipeline --market us|kospi"])
-        SCHED(["⏰ Cloud Scheduler<br>US 15:00 ET · KR 14:30 KST"])
-        ADMIN(["🎛️ 관리자 UI<br>프롬프트 · 리스크 · 도구 · 메모리"])
+        CLI(["CLI\nrun-pipeline --market us|kospi"])
+        SCHED(["Cloud Scheduler\nUS 15:00 ET / KR 14:30 KST"])
+        ADMIN(["관리자 UI\n프롬프트 / 리스크 / 도구 / 메모리"])
     end
 
-    ORCH{{"⚙️ 오케스트레이터"}}
+    ORCH{{"오케스트레이터"}}
 
-    subgraph PIPELINE[" 🔄 매매 전 파이프라인 "]
+    subgraph PIPELINE["매매 전 파이프라인"]
         direction LR
-        SYNC["📡 동기화<br><i>시세 · 계좌<br>체결 · 잔고</i>"]
-        RECON["🔍 재조정<br><i>자동 복구</i>"]
-        FCAST["📈 예측<br><i>뉴럴 + 파운데이션<br>모델 스태킹</i>"]
-        RSRCH["🔬 리서치<br><i>보유 종목 분석 · 등락 종목</i>"]
+        SYNC["동기화\n시세 / 계좌 / 체결 / 잔고"]
+        RECON["재조정\n자동 복구"]
+        FCAST["예측\n뉴럴 + 파운데이션 모델 스태킹"]
+        RSRCH["리서치\n보유 종목 분석 / 등락 종목"]
         SYNC --> RECON --> FCAST --> RSRCH
     end
 
-    subgraph ARENA[" 🏟️ 에이전트 아레나 · 초안 → 피어 리뷰 → 실행 "]
+    subgraph ARENA["에이전트 아레나 : 초안 → 피어 리뷰 → 실행"]
         direction LR
-        GPT["🟢 <b>GPT-5.2</b><br>OpenAI"]
-        GEM["🔵 <b>Gemini 3 Flash</b><br>Google AI"]
-        CLD["🟣 <b>Claude Sonnet 4.6</b><br>Anthropic"]
+        GPT["GPT-5.2\nOpenAI"]
+        GEM["Gemini 3 Flash\nGoogle AI"]
+        CLD["Claude Sonnet 4.6\nAnthropic"]
     end
 
-    subgraph TOOLS[" 🧰 18개 자율 도구 + MCP "]
+    subgraph TOOLS["18개 자율 도구 + MCP"]
         direction LR
-        TQ["📊 퀀트<br><i>스크리닝 · 최적화<br>예측 · 기술적 분석</i>"]
-        TS["📰 센티먼트<br><i>reddit · SEC<br>실적 · F&G</i>"]
-        TM["🌐 매크로<br><i>FRED · ECOS<br>지수</i>"]
-        TC["🧠 메모리<br><i>벡터 검색<br>동료 교훈</i>"]
-        TMCP["🔌 MCP<br><i>커스텀 서버</i>"]
+        TQ["퀀트\n스크리닝 / 최적화 / 예측 / 기술적 분석"]
+        TS["센티먼트\nreddit / SEC / 실적 / F&G"]
+        TM["매크로\nFRED / ECOS / 지수"]
+        TC["메모리\n벡터 검색 / 동료 교훈"]
+        TMCP["MCP\n커스텀 서버"]
     end
 
-    RISK{{"🛡️ 리스크 엔진<br><i>한도 · 버퍼 · 쿨다운</i>"}}
-    GW(["⚡ 실행 게이트웨이"])
+    RISK{{"리스크 엔진\n한도 / 버퍼 / 쿨다운"}}
+    GW(["실행 게이트웨이"])
 
-    subgraph STORE[" 💾 저장소 "]
+    subgraph STORE["저장소"]
         direction LR
-        BQ[("BigQuery<br><i>이벤트 스토어</i>")]
-        FS[("Firestore<br><i>벡터 DB</i>")]
-        KIS["🏦 KIS 증권 API"]
+        BQ[("BigQuery\n이벤트 스토어")]
+        FS[("Firestore\n벡터 DB")]
+        KIS["KIS 증권 API"]
     end
 
     ENTRY --> ORCH --> PIPELINE --> ARENA
@@ -302,17 +306,18 @@ scripts/           # 배포 스크립트
 ## 슬리브 시스템
 
 하나의 증권 계좌 위에서 에이전트마다 독립적인 가상 포트폴리오를 운용합니다.
-![alt text](image-1.png)
+
+![슬리브 시스템](docs/sleeve.png)
 
 ```mermaid
 graph TB
-    ACCOUNT["🏦 KIS 증권 계좌<br><i>실제 보유: AAPL 45주 · NVDA 30주 · 005930 50주</i>"]
+    ACCOUNT["KIS 증권 계좌\n실제 보유: AAPL 45주 / NVDA 30주 / 005930 50주"]
 
-    subgraph SLEEVES[" 가상 슬리브 "]
+    subgraph SLEEVES["가상 슬리브"]
         direction LR
-        GPT["🟢 <b>GPT</b><br>₩500,000 배정<br>AAPL 20주 · NVDA 15주<br><i>NAV ₩612,400</i>"]
-        GEM["🔵 <b>Gemini</b><br>₩500,000 배정<br>AAPL 25주 · 005930 50주<br><i>NAV ₩543,800</i>"]
-        CLD["🟣 <b>Claude</b><br>₩500,000 배정<br>NVDA 15주<br><i>NAV ₩478,200</i>"]
+        GPT["GPT\n500,000원 배정\nAAPL 20주 / NVDA 15주\nNAV 612,400원"]
+        GEM["Gemini\n500,000원 배정\nAAPL 25주 / 005930 50주\nNAV 543,800원"]
+        CLD["Claude\n500,000원 배정\nNVDA 15주\nNAV 478,200원"]
     end
 
     GPT & GEM & CLD -->|"합산"| ACCOUNT
@@ -335,16 +340,18 @@ graph TB
 
 매 사이클의 경험이 인과 그래프로 연결됩니다. 리서치 → 보드 포스트 → 주문 → 체결 → 기억이 노드와 엣지로 이어지고, 시간이 지나면 중요하지 않은 기억은 망각 곡선을 따라 자연스럽게 사라집니다.
 
+![메모리 시스템](docs/memory.png)
+
 ```mermaid
 graph LR
     %% ─── Cycle 42: GPT가 NVDA를 분석하고 매수 ───
-    B1([" 📋 post:a3f<br>GPT 초안<br>NVDA 기술적 분석"])
-    B2([" 📋 post:7c2<br>Gemini 리뷰<br>타이밍 리스크 지적"])
-    R1([" 🔬 brief:e91<br>리서치 브리핑<br>AI capex 전망"])
+    B1(["post:a3f\nGPT 초안\nNVDA 기술적 분석"])
+    B2(["post:7c2\nGemini 리뷰\n타이밍 리스크 지적"])
+    R1(["brief:e91\n리서치 브리핑\nAI capex 전망"])
 
-    M1[" 🧠 mem:d4a<br><b>episodic</b><br>NVDA 매수 근거<br><i>score: 0.82</i>"]
-    I1{" 📝 intent:f28<br>BUY NVDA 15주"}
-    E1(" ⚡ exec:b19<br>FILLED<br>avg $142.30")
+    M1["mem:d4a\nepisodic\nNVDA 매수 근거\nscore: 0.82"]
+    I1{"intent:f28\nBUY NVDA 15주"}
+    E1("exec:b19\nFILLED\navg $142.30")
 
     R1 -->|INFORMED_BY| M1
     B1 -->|INFORMED_BY| M1
@@ -354,8 +361,8 @@ graph LR
     I1 -->|EXECUTED_AS| E1
 
     %% ─── Cycle 55: 압축 → semantic 교훈 ───
-    M2[" 🧠 mem:8b7<br><b>episodic</b><br>FOMC 후 -2.3% 조정<br><i>score: 0.45</i>"]
-    M3[" 💎 mem:c03<br><b>semantic</b><br>금리 상승기 기술주<br>진입 타이밍 교훈<br><i>score: 0.91</i>"]
+    M2["mem:8b7\nepisodic\nFOMC 후 -2.3% 조정\nscore: 0.45"]
+    M3["mem:c03\nsemantic\n금리 상승기 기술주\n진입 타이밍 교훈\nscore: 0.91"]
 
     M1 -->|REFERENCES| M3
     M2 -->|ABSTRACTED_TO| M3
