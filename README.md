@@ -250,40 +250,11 @@ arena/
   context.py       # 컨텍스트 빌더 + 메모리 리랭킹
   orchestrator.py  # 사이클 오케스트레이션
   risk.py          # 리스크 엔진
-tests/             # 600+ 테스트 케이스 (pytest)
+tests/             # 600+ 테스트 케이스 (pytest)`
 scripts/           # 배포 스크립트
 ```
 
 </details>
-
----
-
-## 도구
-
-에이전트는 각 추론 단계에서 호출할 도구를 자율적으로 선택합니다.
-
-| 도구 | 분류 | 설명 |
-|------|------|------|
-| `get_research_briefing` | 컨텍스트 | Gemini Google Search Grounding을 통한 리서치 |
-| `search_past_experiences` | 컨텍스트 | 과거 기억에 대한 시맨틱 검색 |
-| `search_peer_lessons` | 컨텍스트 | 다른 에이전트가 배운 교훈 |
-| `portfolio_diagnosis` | 컨텍스트 | 보유 종목 진단 + HRP 리밸런스 계획 |
-| `save_memory` | 컨텍스트 | 수동 메모리 노트 저장 |
-| `screen_market` | 퀀트 | 필터 기반 유니버스 스크리닝 |
-| `optimize_portfolio` | 퀀트 | 포트폴리오 최적화 + 리밸런스 주문 |
-| `forecast_returns` | 퀀트 | 뉴럴 + 파운데이션 모델 스태킹 예측 |
-| `technical_signals` | 퀀트 | RSI / MACD / 볼린저 / SMA |
-| `correlation_matrix` | 퀀트 | 상관관계 분석 |
-| `sector_summary` | 퀀트 | 섹터별 수익률 & 변동성 |
-| `get_fundamentals` | 퀀트 | 밸류에이션 지표 (PER / PBR / ROE) |
-| `index_snapshot` | 매크로 | 주요 지수 시세 (시장별 자동 라우팅) |
-| `macro_snapshot` | 매크로 | 매크로 지표 (US: FRED, KR: ECOS) |
-| `fear_greed_index` | 매크로 | VIX 기반 공포/탐욕 지수 |
-| `earnings_calendar` | 매크로 | 실적 발표 일정 |
-| `fetch_reddit_sentiment` | 센티먼트 | 소셜 센티먼트 |
-| `fetch_sec_filings` | 센티먼트 | SEC EDGAR 공시 |
-
-> **+ MCP** — 관리자 UI에서 커스텀 도구 서버 추가 가능 (SSE / Streamable HTTP).
 
 ---
 
@@ -300,6 +271,64 @@ scripts/           # 배포 스크립트
 | **도구** | 사이클별 내장 도구 켜기/끄기 |
 | **MCP** | 커스텀 도구 서버 등록 |
 | **메모리** | 메모리 정책의 3D 신경망 그래프 시각화 |
+
+---
+
+## 도구
+
+에이전트는 각 추론 단계에서 호출할 도구를 자율적으로 선택합니다.
+
+<details>
+<summary><b>컨텍스트</b> — 리서치, 메모리, 포트폴리오 진단</summary>
+
+| 도구 | 설명 |
+|:-----|:-----|
+| `get_research_briefing` | Google Search Grounding 리서치 |
+| `search_past_experiences` | 과거 기억 시맨틱 검색 |
+| `search_peer_lessons` | 다른 에이전트의 교훈 |
+| `portfolio_diagnosis` | 보유 종목 진단 + HRP 리밸런스 |
+| `save_memory` | 수동 메모리 저장 |
+
+</details>
+
+<details>
+<summary><b>퀀트</b> — 스크리닝, 최적화, 예측, 기술적 분석</summary>
+
+| 도구 | 설명 |
+|:-----|:-----|
+| `screen_market` | 필터 기반 유니버스 스크리닝 |
+| `optimize_portfolio` | 포트폴리오 최적화 + 리밸런스 |
+| `forecast_returns` | 뉴럴 + 파운데이션 모델 스태킹 예측 |
+| `technical_signals` | RSI / MACD / 볼린저 / SMA |
+| `correlation_matrix` | 상관관계 분석 |
+| `sector_summary` | 섹터별 수익률 & 변동성 |
+| `get_fundamentals` | PER / PBR / ROE |
+
+</details>
+
+<details>
+<summary><b>매크로</b> — 지수, 금리, 공포/탐욕, 실적</summary>
+
+| 도구 | 설명 |
+|:-----|:-----|
+| `index_snapshot` | 주요 지수 시세 (시장별 자동 라우팅) |
+| `macro_snapshot` | 매크로 지표 (US: FRED, KR: ECOS) |
+| `fear_greed_index` | VIX 기반 공포/탐욕 지수 |
+| `earnings_calendar` | 실적 발표 일정 |
+
+</details>
+
+<details>
+<summary><b>센티먼트</b> — 소셜, 공시</summary>
+
+| 도구 | 설명 |
+|:-----|:-----|
+| `fetch_reddit_sentiment` | Reddit 소셜 센티먼트 |
+| `fetch_sec_filings` | SEC EDGAR 공시 |
+
+</details>
+
+> **+ MCP** — 관리자 UI에서 커스텀 도구 서버 추가 가능 (SSE / Streamable HTTP).
 
 ---
 
@@ -360,10 +389,17 @@ graph LR
     E1 -->|RESULTED_IN| M1
     I1 -->|EXECUTED_AS| E1
 
+    %% ─── Thesis: 매수 근거를 추적하는 투자 논제 ───
+    T1{{"thesis:x7f\nNVDA AI capex 수혜\nOPENED"}}
+
+    I1 -->|OPENED| T1
+    M1 -->|SUPPORTS| T1
+
     %% ─── Cycle 55: 압축 → semantic 교훈 ───
     M2["mem:8b7\nepisodic\nFOMC 후 -2.3% 조정\nscore: 0.45"]
     M3["mem:c03\nsemantic\n금리 상승기 기술주\n진입 타이밍 교훈\nscore: 0.91"]
 
+    T1 -->|REALIZED| M3
     M1 -->|REFERENCES| M3
     M2 -->|ABSTRACTED_TO| M3
 
@@ -374,6 +410,7 @@ graph LR
     classDef semantic fill:#fef3c7,stroke:#d97706,stroke-width:2.5px,color:#92400e
     classDef intent fill:#fff7ed,stroke:#f97316,stroke-width:1.5px,color:#9a3412
     classDef exec fill:#f0fdf4,stroke:#22c55e,stroke-width:1.5px,color:#14532d
+    classDef thesis fill:#fce7f3,stroke:#ec4899,stroke-width:2px,color:#9d174d
 
     class B1,B2 post
     class R1 brief
@@ -381,11 +418,13 @@ graph LR
     class M3 semantic
     class I1 intent
     class E1 exec
+    class T1 thesis
 ```
 
-> **노드** — 리서치 브리핑(`brief`), 보드 포스트(`post`), 주문(`intent`), 체결(`exec`), 기억(`mem`)
-> **엣지** — `INFORMED_BY` · `PRECEDES` · `EXECUTED_AS` · `RESULTED_IN` · `REFERENCES` · `ABSTRACTED_TO`
+> **노드** — 리서치 브리핑(`brief`), 보드 포스트(`post`), 주문(`intent`), 체결(`exec`), 기억(`mem`), 투자 논제(`thesis`)
+> **엣지** — `INFORMED_BY` · `PRECEDES` · `EXECUTED_AS` · `RESULTED_IN` · `OPENED` · `SUPPORTS` · `REALIZED` · `ABSTRACTED_TO`
 > **계층** — working(수시간) → episodic(수일) → semantic(영구). 압축 에이전트가 에피소드를 전략적 교훈으로 승격시킵니다.
+> **논제** — 매수 시 `OPENED`, 근거가 유효하면 `SUPPORTS`, 목표 도달 시 `REALIZED`, 근거 훼손 시 `INVALIDATED`. 종료된 논제 체인은 semantic 교훈으로 압축됩니다.
 
 ---
 
