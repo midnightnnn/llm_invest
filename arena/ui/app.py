@@ -66,6 +66,7 @@ from arena.ui.routes.settings_admin import (
     AdminSettingsRouteDeps,
     register_admin_settings_routes,
 )
+from arena.ui.routes.showcase import ShowcaseRouteDeps, register_showcase_routes
 from arena.ui.routes.sleeves import SleeveRouteDeps, register_sleeve_routes
 from arena.ui.routes.trades import register_trades_routes
 from arena.ui.routes.viewer import ViewerRouteDeps
@@ -246,6 +247,15 @@ def _build_app(*, repo: BigQueryRepository, settings: Settings) -> FastAPI:
         requested_tenant: str,
         next_path: str,
     ) -> tuple[dict[str, Any] | None, str, str, list[str], RedirectResponse | None]:
+        # Allow unauthenticated GET-only access for showcase tenant
+        requested_lower = str(requested_tenant or "").strip().lower()
+        if auth_enabled and _showcase_tenant and requested_lower == _showcase_tenant:
+            user = _current_user(request)
+            if not user:
+                if request.method.upper() != "GET":
+                    return None, "", "local", [], RedirectResponse(url="/auth/google/login", status_code=302)
+                return None, "showcase@readonly", _showcase_tenant, [], None
+
         user = _require_user(request, next_path) if auth_enabled else _current_user(request)
         if auth_enabled and not user:
             return None, "", "local", [], RedirectResponse(url="/auth/google/login", status_code=302)
@@ -299,12 +309,24 @@ def _build_app(*, repo: BigQueryRepository, settings: Settings) -> FastAPI:
         runtime_settings = active_settings or settings
         return live_market_sources_for_markets(parse_markets(runtime_settings.kis_target_market)) or None
 
+    _showcase_tenant = str(os.getenv("ARENA_SHOWCASE_TENANT", "")).strip().lower()
+
     def _resolve_viewer_context(
         request: Request,
         *,
         requested_tenant: str,
         next_path: str,
     ) -> tuple[str, list[str], dict[str, Any] | None, RedirectResponse | None]:
+        # Allow unauthenticated read-only access for showcase tenant
+        requested_lower = str(requested_tenant or "").strip().lower()
+        if auth_enabled and _showcase_tenant and requested_lower == _showcase_tenant:
+            user = _current_user(request)
+            if not user:
+                scoped = _scoped_agent_ids_for_tenant(_showcase_tenant)
+                if not scoped:
+                    scoped = [str(x).strip().lower() for x in settings.agent_ids if str(x).strip()]
+                return _showcase_tenant, scoped, None, None
+
         user = _require_user(request, next_path) if auth_enabled else _current_user(request)
         if auth_enabled and not user:
             return "local", [], None, RedirectResponse(url="/auth/google/login", status_code=302)
@@ -350,7 +372,7 @@ def _build_app(*, repo: BigQueryRepository, settings: Settings) -> FastAPI:
     def _tailwind_layout(*args, tenant: str = "local", user: dict[str, Any] | None = None, **kwargs) -> str:
         kwargs.update(_header_status_kwargs(tenant))
         kwargs.setdefault("tenant", tenant)
-        if str(tenant).strip().lower() == "midnightnnn" or (user and _is_operator(user)):
+        if (_showcase_tenant and str(tenant).strip().lower() == _showcase_tenant) or (user and _is_operator(user)):
             kwargs.setdefault("extra_nav_items", [("/ops", "Ops", "ops")])
         return _tailwind_layout_raw(*args, **kwargs)
 
@@ -544,6 +566,52 @@ def _build_app(*, repo: BigQueryRepository, settings: Settings) -> FastAPI:
             to_bool_token=_to_bool_token,
             is_live_mode=_is_live_mode,
             live_market_sources=_live_market_sources,
+        ),
+    )
+
+    # ── Showcase (read-only public access) ──
+    register_showcase_routes(
+        app,
+        deps=ShowcaseRouteDeps(
+            repo=repo,
+            executor=_executor,
+            settings=settings,
+            settings_enabled=settings_enabled,
+            kst=_KST,
+            cached_fetch=_cached_fetch,
+            tailwind_layout=_tailwind_layout,
+            html_response=_html_response,
+            json_response=_json_response,
+            get_default_registry=_get_default_registry,
+            settings_for_tenant=_settings_for_tenant,
+            latest_tenant_status_payload=_latest_tenant_status_payload,
+            current_admin_view_model=_current_admin_view_model,
+            scoped_agent_ids_for_tenant=_scoped_agent_ids_for_tenant,
+            is_live_mode=_is_live_mode,
+            fetch_board=viewer_data_helpers.fetch_board,
+            fetch_tool_events_for_post=viewer_data_helpers.fetch_tool_events_for_post,
+            fetch_theses_for_board_post=viewer_data_helpers.fetch_theses_for_board_post,
+            fetch_nav=viewer_data_helpers.fetch_nav,
+            fetch_token_usage_summary=viewer_data_helpers.fetch_token_usage_summary,
+            fetch_trade_count_summary=viewer_data_helpers.fetch_trade_count_summary,
+            fetch_token_usage_daily=viewer_data_helpers.fetch_token_usage_daily,
+            fetch_trade_count_daily=viewer_data_helpers.fetch_trade_count_daily,
+            fetch_trades=viewer_data_helpers.fetch_trades,
+            fetch_trades_for_board_post=viewer_data_helpers.fetch_trades_for_board_post,
+            fetch_sleeve_snapshot_cards=viewer_data_helpers.fetch_sleeve_snapshot_cards,
+            fetch_sleeves=viewer_data_helpers.fetch_sleeves,
+            default_benchmark=viewer_data_helpers.default_benchmark,
+            metric_card=metric_card,
+            fmt_ts=_fmt_ts,
+            md_block=_md_block,
+            safe_float=_safe_float,
+            safe_int=_safe_int,
+            to_date=_to_date,
+            chained_index=chained_index,
+            drawdown=drawdown,
+            total_return=total_return,
+            max_drawdown=max_drawdown,
+            provider_api_key_help_html=_provider_api_key_help_html,
         ),
     )
 

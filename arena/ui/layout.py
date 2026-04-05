@@ -26,15 +26,27 @@ def tailwind_layout(
     status_color: str = "",
     extra_nav_items: list[tuple[str, str, str]] | None = None,
     tenant: str = "",
+    showcase: bool = False,
 ) -> str:
-    nav_items: list[tuple[str, str, str]] = [
-        ("/board", "\uac8c\uc2dc\ud310", "board"),
-        ("/nav", "\uc6b4\uc6a9\uc131\uacfc", "nav"),
-        ("/settings?tab=agents", "\uc5d0\uc774\uc804\ud2b8", "agents"),
-        ("/settings?tab=capital", "\uc790\ubcf8\uad00\ub9ac", "capital"),
-        ("/settings?tab=mcp", "\ub3c4\uad6c\uad00\ub9ac", "tools"),
-        ("/settings?tab=memory", "\uae30\uc5b5\uad00\ub9ac", "memory"),
-    ]
+    if showcase:
+        _t = html.escape(tenant or "")
+        nav_items: list[tuple[str, str, str]] = [
+            (f"/showcase/{_t}/board", "\uac8c\uc2dc\ud310", "board"),
+            (f"/showcase/{_t}/nav", "\uc6b4\uc6a9\uc131\uacfc", "nav"),
+            (f"/showcase/{_t}/settings?tab=agents", "\uc5d0\uc774\uc804\ud2b8", "agents"),
+            (f"/showcase/{_t}/settings?tab=capital", "\uc790\ubcf8\uad00\ub9ac", "capital"),
+            (f"/showcase/{_t}/settings?tab=mcp", "\ub3c4\uad6c\uad00\ub9ac", "tools"),
+            (f"/showcase/{_t}/settings?tab=memory", "\uae30\uc5b5\uad00\ub9ac", "memory"),
+        ]
+    else:
+        nav_items: list[tuple[str, str, str]] = [
+            ("/board", "\uac8c\uc2dc\ud310", "board"),
+            ("/nav", "\uc6b4\uc6a9\uc131\uacfc", "nav"),
+            ("/settings?tab=agents", "\uc5d0\uc774\uc804\ud2b8", "agents"),
+            ("/settings?tab=capital", "\uc790\ubcf8\uad00\ub9ac", "capital"),
+            ("/settings?tab=mcp", "\ub3c4\uad6c\uad00\ub9ac", "tools"),
+            ("/settings?tab=memory", "\uae30\uc5b5\uad00\ub9ac", "memory"),
+        ]
     if extra_nav_items:
         nav_items = nav_items + list(extra_nav_items)
 
@@ -76,6 +88,7 @@ def tailwind_layout(
         max_width_class=safe_max_width,
         nav_links=nav_links,
         auth_enabled=auth_enabled,
+        showcase=showcase,
         status_display=_status_display,
         status_ping_color=_status_ping_color,
         status_dot_color=_status_dot_color,

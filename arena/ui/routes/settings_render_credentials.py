@@ -445,15 +445,32 @@ function isToolEnabled(agentId,toolId){
   var d=AGENTS_DISABLED[agentId]||[];
   return d.indexOf(toolId.toLowerCase())<0;
 }
-function toggleAgent(agentId,toolId){
+function toggleAgent(agentId,toolId,btnEl){
   var d=AGENTS_DISABLED[agentId]||[];
   var tidL=toolId.toLowerCase();
   var idx=d.indexOf(tidL);
   if(idx>=0){d.splice(idx,1);}else{d.push(tidL);}
   AGENTS_DISABLED[agentId]=d;
+  if(btnEl){btnEl.style.opacity="0.5";btnEl.style.pointerEvents="none";}
   fetch('/admin/agents/save-one',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({tenant_id:TENANT,agent:{id:agentId,disabled_tools:d}})
-  }).then(function(r){return r.json();}).then(function(resp){if(resp&&!resp.ok&&resp.message){console.error(resp.message);}});
+  }).then(function(r){return r.json();}).then(function(resp){
+    if(btnEl){btnEl.style.opacity="";btnEl.style.pointerEvents="";}
+    if(resp&&!resp.ok&&resp.message){_toast(resp.message,"error");}
+    else{_toast(agentId.toUpperCase()+" — "+(isToolEnabled(agentId,toolId)?"ON":"OFF"),"success");}
+  }).catch(function(){
+    if(btnEl){btnEl.style.opacity="";btnEl.style.pointerEvents="";}
+    _toast("저장 실패","error");
+  });
+}
+function _toast(msg,level){
+  var t=document.createElement("div");
+  t.style.cssText="position:fixed;right:16px;top:16px;z-index:9999;max-width:300px;padding:10px 14px;border-radius:12px;font-size:12px;font-weight:600;opacity:0;transform:translateY(-6px);transition:opacity .2s,transform .2s;";
+  if(level==="error"){t.style.background="rgba(254,242,242,0.95)";t.style.color="#991b1b";t.style.border="1px solid rgba(239,68,68,0.3)";}
+  else{t.style.background="rgba(236,253,245,0.95)";t.style.color="#065f46";t.style.border="1px solid rgba(16,185,129,0.3)";}
+  t.textContent=msg;document.body.appendChild(t);
+  requestAnimationFrame(function(){t.style.opacity="1";t.style.transform="translateY(0)";});
+  setTimeout(function(){t.style.opacity="0";t.style.transform="translateY(-6px)";setTimeout(function(){t.remove();},200);},2000);
 }
 
 function selectTool(tid){
@@ -490,7 +507,7 @@ function selectTool(tid){
     btn.addEventListener("click",function(){
       var aid=btn.dataset.agentId;
       var toolIdVal=btn.dataset.toolId;
-      toggleAgent(aid,toolIdVal);
+      toggleAgent(aid,toolIdVal,btn);
       var nowOn=isToolEnabled(aid,toolIdVal);
       var track=btn.querySelector(".agent-toggle-track");
       var knob=btn.querySelector(".agent-toggle-knob");

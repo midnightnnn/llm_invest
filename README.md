@@ -14,11 +14,11 @@
     <img src="https://img.shields.io/badge/FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white" alt="FastAPI">
   </p>
   <p align="center">
+    <a href="https://llm-arena-ui-jgtbkjclha-du.a.run.app/"><b>Live Demo</b></a> ·
     <a href="#빠른-시작">빠른 시작</a> ·
-    <a href="#동작-방식">동작 방식</a> ·
     <a href="#도구">도구</a> ·
     <a href="#관리자-ui">관리자 UI</a> ·
-    <a href="#cli-레퍼런스">CLI</a>
+    <a href="#아키텍처">아키텍처</a>
   </p>
 </p>
 
@@ -180,9 +180,9 @@ flowchart TB
 
     subgraph ARENA["에이전트 아레나 : 초안 → 피어 리뷰 → 실행"]
         direction LR
-        GPT["GPT-5.2\nOpenAI"]
-        GEM["Gemini 3 Flash\nGoogle AI"]
-        CLD["Claude Sonnet 4.6\nAnthropic"]
+        GPT["GPT\nOpenAI"]
+        GEM["Gemini\nGoogle"]
+        CLD["Claude\nAnthropic"]
     end
 
     subgraph TOOLS["18개 자율 도구 + MCP"]

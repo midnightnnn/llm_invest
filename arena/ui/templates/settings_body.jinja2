@@ -83,3 +83,21 @@ setTimeout(function(){
 </section>
 {{ tab_script|safe }}
 {{ save_progress_script|safe }}
+{% if showcase %}
+<style>
+  input:not([type="hidden"]),
+  select,
+  textarea { pointer-events: none !important; opacity: 0.65 !important; }
+  button[type="submit"] { pointer-events: none !important; opacity: 0.45 !important; }
+  .toggle-switch input { pointer-events: none !important; opacity: 0.45 !important; }
+  .agent-tool-toggle { pointer-events: none !important; opacity: 0.5 !important; }
+  [data-mcp-add] { pointer-events: none !important; opacity: 0.45 !important; }
+</style>
+<script>
+document.addEventListener('DOMContentLoaded',function(){
+  document.querySelectorAll('form[method="post"]').forEach(function(f){
+    f.addEventListener('submit',function(e){e.preventDefault();e.stopImmediatePropagation();},true);
+  });
+});
+</script>
+{% endif %}
