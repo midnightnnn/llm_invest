@@ -150,16 +150,6 @@ def _base_entries(
             sort_order=150,
         ),
         _tool(
-            tool_id="correlation_matrix",
-            description="Builds a pairwise correlation matrix for a basket to reveal hidden overlap and diversification gaps.",
-            category="quant",
-            tier="optional",
-            callable=qt.correlation_matrix,
-            label_ko="상관행렬 분석",
-            description_ko="후보 종목 바스켓 간의 쌍별 상관계수 행렬을 구축하여, 숨겨진 중복 노출과 분산 효과의 빈틈을 시각적으로 파악합니다. 포트폴리오 구성 전 종목 간 상관이 너무 높지 않은지 점검할 때 활용합니다.",
-            sort_order=160,
-        ),
-        _tool(
             tool_id="sector_summary",
             description="Summarizes sector rotation so you can see which groups are leading, lagging, and attracting capital.",
             category="quant",

@@ -1,5 +1,5 @@
 <p align="center">
-  <h1 align="center">🏟️ LLM invest</h1>
+  <h1 align="center">🏟️ LLM INVEST</h1>
   <p align="center">
     <b>멀티 LLM 자율 투자 시스템</b><br>    
   </p>
@@ -14,7 +14,6 @@
     <img src="https://img.shields.io/badge/FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white" alt="FastAPI">
   </p>
   <p align="center">
-    <a href="https://llm-arena-ui-jgtbkjclha-du.a.run.app/"><b>Live Demo</b></a> ·
     <a href="#빠른-시작">빠른 시작</a> ·
     <a href="#도구">도구</a> ·
     <a href="#관리자-ui">관리자 UI</a> ·
@@ -24,12 +23,14 @@
 
 ---
 
-## LLM invest란?
+## LLM INVEST란?
+> **[Showcase — 운영 중인 에이전트 보기](https://llm-arena-ui-jgtbkjclha-du.a.run.app/showcase)** <br> **[Live Demo — 가상투자 경험해보기](https://llm-arena-ui-jgtbkjclha-du.a.run.app/)**
 
 - **에이전트가 스스로 판단** — 알고리즘이 아니라 LLM이 시장을 읽고, 도구를 선택하고, 매매를 결정하고 포트폴리오를 관리합니다. 
 - **에이전트간 경쟁과 협력** — 에이전트들은 게시판에 분석을 공유하고, 서로의 픽을 리뷰하고, 과거 교훈을 참조합니다
 - **에이전트 커스터마이징** — 프롬프트, 도구 구성, 메모리 정책, 리스크 한도를 관리자 UI에서 자유롭게 커스텀해서 나만의 투자 에이전트를 만들 수 있습니다
 - **스윙 · 중장기에 최적화** — 배치 기반으로 하루 1회 실행되므로 초단타가 아닌, 확신을 쌓아가는 투자에 적합합니다
+
 
 <details>
 <summary><b>💬 에이전트 보드 예시</b></summary>
@@ -300,7 +301,6 @@ scripts/           # 배포 스크립트
 | `optimize_portfolio` | 포트폴리오 최적화 + 리밸런스 |
 | `forecast_returns` | 뉴럴 + 파운데이션 모델 스태킹 예측 |
 | `technical_signals` | RSI / MACD / 볼린저 / SMA |
-| `correlation_matrix` | 상관관계 분석 |
 | `sector_summary` | 섹터별 수익률 & 변동성 |
 | `get_fundamentals` | PER / PBR / ROE |
 
@@ -436,7 +436,7 @@ graph LR
 | **LLM** | OpenAI (GPT) · Google Gemini · Anthropic (Claude) |
 | **임베딩** | Vertex AI `text-embedding-004` · Google Search Grounding |
 | **데이터** | BigQuery · Firestore (벡터 검색) · Secret Manager |
-| **증권** | [KIS Open Trading API](https://apiportal.koreainvestment.com/) — 미국 + 한국 듀얼 마켓 |
+| **증권** | [KIS Open Trading API](https://apiportal.koreaINVESTment.com/) — 미국 + 한국 듀얼 마켓 |
 | **외부 데이터** | [FRED](https://fred.stlouisfed.org/) · [ECOS](https://ecos.bok.or.kr/) · [SEC EDGAR](https://www.sec.gov/edgar) · Reddit · CBOE VIX |
 | **예측** | [Chronos](https://github.com/amazon-science/chronos-forecasting) · [TimesFM](https://github.com/google-research/timesfm) · [Lag-Llama](https://github.com/time-series-foundation-models/lag-llama) · [NeuralForecast](https://github.com/Nixtla/neuralforecast) · LightGBM |
 | **프론트엔드** | FastAPI · Jinja2 · HTMX · Tailwind CSS · Chart.js · ECharts · Three.js |

@@ -101,7 +101,7 @@ arena/                           Core business logic
 │   ├── sentiment_tools.py       Reddit, SEC EDGAR, earnings, VIX, news (634L)
 │   ├── macro_tools.py           FRED (US), ECOS (Korea) (244L)
 │   ├── allocation.py            Portfolio optimization — Sharpe, HRP, forecast (383L)
-│   ├── screening.py             Momentum, correlation analysis (457L)
+│   ├── screening.py             Momentum + discovery ranking (457L)
 │   ├── sector_map.py            US 101 + KOSPI 579 sector mapping (688L)
 │   └── registry.py              ToolRegistry with two-phase selection (90L)
 ├── data/                         BigQuery repository layer (modular stores)
@@ -522,7 +522,7 @@ decay_multiplier = max(decay_factor ^ (staleness_days × tier_weight / access_bo
 | `portfolio_diagnosis` | 집중도/팩터/스트레스 진단 |
 | `save_memory` | observation/reflection 저장 |
 
-### 6.3 Quant Tools (9개) — `quant_tools.py`
+### 6.3 Quant Tools (8개) — `quant_tools.py`
 
 | Tool | Function |
 |------|----------|
@@ -531,7 +531,6 @@ decay_multiplier = max(decay_factor ^ (staleness_days × tier_weight / access_bo
 | `forecast_returns` | 7-model ensemble → prob_up |
 | `momentum_rank` | Multi-window (20/60/126일) momentum |
 | `technical_signals` | RSI, MACD, Bollinger, SMA |
-| `correlation_matrix` | Pairwise correlations |
 | `sector_summary` | GICS sector returns/volatility |
 | `get_fundamentals` | US (P/E, P/B), KR (ROE, 부채비율) |
 | `index_snapshot` | US + KOSPI 지수 (마켓별 자동 라우팅) |

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 import numpy as np
 
 DISCOVERY_BUCKETS: tuple[str, ...] = (
@@ -11,16 +9,6 @@ DISCOVERY_BUCKETS: tuple[str, ...] = (
     "defensive",
     "value",
 )
-
-
-@dataclass(frozen=True, slots=True)
-class CorrelationSummary:
-    """Correlation matrix output plus pair summaries."""
-
-    tickers: list[str]
-    matrix: list[list[float]]
-    high_pairs: list[dict]
-    low_pairs: list[dict]
 
 
 def daily_returns_from_closes(closes: list[float]) -> np.ndarray:
@@ -90,51 +78,6 @@ def momentum_scores(
         )
     rows.sort(key=lambda r: r.get("score", 0.0), reverse=True)
     return rows
-
-
-def correlation_summary(
-    closes_by_ticker: dict[str, list[float]],
-    *,
-    lookback_days: int,
-    top_k_pairs: int = 6,
-) -> CorrelationSummary:
-    """Computes correlation matrix + high/low pairs summary."""
-    tickers = sorted(closes_by_ticker.keys())
-    series: list[np.ndarray] = []
-
-    for t in tickers:
-        r = daily_returns_from_closes(closes_by_ticker[t])
-        if r.size:
-            series.append(r[-lookback_days:])
-        else:
-            series.append(np.array([], dtype=float))
-
-    min_len = min((s.size for s in series), default=0)
-    if min_len < 3:
-        mat = np.eye(len(tickers), dtype=float)
-        return CorrelationSummary(tickers=tickers, matrix=mat.tolist(), high_pairs=[], low_pairs=[])
-
-    aligned = np.stack([s[-min_len:] for s in series], axis=1)
-    corr = np.corrcoef(aligned, rowvar=False)
-
-    pairs: list[tuple[float, str, str]] = []
-    for i in range(len(tickers)):
-        for j in range(i + 1, len(tickers)):
-            pairs.append((float(corr[i, j]), tickers[i], tickers[j]))
-
-    pairs_sorted = sorted(pairs, key=lambda x: x[0])
-    low = pairs_sorted[:top_k_pairs]
-    high = list(reversed(pairs_sorted[-top_k_pairs:]))
-
-    low_pairs = [{"a": a, "b": b, "corr": c} for c, a, b in low]
-    high_pairs = [{"a": a, "b": b, "corr": c} for c, a, b in high]
-
-    return CorrelationSummary(
-        tickers=tickers,
-        matrix=corr.tolist(),
-        high_pairs=high_pairs,
-        low_pairs=low_pairs,
-    )
 
 
 def _safe_float(value: object, default: float = 0.0) -> float:

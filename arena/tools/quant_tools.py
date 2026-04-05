@@ -28,7 +28,7 @@ from .allocation import (
     optimize_hrp,
     optimize_max_sharpe,
 )
-from .screening import build_discovery_rows, correlation_summary, momentum_scores
+from .screening import build_discovery_rows, momentum_scores
 from .sector_map import SECTOR_BY_TICKER
 
 logger = logging.getLogger(__name__)
@@ -1066,26 +1066,6 @@ class QuantTools:
             "tickers": tokens,
             "rows": rows,
             "count": len(rows),
-        }
-
-    def correlation_matrix(self, tickers: list[str], lookback_days: int = 60) -> dict:
-        """Computes correlation matrix + summary pairs from BQ daily closes."""
-        tickers = self._normalize_tickers(tickers)
-        logger.info("[cyan]TOOL[/cyan] correlation_matrix tickers=%d lookback_days=%d", len(tickers), int(lookback_days))
-        if len(tickers) < 2:
-            return {"error": "need at least 2 tickers"}
-
-        closes = self.repo.get_daily_closes(
-            tickers=tickers,
-            lookback_days=int(lookback_days) + 1,
-            sources=self._sources(),
-        )
-        summary = correlation_summary(closes, lookback_days=lookback_days)
-        return {
-            "tickers": summary.tickers,
-            "matrix": summary.matrix,
-            "high_pairs": summary.high_pairs,
-            "low_pairs": summary.low_pairs,
         }
 
     def sector_summary(self, period: str = "20d") -> list[dict]:

@@ -102,6 +102,7 @@ def test_default_registry_contains_new_tools() -> None:
     assert "fear_greed_index" in ids
     assert "earnings_calendar" in ids
     assert "technical_signals" in ids
+    assert "correlation_matrix" not in ids
     assert "fetch_reddit_sentiment" not in ids
     assert "get_overseas_fundamentals" not in ids
 

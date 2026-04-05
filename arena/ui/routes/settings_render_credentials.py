@@ -528,7 +528,6 @@ var RESPONSE_EXAMPLES={
   optimize_portfolio:'{\n  "tickers":["AAPL","MSFT","GOOGL"], "strategy":"sharpe",\n  "weights":{"AAPL":0.35,"MSFT":0.40,"GOOGL":0.25},\n  "expected_return_daily":0.0008, "sharpe_daily":0.065,\n  "backtest_mdd":{"days":60,"value":-0.082}\n}',
   forecast_returns:'[\n  {"ticker":"MSFT","prob_up":0.72,"model_votes_up":5,"model_votes_total":7,\n   "consensus":"bullish","exp_return_period":0.045,"forecast_model":"ensemble_wmae"},\n  {"ticker":"PBR","prob_up":0.64,"model_votes_up":4,"model_votes_total":7,\n   "consensus":"bullish","exp_return_period":0.031,"best_base_model":"nhits"}\n]',
   technical_signals:'{\n  "ticker":"TSLA","price":245.67,\n  "rsi_14":68.5,"rsi_state":"overbought",\n  "macd":{"line":0.0034,"signal":0.0028,"state":"bullish"},\n  "trend_state":"uptrend"\n}',
-  correlation_matrix:'{\n  "tickers":["AAPL","MSFT","GOOGL"],\n  "matrix":[[1.0,0.72,0.65],[0.72,1.0,0.58],[0.65,0.58,1.0]],\n  "high_pairs":[{"ticker1":"AAPL","ticker2":"MSFT","correlation":0.72}]\n}',
   sector_summary:'[\n  {"sector":"Technology","avg_ret":0.0512,"avg_vol":0.195,\n   "tickers":["AAPL","MSFT","NVDA"]}\n]',
   get_fundamentals:'{\n  "rows":[{"ticker":"AAPL","market":"us","per":28.5,"pbr":45.2,"eps":6.15,"bps":3.82}],\n  "errors":[]\n}',
   index_snapshot:'{\n  "indices":[\n    {"symbol":"SPX","name":"S&P 500","close":5234.8,"type":"index"},\n    {"symbol":"US10Y","value":4.28,"unit":"%","type":"bond_yield"}\n  ],\n  "source":"kis_index+fred"\n}',

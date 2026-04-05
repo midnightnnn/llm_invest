@@ -1197,9 +1197,10 @@ def test_admin_tools_lists_core_and_optional(monkeypatch) -> None:
     payload = response.json()
     entries = payload["tool_entries"]
     tool_ids = {str(entry["tool_id"]) for entry in entries}
-    assert len(tool_ids) >= 18
+    assert len(tool_ids) >= 17
     assert "portfolio_diagnosis" in tool_ids
     assert "screen_market" in tool_ids
+    assert "correlation_matrix" not in tool_ids
     assert "momentum_rank" not in tool_ids
     assert "fetch_reddit_sentiment" in tool_ids
     core_entry = next(entry for entry in entries if str(entry["tool_id"]) == "portfolio_diagnosis")

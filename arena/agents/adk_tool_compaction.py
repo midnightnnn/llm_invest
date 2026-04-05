@@ -183,20 +183,6 @@ def _compact_tool_result_for_prompt(
                 "trend_state": core.get("trend_state"),
                 "points": core.get("points"),
             }
-    elif token == "correlation_matrix" and isinstance(core, dict):
-        tickers = [str(t).strip().upper() for t in list(core.get("tickers") or []) if str(t).strip()]
-        compacted = {
-            "tickers": tickers[:12],
-            "high_pairs": _compact_rows(core.get("high_pairs"), fields=("a", "b", "corr"), limit=6),
-            "low_pairs": _compact_rows(core.get("low_pairs"), fields=("a", "b", "corr"), limit=6),
-        }
-        matrix = core.get("matrix")
-        if isinstance(matrix, list) and len(tickers) <= 4:
-            compacted["matrix"] = matrix
-        elif isinstance(matrix, list):
-            width = len(matrix[0]) if matrix and isinstance(matrix[0], list) else 0
-            compacted["matrix_shape"] = [len(matrix), width]
-            compacted["matrix_omitted"] = True
     elif token == "sector_summary":
         rows: list[dict[str, Any]] = []
         if isinstance(core, list):

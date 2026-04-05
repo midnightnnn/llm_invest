@@ -1208,23 +1208,6 @@ def test_compact_tool_result_reddit_drops_url_and_trims_text() -> None:
     assert len(out[0]["selftext_snippet"]) <= 140
 
 
-def test_compact_tool_result_correlation_omits_large_matrix() -> None:
-    out = _compact_tool_result_for_prompt(
-        "correlation_matrix",
-        {
-            "tickers": ["AAPL", "MSFT", "NVDA", "AMZN", "META"],
-            "matrix": [[1.0] * 5 for _ in range(5)],
-            "high_pairs": [{"a": "AAPL", "b": "MSFT", "corr": 0.91}],
-            "low_pairs": [{"a": "AAPL", "b": "META", "corr": -0.12}],
-        },
-    )
-
-    assert out["tickers"] == ["AAPL", "MSFT", "NVDA", "AMZN", "META"]
-    assert out["matrix_omitted"] is True
-    assert out["matrix_shape"] == [5, 5]
-    assert "matrix" not in out
-
-
 def test_compact_tool_result_technical_signals_multi_returns_summary_rows() -> None:
     out = _compact_tool_result_for_prompt(
         "technical_signals",

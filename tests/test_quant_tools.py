@@ -428,14 +428,6 @@ def test_screen_market_value_bucket_prefers_snapshot_valuation() -> None:
     assert repo.last_fundamentals_kwargs is not None
 
 
-def test_correlation_matrix_shapes() -> None:
-    qt = QuantTools(repo=FakeRepo(), settings=_settings())
-    out = qt.correlation_matrix(["AAPL", "MSFT"], lookback_days=10)
-    assert out["tickers"] == ["AAPL", "MSFT"]
-    assert len(out["matrix"]) == 2
-    assert len(out["matrix"][0]) == 2
-
-
 def test_optimize_portfolio_sharpe() -> None:
     qt = QuantTools(repo=FakeRepo(), settings=_settings())
     out = qt.optimize_portfolio(["AAPL", "MSFT"], strategy="sharpe", lookback_days=20)
