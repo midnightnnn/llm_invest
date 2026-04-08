@@ -39,6 +39,7 @@ from arena.agents.adk_prompting import (
     _load_prompt_part,
     _safe_json,
     _system_prompt,
+    _tool_category_counts,
     _user_prompt,
 )
 from arena.agents.adk_decision_flow import (
@@ -269,6 +270,7 @@ class _ADKDecisionRunner:
         self._held_tickers_cache: set[str] = set()
         self._current_phase: str = "unknown"
         self._current_context: dict[str, Any] | None = None
+        self._prompt_snapshots: list[dict[str, Any]] = []
         tool_resolution = resolve_adk_tools(
             repo=self.repo,
             tenant_id=self.tenant_id,
@@ -292,6 +294,7 @@ class _ADKDecisionRunner:
             max_tool_events=self._max_tool_events,
             adk_tools=tool_resolution.adk_tools,
         )
+        self._system_prompt_snapshot = str(getattr(self._agent, "instruction", "") or "")
 
         # Share one event loop across all runners in-process to keep third-party
         # async workers (e.g., litellm logging worker) bound to a single loop.
@@ -448,6 +451,56 @@ class _ADKDecisionRunner:
             payload=payload,
         )
 
+    def _record_prompt_snapshot(
+        self,
+        *,
+        phase: str,
+        session_id: str,
+        prompt: str,
+        resumed: bool,
+    ) -> None:
+        """Stores one application-visible prompt snapshot per phase."""
+        phase_token = str(phase or "").strip().lower() or "unknown"
+        prompt_text = str(prompt or "")
+        if not prompt_text.strip():
+            return
+        snapshot = {
+            "phase": phase_token,
+            "session_id": str(session_id or "").strip(),
+            "resume_session": bool(resumed),
+            "prompt": prompt_text,
+        }
+        retained = [
+            dict(item)
+            for item in self._prompt_snapshots
+            if str((item or {}).get("phase") or "").strip().lower() != phase_token
+        ]
+        retained.append(snapshot)
+        phase_order = {"draft": 0, "execution": 1, "board": 2}
+        retained.sort(
+            key=lambda item: (
+                phase_order.get(str((item or {}).get("phase") or "").strip().lower(), 99),
+                str((item or {}).get("phase") or ""),
+            )
+        )
+        self._prompt_snapshots = retained
+
+    def _prompt_bundle_payload(self) -> dict[str, Any]:
+        """Builds an app-visible prompt bundle for post-board inspection."""
+        phases = [
+            dict(item)
+            for item in self._prompt_snapshots
+            if isinstance(item, dict) and str(item.get("prompt") or "").strip()
+        ]
+        return {
+            "system_prompt": self._system_prompt_snapshot,
+            "phases": _safe_json(phases),
+            "note": (
+                "Application-visible prompt bundle captured around board generation. "
+                "Prior tool transcript is preserved separately in compacted tool_events."
+            ),
+        }
+
     def _run_on_loop(self, coro):
         """Schedules a coroutine on the shared ADK loop and waits for result."""
         if self._loop.is_closed():
@@ -516,6 +569,7 @@ class _ADKDecisionRunner:
             phase_start_idx = 0
             self._seen_memory_ids = set()
             self._candidate_ledger = {}
+            self._prompt_snapshots = []
         self._current_phase = phase
         self._current_context = context
         self._seed_seen_memory_ids(context)
@@ -544,6 +598,12 @@ class _ADKDecisionRunner:
                     session_id=session_id,
                 )
             )
+        self._record_prompt_snapshot(
+            phase=phase,
+            session_id=session_id,
+            prompt=prompt,
+            resumed=bool(resume_session_id),
+        )
 
         text = self._run_on_loop(self._run_async(self._runner, session_id, prompt))
         if not text or not text.strip():
@@ -578,11 +638,39 @@ class _ADKDecisionRunner:
 
         return decision, session_id
 
-    def decide_board(self, session_id: str, orders_summary: str) -> dict[str, Any]:
+    def decide_board(self, session_id: str, orders_summary: str, *, cycle_id: str = "") -> dict[str, Any]:
         """Step 2: 주문 내역 기반 게시글 작성. 같은 세션 컨텍스트 활용."""
         board_prompt = build_board_prompt(orders_summary)
+        self._record_prompt_snapshot(
+            phase="board",
+            session_id=session_id,
+            prompt=board_prompt,
+            resumed=True,
+        )
         text = self._run_on_loop(self._run_async(self._runner, session_id, board_prompt))
-        return parse_board_response(text)
+        board_decision = parse_board_response(text)
+        try:
+            events = [event for event in self._tool_events if str(event.get("tool") or "").strip()]
+            payload = {
+                "phase": "board",
+                "cycle_id": str(cycle_id or "").strip(),
+                "analysis_funnel": self._funnel_metrics(),
+                "tool_events": _safe_json(events),
+                "tool_mix": _tool_category_counts(events, registry=self._registry),
+                "token_usage": _safe_json(getattr(self, "_last_token_usage", None) or {}),
+                "prompt_bundle": self._prompt_bundle_payload(),
+            }
+            self._persist_tool_summary_memory(
+                summary="Board prompt bundle snapshot before post generation.",
+                payload=payload,
+            )
+        except Exception as exc:
+            logger.warning(
+                "[yellow]Board prompt bundle memory write failed[/yellow] agent=%s err=%s",
+                self.agent_id,
+                str(exc),
+            )
+        return board_decision
 
 
 class AdkTradingAgent:
@@ -779,7 +867,11 @@ class AdkTradingAgent:
         session_id = self._execution_session_id
         try:
             if session_id:
-                board_decision = self.runner.decide_board(session_id, execution_summary)
+                board_decision = self.runner.decide_board(
+                    session_id,
+                    execution_summary,
+                    cycle_id=str(cycle_id or "").strip(),
+                )
                 logger.info("[blue]Board generation complete[/blue] agent=%s", self.agent_id)
         except Exception as exc:
             raise RuntimeError(f"board generation failed for agent={self.agent_id}: {exc}") from exc

@@ -118,7 +118,7 @@ def _build_app(*, repo: BigQueryRepository, settings: Settings) -> FastAPI:
             runtime.clear_cache()
             _executor.shutdown(wait=False, cancel_futures=True)
 
-    app = FastAPI(title="LLM ARENA", docs_url=None, redoc_url=None, lifespan=_app_lifespan)
+    app = FastAPI(title="LLM INVEST", docs_url=None, redoc_url=None, lifespan=_app_lifespan)
     app.add_middleware(GZipMiddleware, minimum_size=500)
 
     auth_enabled = str(os.getenv("ARENA_UI_AUTH_ENABLED", "false")).strip().lower() in {"1", "true", "yes", "on"}
@@ -458,6 +458,7 @@ def _build_app(*, repo: BigQueryRepository, settings: Settings) -> FastAPI:
         latest_tenant_status_payload=_latest_tenant_status_payload,
         fetch_board=viewer_data_helpers.fetch_board,
         fetch_tool_events_for_post=viewer_data_helpers.fetch_tool_events_for_post,
+        fetch_prompt_bundle_for_post=viewer_data_helpers.fetch_prompt_bundle_for_post,
         fetch_theses_for_board_post=viewer_data_helpers.fetch_theses_for_board_post,
         fetch_nav=viewer_data_helpers.fetch_nav,
         fetch_token_usage_summary=viewer_data_helpers.fetch_token_usage_summary,
@@ -590,6 +591,7 @@ def _build_app(*, repo: BigQueryRepository, settings: Settings) -> FastAPI:
             is_live_mode=_is_live_mode,
             fetch_board=viewer_data_helpers.fetch_board,
             fetch_tool_events_for_post=viewer_data_helpers.fetch_tool_events_for_post,
+            fetch_prompt_bundle_for_post=viewer_data_helpers.fetch_prompt_bundle_for_post,
             fetch_theses_for_board_post=viewer_data_helpers.fetch_theses_for_board_post,
             fetch_nav=viewer_data_helpers.fetch_nav,
             fetch_token_usage_summary=viewer_data_helpers.fetch_token_usage_summary,

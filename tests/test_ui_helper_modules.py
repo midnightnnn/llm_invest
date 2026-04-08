@@ -156,7 +156,7 @@ def test_base_layout_template_renders_shell_controls() -> None:
         status_text_color="text-emerald-600",
     )
 
-    assert "LLM ARENA" in html
+    assert "LLM INVEST" in html
     assert "/auth/logout" in html
     assert "sidebar-link" in html
     assert "<div>body</div>" in html

@@ -1764,7 +1764,6 @@ class ContextBuilder:
             pos_rows.append(row_data)
 
         pos_rows.sort(key=lambda r: float(r.get("market_value_krw") or 0.0), reverse=True)
-        hold_days_values = [int(r["hold_days"]) for r in pos_rows if isinstance(r.get("hold_days"), int)]
 
         # Determine target_market early for currency-aware display
         _target_market = ""
@@ -1831,15 +1830,6 @@ class ContextBuilder:
         perf_lines.append(
             f"Today intents {intents_part} | turnover {_fmt_money(turnover_today)} ({turnover_ratio*100:.0f}%){win_part}" + (f" | {fees_part}" if fees_part else "")
         )
-
-        if pos_rows:
-            parts: list[str] = []
-            for r in pos_rows:
-                t = str(r.get("ticker") or "")
-                hd = r.get("hold_days")
-                hd_txt = f"{int(hd)}d" if isinstance(hd, int) else "?d"
-                parts.append(f"{t} {_fmt_pct(float(r.get('unrealized_pnl_ratio') or 0.0))} ({hd_txt})")
-            perf_lines.append("Positions: " + " | ".join(parts))
 
         performance = {
             "display_currency": _currency_label(),
@@ -1957,31 +1947,9 @@ class ContextBuilder:
             "over_target": False,
             "buy_blocked": sleeve_buy_blocked,
         }
-        perf_lines.append(
-            "Budget "
-            f"spendable={_fmt_money(max_buy_notional_krw)} | "
-            f"cash_after_buffer={_fmt_money(order_budget['max_buy_notional_by_cash_krw'])} | "
-            f"turnover_left={_fmt_money(order_budget['remaining_turnover_krw'])}"
-        )
-        if sleeve_target_krw > 0:
-            perf_lines.append(
-                "Sleeve "
-                f"target={_fmt_money(sleeve_target_krw)} | "
-                f"equity={_fmt_money(nav)}"
-            )
-        if max_daily_orders_cap is None:
-            perf_lines.append("Daily orders cap unlimited")
-        else:
-            perf_lines.append(
-                f"Daily orders left {int(order_budget['remaining_daily_orders'])}/{max_daily_orders_cap}"
-            )
-
         style_lines = [
             "Style: Long-horizon compounding (weeks to months), low turnover preferred unless thesis materially changes."
         ]
-        if hold_days_values:
-            avg_hold = sum(hold_days_values) / float(len(hold_days_values))
-            style_lines.append(f"Current avg hold period {avg_hold:.1f}d across {len(hold_days_values)} positions.")
         if turnover_ratio >= 0.30:
             style_lines.append("Today turnover is elevated; avoid additional rotation unless conviction improved.")
         else:
@@ -2034,24 +2002,6 @@ class ContextBuilder:
                 "FX "
                 + " | ".join(f"{k}={v}" for k, v in fx_info.items())
             )
-        # Explicit cash breakdown so agents never confuse KRW vs USD
-        if _is_us_market:
-            if snapshot.cash_foreign > 0:
-                if _fx > 0:
-                    perf_lines.append(
-                        f"Cash ${_fmt_usd(snapshot.cash_foreign)} USD (={_fmt_krw(cash_krw)} KRW equivalent)"
-                    )
-                else:
-                    perf_lines.append(
-                        f"Cash ${_fmt_usd(snapshot.cash_foreign)} USD | KRW equivalent unavailable (FX unavailable)"
-                    )
-            else:
-                perf_lines.append(f"Cash {_fmt_krw(cash_krw)} KRW")
-        else:
-            if snapshot.cash_foreign > 0:
-                perf_lines.append(f"Cash {_fmt_krw(cash_krw)} KRW | Foreign ${_fmt_usd(snapshot.cash_foreign)} USD (not available for KOSPI)")
-            else:
-                perf_lines.append(f"Cash {_fmt_krw(cash_krw)} KRW")
 
         return {
             "agent_id": agent_id,

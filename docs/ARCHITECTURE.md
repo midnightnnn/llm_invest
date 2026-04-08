@@ -1,6 +1,6 @@
-# LLM Arena — Developer Architecture Guide
+# LLM Invest — Developer Architecture Guide
 
-> BigQuery + ADK + KIS Open Trading API 기반 멀티 LLM 자동투자 아레나
+> BigQuery + ADK + KIS Open Trading API 기반 멀티 LLM 자동투자 플랫폼
 > 3 에이전트(GPT-5.2, Gemini 3 Flash, Claude Sonnet 4.6)가 US + KOSPI/KOSDAQ 시장에서 경쟁
 
 ---

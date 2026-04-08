@@ -148,15 +148,24 @@ class FakeRepo:
 
 
 class FakeOpenTradingClient:
+    def __init__(self) -> None:
+        self.overseas_price_detail_calls: list[tuple[str, str | None]] = []
+
     def get_overseas_price_detail(self, ticker: str, excd: str | None = None):
-        _ = excd
+        self.overseas_price_detail_calls.append((ticker, excd))
+        exchange = str(excd or "").strip().upper()
         data = {
-            "AAPL": {"curr": "USD", "last": "201.12", "tomv": "3000000", "perx": "31.5", "pbrx": "45.2", "epsx": "6.38", "bpsx": "4.45", "e_ordyn": "Y"},
-            "MSFT": {"curr": "USD", "last": "425.50", "tomv": "3200000", "perx": "34.0", "pbrx": "12.1", "epsx": "12.50", "bpsx": "35.12", "e_ordyn": "Y"},
+            ("AAPL", "NAS"): {"curr": "USD", "last": "201.12", "tomv": "3000000", "perx": "31.5", "pbrx": "45.2", "epsx": "6.38", "bpsx": "4.45", "e_ordyn": "Y"},
+            ("MSFT", "NAS"): {"curr": "USD", "last": "425.50", "tomv": "3200000", "perx": "34.0", "pbrx": "12.1", "epsx": "12.50", "bpsx": "35.12", "e_ordyn": "Y"},
+            ("AAPL", "NYS"): {"curr": "USD", "last": "", "tomv": "", "perx": "", "pbrx": "", "epsx": "", "bpsx": "", "e_ordyn": ""},
+            ("MSFT", "NYS"): {"curr": "USD", "last": "", "tomv": "", "perx": "", "pbrx": "", "epsx": "", "bpsx": "", "e_ordyn": ""},
+            ("AAPL", "AMS"): {"curr": "USD", "last": "", "tomv": "", "perx": "", "pbrx": "", "epsx": "", "bpsx": "", "e_ordyn": ""},
+            ("MSFT", "AMS"): {"curr": "USD", "last": "", "tomv": "", "perx": "", "pbrx": "", "epsx": "", "bpsx": "", "e_ordyn": ""},
         }
-        if ticker not in data:
+        key = (ticker, exchange or "NAS")
+        if key not in data:
             raise RuntimeError("ticker not found")
-        return data[ticker]
+        return data[key]
 
     def search_overseas_stocks(
         self,
@@ -786,3 +795,16 @@ def test_get_fundamentals_defaults_to_opportunity_working_set() -> None:
     assert out["eligible"] == ["MSFT"]
     assert out["rows"]
     assert out["rows"][0]["ticker"] == "MSFT"
+
+
+def test_get_fundamentals_normalizes_generic_us_exchange() -> None:
+    client = FakeOpenTradingClient()
+    qt = QuantTools(repo=FakeRepo(), settings=_settings(), ot_client=client)
+
+    out = qt.get_fundamentals(["AAPL"], excd="US", max_items=10)
+
+    assert out["rows"]
+    assert out["rows"][0]["ticker"] == "AAPL"
+    assert out["rows"][0]["exchange"] == "NAS"
+    assert out["rows"][0]["per"] == 31.5
+    assert client.overseas_price_detail_calls == [("AAPL", "NAS")]

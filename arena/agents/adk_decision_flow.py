@@ -5,6 +5,7 @@ import time
 from typing import Any
 
 from arena.agents.adk_prompting import (
+    EXECUTION_FORMAT,
     _parse_json_text,
     _safe_json,
     _tool_category_counts,
@@ -39,6 +40,8 @@ def build_resume_prompt(
     if board_ctx:
         parts += ["", "[다른 에이전트 의견]", board_ctx]
     parts += [
+        "",
+        EXECUTION_FORMAT,
         "",
         json.dumps(
             _safe_json(
@@ -149,11 +152,21 @@ def build_board_prompt(orders_summary: str) -> str:
     rules = [
         "cycle_phase: board",
         "",
-        "사실성 규칙:",
+        "## 사실성 규칙",
+        "게시글은 반드시 사실 기반으로 작성하십시오.",
         "- 아래에 명시된 실행 결과와 현재 세션에서 확인된 사실만 사용하십시오.",
         "- 종목명은 prompt/context에 명시된 경우에만 사용하십시오. ticker_name이 없으면 종목명을 추정하지 말고 티커만 쓰십시오.",
-        "- 전날/어제/지난번 등 상대 날짜 표현은 prompt에 명시된 경우에만 사용하십시오.",
+        "- prompt에 없는 날짜, 이전 거래 시점, 보유 이력은 추정해서 쓰지 마십시오.",
         "- 이전 보유 수량을 언급할 수는 있지만, 매수 시점은 명시된 사실이 없으면 추정하지 마십시오.",
+        "- 실행 결과 요약에 없는 상대 날짜 표현(예: 전날, 어제, 지난번)은 사용하지 마십시오.",
+        "",
+        "## 출력 형식 (반드시 이 JSON 형식을 준수)",
+        '```json',
+        '{',
+        '  "board_title": "게시판 제목",',
+        '  "board_body": "게시판 전체글"',
+        '}',
+        '```',
         "",
         orders_summary,
     ]

@@ -253,7 +253,7 @@ class _RepoForMarketLookup:
         return list(self.rows)
 
 
-def test_user_prompt_includes_sleeve_state_payload() -> None:
+def test_user_prompt_omits_sleeve_state_payload() -> None:
     prompt = _user_prompt(
         {
             "cycle_phase": "execution",
@@ -268,9 +268,10 @@ def test_user_prompt_includes_sleeve_state_payload() -> None:
         default_universe=[],
         max_tool_calls=5,
     )
-    payload_raw = prompt.split("\n", 1)[1]
-    payload = json.loads(payload_raw)
-    assert payload["sleeve_state"]["buy_blocked"] is True
+    marker = "Context payload JSON"
+    json_start = prompt.index("{", prompt.index(marker))
+    payload = json.loads(prompt[json_start:])
+    assert "sleeve_state" not in payload
     assert payload["analysis_funnel"]["pending_nonheld"] == 2
     assert payload["opportunity_working_set"] == [{"ticker": "TSLA", "status": "pending"}]
     assert payload["decision_frame"] == "Compare self-discovered opportunities against cash first."
@@ -1310,7 +1311,7 @@ class _RepoForAdkGenerate:
 
 class _FakeRunner:
     def __init__(self) -> None:
-        self.board_calls: list[tuple[str, str]] = []
+        self.board_calls: list[tuple[str, str, str]] = []
 
     def decide_orders(self, *, context, default_universe, resume_session_id=None):
         _ = (context, default_universe, resume_session_id)
@@ -1330,8 +1331,8 @@ class _FakeRunner:
             "sid_1",
         )
 
-    def decide_board(self, session_id, orders_summary):
-        self.board_calls.append((session_id, orders_summary))
+    def decide_board(self, session_id, orders_summary, *, cycle_id=""):
+        self.board_calls.append((session_id, orders_summary, cycle_id))
         return {"board_title": "confirmed", "board_body": orders_summary}
 
 
@@ -1354,8 +1355,8 @@ class _FakeKospiRunner(_FakeRunner):
             "sid_kospi_1",
         )
 
-    def decide_board(self, session_id, orders_summary):
-        self.board_calls.append((session_id, orders_summary))
+    def decide_board(self, session_id, orders_summary, *, cycle_id=""):
+        self.board_calls.append((session_id, orders_summary, cycle_id))
         return {
             "board_title": "이녹스첨단소재를 다시 담다",
             "board_body": "**이녹스첨단소재(025860)** BUY 48주 체결\n전날 27주에 이어 오늘 48주.",
@@ -1543,9 +1544,10 @@ def test_finalize_board_post_uses_execution_summary(monkeypatch) -> None:
     )
 
     assert len(runner.board_calls) == 1
-    _, summary = runner.board_calls[0]
+    _, summary, board_cycle_id = runner.board_calls[0]
     assert "실제 실행 결과" in summary
     assert "AAPL BUY 1주 FILLED" in summary
+    assert board_cycle_id == "cycle_fx_2"
     assert post.body == summary
 
 
@@ -1617,6 +1619,7 @@ def test_finalize_board_post_keeps_freeform_board_text(monkeypatch) -> None:
     )
 
     assert len(runner.board_calls) == 1
+    assert runner.board_calls[0][2] == "cycle_kospi_1"
     assert post.title == "이녹스첨단소재를 다시 담다"
     assert "**이녹스첨단소재(025860)** BUY 48주 체결" in post.body
     assert "전날 27주에 이어 오늘 48주." in post.body

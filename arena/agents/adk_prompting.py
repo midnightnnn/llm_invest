@@ -113,12 +113,64 @@ def _system_prompt(
     return core.replace("{agent_id}", agent_id).replace("{target_market}", target_market) + "\n\n" + user
 
 
+_DRAFT_FORMAT = """\
+## draft phase 규칙
+거래를 실행하지 마십시오. 게시판 글을 사용하여 예비 분석 내용을 공유하십시오.
+핵심 논리, 계획된 행동과 행동의 근거를 간결하게 요약한 draft_summary 필드를 반드시 포함해야 합니다.
+당신을 포함한 에이전트들은 서로 게시글 전체글이 아닌 요약본만을 읽습니다.
+
+## 출력 형식 (반드시 이 JSON 형식을 준수)
+```json
+{
+  "board_title": "게시판 제목",
+  "board_body": "게시판 전체글",
+  "draft_summary": "핵심 논리와 계획 요약"
+}
+```"""
+
+EXECUTION_FORMAT = """\
+## 주문 규칙
+정수(whole-share) 단위의 주식 주문만 지원되며, 소수점 단위 주식(fractional shares) 거래는 허용되지 않습니다.
+size_ratio는 슬리브 자본(sleeve equity) 대비 목표 익스포저의 공격성(0.0~1.0)을 의미합니다.
+size_ratio=1을 무조건적인 풀매수(all-in)가 아닌, 가장 강한 확신의 설정치로 간주하십시오.
+최종 체결 가능 수량은 런타임 포트폴리오 및 브로커의 제약 조건에 따라 조정될 수 있습니다.
+BUY(매수)의 경우 예상 주식 수(sleeve_equity * size_ratio / price_per_share)가 최소 1 이상이 되도록 size_ratio를 설정하십시오. 1 미만일 경우 해당 티커에 대해 HOLD(보유)를 사용하십시오.
+
+항상 컨텍스트 상의 런타임 슬리브 제약 조건을 준수하십시오.
+sleeve_state.buy_blocked가 참(true)이거나 order_budget.max_buy_notional_krw가 0(또는 0에 근접)인 경우, 이번 사이클에서 BUY 주문을 내지 마십시오. SELL 또는 HOLD만 사용하십시오.
+
+## 출력 형식 (반드시 이 JSON 형식을 준수)
+```json
+{
+  "draft_summary": "핵심 논리와 계획 요약",
+  "orders": [
+    {
+      "ticker": "AAPL",
+      "side": "BUY",
+      "size_ratio": 0.15,
+      "rationale": "매수 근거",
+      "strategy_refs": ["momentum", "earnings_growth"]
+    }
+  ]
+}
+```
+
+필드 규칙:
+- side: BUY, SELL, HOLD 중 하나
+- size_ratio: 0.0~1.0 범위. BUY는 sleeve_equity 대비 투자 비중, SELL은 보유 수량 대비 매도 비율
+- orders 배열에 여러 주문을 넣을 수 있습니다. 한 사이클에 여러 종목을 동시에 매수/매도 가능합니다
+- 거래가 필요 없으면 orders를 빈 배열 []로 반환"""
+
+
 def _user_prompt(context: dict[str, Any], default_universe: list[str], *, max_tool_calls: int = 50) -> str:
     """Builds compact user prompt payload for one cycle decision."""
     _ = default_universe
 
+    phase = context.get("cycle_phase", "execution")
+    phase_format = _DRAFT_FORMAT if phase == "draft" else EXECUTION_FORMAT
+
     payload = {
-        "cycle_phase": context.get("cycle_phase", "execution"),
+        "cycle_phase": phase,
         "performance_context": context.get("performance_context", ""),
         "active_thesis_context": context.get("active_thesis_context", ""),
         "memory_context": context.get("memory_context", ""),
@@ -127,7 +179,6 @@ def _user_prompt(context: dict[str, Any], default_universe: list[str], *, max_to
         "ticker_names": context.get("ticker_names", {}),
         "risk_policy": context.get("risk_policy", {}),
         "order_budget": context.get("order_budget", {}),
-        "sleeve_state": context.get("sleeve_state", {}),
         "active_theses": context.get("active_theses", []),
         "analysis_funnel": context.get("analysis_funnel", {}),
         "opportunity_working_set": context.get("opportunity_working_set", []),
@@ -144,7 +195,8 @@ def _user_prompt(context: dict[str, Any], default_universe: list[str], *, max_to
         },
     }
     return (
-        "Context payload JSON (follow system instructions; output JSON only):\n"
+        phase_format
+        + "\n\nContext payload JSON (output JSON only):\n"
         + json.dumps(_safe_json(payload), ensure_ascii=False)
     )
 

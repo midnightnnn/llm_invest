@@ -1074,7 +1074,10 @@ def test_memory_settings_page_uses_compact_prompt_copy(monkeypatch) -> None:
     response = client.get("/settings?tenant_id=local&tab=memory")
 
     assert response.status_code == 200
-    assert "Memory Policy Graph" in response.text
+    assert "Memory System Map" in response.text
+    assert "System" in response.text
+    assert "Activity" in response.text
+    assert "Network" in response.text
     assert "회고 정리 안내문" in response.text
     assert "투자 논리 시작" in response.text
     assert "닫힌 논리 체인 우선" in response.text
@@ -1188,6 +1191,141 @@ def test_memory_graph_runtime_payload_marks_invalid_tuning_state(monkeypatch) ->
     runtime = response.json()["meta"]["runtime"]
     assert runtime["forgetting_tuning_state"] == {}
     assert runtime["invalid_config_keys"] == ["memory_forgetting_tuning_state"]
+
+
+def test_api_memory_activity_returns_examples(monkeypatch) -> None:
+    class _MemoryActivityRepo(_DummyRepo):
+        def fetch_rows(self, sql: str, params: dict | None = None) -> list[dict]:
+            self.fetch_calls.append((sql, params))
+            if "GROUP BY event_type, agent_id" in sql:
+                return [{"event_type": "strategy_reflection", "agent_id": "gpt", "cnt": 2, "last_created_at": "2026-03-15T09:10:11Z"}]
+            if "COUNTIF(TRIM(COALESCE(graph_node_id" in sql:
+                return [{"total_memory_events": 2, "with_graph_node_id": 1, "with_causal_chain_id": 1, "with_last_accessed_at": 1, "with_effective_score": 2, "last_accessed_at": "2026-03-15T10:11:12Z"}]
+            if "GROUP BY memory_tier" in sql:
+                return [{"memory_tier": "semantic", "cnt": 1}, {"memory_tier": "episodic", "cnt": 1}]
+            if "FROM `proj.ds.memory_access_events`" in sql and "GROUP BY event_id" not in sql:
+                return [{"access_event_count": 4, "prompt_use_count": 2, "last_accessed_at": "2026-03-15T11:12:13Z"}]
+            if "FROM `proj.ds.memory_graph_nodes`" in sql:
+                return [{"node_kind": "memory_event", "cnt": 2, "last_created_at": "2026-03-15T12:13:14Z"}]
+            if "FROM `proj.ds.memory_graph_edges`" in sql:
+                return [{"edge_type": "INFORMED_BY", "cnt": 1, "last_created_at": "2026-03-15T12:14:15Z"}]
+            if "LEFT JOIN access_summary AS a" in sql:
+                return [
+                    {
+                        "event_id": "evt_1",
+                        "created_at": "2026-03-15T08:00:00Z",
+                        "agent_id": "gpt",
+                        "event_type": "strategy_reflection",
+                        "summary": "AAPL breakout thesis improved after volume confirmation",
+                        "memory_tier": "semantic",
+                        "primary_regime": "bull",
+                        "primary_strategy_tag": "breakout",
+                        "primary_sector": "Technology",
+                        "access_count": 3,
+                        "last_accessed_at": "2026-03-15T11:12:13Z",
+                        "effective_score": 0.81,
+                        "context_tags_json": json.dumps({"regime_tags": ["bull"], "strategy_tags": ["breakout"], "sector_tags": ["tech"]}),
+                        "payload_json": json.dumps({"ticker": "AAPL"}),
+                        "access_events": 3,
+                        "prompt_uses": 2,
+                        "last_prompt_at": "2026-03-15T11:00:00Z",
+                    }
+                ]
+            return []
+
+    monkeypatch.setenv("ARENA_UI_SETTINGS_ENABLED", "true")
+    monkeypatch.setenv("ARENA_UI_AUTH_ENABLED", "false")
+    app = _build_app(repo=_MemoryActivityRepo(), settings=load_settings())
+    client = DirectRouteClient(app)
+
+    response = client.get("/api/memory/activity", params={"tenant_id": "local"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["stats"]["access_runtime"]["prompt_use_count"] == 2
+    assert payload["examples"][0]["ticker"] == "AAPL"
+    assert payload["examples"][0]["prompt_uses"] == 2
+    assert "bull" in payload["examples"][0]["badges"]
+
+
+def test_api_memory_network_returns_nodes_and_links(monkeypatch) -> None:
+    class _MemoryNetworkRepo(_DummyRepo):
+        def fetch_rows(self, sql: str, params: dict | None = None) -> list[dict]:
+            self.fetch_calls.append((sql, params))
+            if "FROM `proj.ds.memory_graph_nodes` AS n" in sql:
+                return [
+                    {
+                        "node_id": "mem_1",
+                        "created_at": "2026-03-15T08:00:00Z",
+                        "node_kind": "memory_event",
+                        "source_table": "agent_memory_events",
+                        "source_id": "evt_1",
+                        "agent_id": "gpt",
+                        "cycle_id": "cycle_1",
+                        "summary": "AAPL thesis update",
+                        "ticker": "AAPL",
+                        "memory_tier": "semantic",
+                        "primary_regime": "bull",
+                        "context_tags_json": json.dumps({"strategy_tags": ["breakout"]}),
+                        "payload_json": json.dumps({"ticker": "AAPL"}),
+                        "event_type": "thesis_update",
+                        "access_count": 4,
+                        "last_accessed_at": "2026-03-15T11:12:13Z",
+                        "effective_score": 0.88,
+                        "access_events": 4,
+                        "prompt_uses": 2,
+                    },
+                    {
+                        "node_id": "mem_2",
+                        "created_at": "2026-03-15T08:05:00Z",
+                        "node_kind": "memory_event",
+                        "source_table": "agent_memory_events",
+                        "source_id": "evt_2",
+                        "agent_id": "claude",
+                        "cycle_id": "cycle_2",
+                        "summary": "AAPL trade execution",
+                        "ticker": "AAPL",
+                        "memory_tier": "episodic",
+                        "primary_regime": "bull",
+                        "context_tags_json": json.dumps({"strategy_tags": ["breakout"]}),
+                        "payload_json": json.dumps({"ticker": "AAPL"}),
+                        "event_type": "trade_execution",
+                        "access_count": 1,
+                        "last_accessed_at": "2026-03-15T11:12:13Z",
+                        "effective_score": 0.52,
+                        "access_events": 1,
+                        "prompt_uses": 0,
+                    },
+                ]
+            if "FROM `proj.ds.memory_graph_edges`" in sql:
+                return [
+                    {
+                        "edge_id": "edge_1",
+                        "created_at": "2026-03-15T09:00:00Z",
+                        "from_node_id": "mem_1",
+                        "to_node_id": "mem_2",
+                        "edge_type": "INFORMED_BY",
+                        "edge_strength": 0.76,
+                        "confidence": 0.82,
+                        "causal_chain_id": "chain_1",
+                    }
+                ]
+            return []
+
+    monkeypatch.setenv("ARENA_UI_SETTINGS_ENABLED", "true")
+    monkeypatch.setenv("ARENA_UI_AUTH_ENABLED", "false")
+    app = _build_app(repo=_MemoryNetworkRepo(), settings=load_settings())
+    client = DirectRouteClient(app)
+
+    response = client.get("/api/memory/network", params={"tenant_id": "local", "days": 30})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["meta"]["node_count"] == 2
+    assert payload["meta"]["edge_count"] == 1
+    assert payload["meta"]["available_agents"] == ["claude", "gpt"]
+    assert payload["nodes"][0]["used_in_prompt"] is True
+    assert payload["links"][0]["edge_type"] == "INFORMED_BY"
 
 
 def test_admin_tools_lists_core_and_optional(monkeypatch) -> None:
@@ -1410,7 +1548,58 @@ def test_api_board_theses_returns_chain_and_compacted_lesson(monkeypatch) -> Non
     assert "JSON_VALUE(payload_json, '$.intent.cycle_id')" in event_sql
 
 
-def test_board_page_includes_related_thesis_panel(monkeypatch) -> None:
+def test_api_board_prompt_returns_prompt_bundle(monkeypatch) -> None:
+    class _BoardPromptRepo(_DummyRepo):
+        def fetch_rows(self, sql: str, params: dict | None = None) -> list[dict]:
+            self.fetch_calls.append((sql, params))
+            if "event_type = 'react_tools_summary'" not in sql:
+                return []
+            return [
+                {
+                    "created_at": "2026-03-29T01:02:00Z",
+                    "summary": "Board prompt bundle snapshot before post generation.",
+                    "payload_json": json.dumps(
+                        {
+                            "phase": "board",
+                            "analysis_funnel": {"pending_nonheld": 1},
+                            "tool_events": [{"tool": "screen_market", "phase": "draft"}],
+                            "tool_mix": {"quant": 1, "macro": 0, "sentiment": 0, "performance": 0, "context": 0, "other": 0},
+                            "prompt_bundle": {
+                                "system_prompt": "system body",
+                                "phases": [
+                                    {"phase": "draft", "session_id": "sid_1", "resume_session": False, "prompt": "draft body"},
+                                    {"phase": "execution", "session_id": "sid_1", "resume_session": True, "prompt": "execution body"},
+                                    {"phase": "board", "session_id": "sid_1", "resume_session": True, "prompt": "board body"},
+                                ],
+                            },
+                        }
+                    ),
+                }
+            ]
+
+    monkeypatch.setenv("ARENA_UI_SETTINGS_ENABLED", "true")
+    monkeypatch.setenv("ARENA_UI_AUTH_ENABLED", "false")
+    repo = _BoardPromptRepo()
+    client = DirectRouteClient(_build_app(repo=repo, settings=load_settings()))
+
+    response = client.get(
+        "/api/board/prompt",
+        params={
+            "tenant_id": "local",
+            "agent_id": "gpt",
+            "ts": "2026-03-29T01:00:00+00:00",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["prompt_bundle"]["system_prompt"] == "system body"
+    assert payload["prompt_bundle"]["phases"][0]["prompt"] == "draft body"
+    assert payload["analysis_funnel"]["pending_nonheld"] == 1
+    assert payload["tool_events"][0]["tool"] == "screen_market"
+
+
+def test_board_page_includes_prompt_and_memory_panels(monkeypatch) -> None:
     class _BoardRepo(_DummyRepo):
         def fetch_rows(self, sql: str, params: dict | None = None) -> list[dict]:
             self.fetch_calls.append((sql, params))
@@ -1436,9 +1625,12 @@ def test_board_page_includes_related_thesis_panel(monkeypatch) -> None:
     response = client.get("/board", params={"tenant_id": "local"})
 
     assert response.status_code == 200
+    assert 'data-prompt-panel' in response.text
     assert 'data-theses-panel' in response.text
+    assert "/api/board/prompt" in response.text
     assert "/api/board/theses" in response.text
-    assert "Related Thesis" in response.text
+    assert "Prompt Details" in response.text
+    assert "Related Memory" in response.text
 
 
 def test_board_page_empty_state_mentions_missing_gemini_key(monkeypatch) -> None:

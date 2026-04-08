@@ -15,6 +15,7 @@ from arena.ui.viewer_analytics import render_pnl_badge
 class ViewerDataHelpers:
     fetch_board: Callable[..., list[dict[str, Any]]]
     fetch_tool_events_for_post: Callable[..., dict[str, Any]]
+    fetch_prompt_bundle_for_post: Callable[..., dict[str, Any]]
     fetch_theses_for_board_post: Callable[..., dict[str, Any]]
     fetch_nav: Callable[..., list[dict[str, Any]]]
     fetch_token_usage_summary: Callable[..., dict[str, dict[str, int | float]]]
@@ -130,6 +131,49 @@ def build_viewer_data_helpers(
             "tool_events": payload.get("tool_events", []),
             "tool_mix": payload.get("tool_mix", {}),
         }
+
+    def fetch_prompt_bundle_for_post(
+        *,
+        tenant_id: str,
+        agent_id: str,
+        ts_iso: str,
+    ) -> dict[str, Any]:
+        tenant = str(tenant_id or "").strip().lower() or "local"
+        try:
+            ts_dt = datetime.fromisoformat(ts_iso.replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            return {}
+        if ts_dt.tzinfo is None:
+            ts_dt = ts_dt.replace(tzinfo=timezone.utc)
+        sql = f"""
+        SELECT created_at, summary, payload_json
+        FROM `{repo.dataset_fqn}.agent_memory_events`
+        WHERE tenant_id = @tenant_id
+          AND agent_id = @agent_id
+          AND event_type = 'react_tools_summary'
+          AND created_at BETWEEN TIMESTAMP_SUB(@ts, INTERVAL 5 MINUTE)
+                              AND TIMESTAMP_ADD(@ts, INTERVAL 5 MINUTE)
+        ORDER BY ABS(TIMESTAMP_DIFF(created_at, @ts, SECOND)) ASC
+        LIMIT 8
+        """
+        rows = repo.fetch_rows(sql, {"tenant_id": tenant, "agent_id": agent_id, "ts": ts_dt})
+        if not rows:
+            return {}
+        for row in rows:
+            payload = _json_dict(row.get("payload_json"))
+            prompt_bundle = payload.get("prompt_bundle")
+            if not isinstance(prompt_bundle, dict) or not prompt_bundle:
+                continue
+            return {
+                "created_at": _iso_ts(row.get("created_at")),
+                "summary": str(row.get("summary") or "").strip(),
+                "phase": str(payload.get("phase") or "").strip(),
+                "prompt_bundle": prompt_bundle,
+                "tool_events": payload.get("tool_events", []),
+                "tool_mix": payload.get("tool_mix", {}),
+                "analysis_funnel": payload.get("analysis_funnel", {}),
+            }
+        return {}
 
     def fetch_theses_for_board_post(
         *,
@@ -698,6 +742,7 @@ def build_viewer_data_helpers(
     return ViewerDataHelpers(
         fetch_board=fetch_board,
         fetch_tool_events_for_post=fetch_tool_events_for_post,
+        fetch_prompt_bundle_for_post=fetch_prompt_bundle_for_post,
         fetch_theses_for_board_post=fetch_theses_for_board_post,
         fetch_nav=fetch_nav,
         fetch_token_usage_summary=fetch_token_usage_summary,

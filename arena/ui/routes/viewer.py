@@ -24,6 +24,7 @@ class ViewerRouteDeps:
     latest_tenant_status_payload: Callable[[str], dict[str, Any] | None]
     fetch_board: Callable[..., list[dict[str, Any]]]
     fetch_tool_events_for_post: Callable[..., dict[str, Any]]
+    fetch_prompt_bundle_for_post: Callable[..., dict[str, Any]]
     fetch_theses_for_board_post: Callable[..., dict[str, Any]]
     fetch_nav: Callable[..., list[dict[str, Any]]]
     fetch_token_usage_summary: Callable[..., dict[str, dict[str, int | float]]]

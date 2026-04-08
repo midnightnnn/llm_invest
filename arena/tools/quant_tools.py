@@ -21,6 +21,11 @@ from arena.market_sources import (
     live_market_sources_for_markets,
 )
 from arena.open_trading.client import OpenTradingClient
+from arena.open_trading.exchange_codes import (
+    normalize_us_quote_exchange,
+    target_market_default_us_quote_exchange,
+    us_quote_exchange_candidates,
+)
 from arena.runtime_universe import resolve_runtime_universe
 
 from .allocation import (
@@ -45,6 +50,19 @@ def _to_float(value: Any, default: float | None = 0.0) -> float | None:
         return float(text)
     except (TypeError, ValueError):
         return default
+
+
+def _has_any_value(payload: dict[str, Any], *keys: str) -> bool:
+    for key in keys:
+        value = payload.get(key)
+        if value is None:
+            continue
+        if isinstance(value, str):
+            if value.strip():
+                return True
+            continue
+        return True
+    return False
 
 
 @dataclass(slots=True)
@@ -92,6 +110,48 @@ class QuantTools:
 
     def _has_kospi_market(self) -> bool:
         return bool(self._effective_markets() & _KOSPI_MARKETS)
+
+    def _us_fundamentals_exchange_candidates(self, requested_exchange: object) -> list[str]:
+        requested = str(requested_exchange or "").strip().upper()
+        market_default = target_market_default_us_quote_exchange(self._effective_market())
+        settings_default = normalize_us_quote_exchange(getattr(self.settings, "kis_overseas_quote_excd", ""))
+        return us_quote_exchange_candidates(
+            requested,
+            market_default,
+            settings_default,
+            getattr(self.settings, "us_quote_exchanges", []),
+        )
+
+    def _fetch_us_fundamental_snapshot(
+        self,
+        *,
+        client: OpenTradingClient,
+        ticker: str,
+        requested_exchange: object,
+    ) -> tuple[str, dict[str, Any]]:
+        candidates = self._us_fundamentals_exchange_candidates(requested_exchange)
+        fallback_exchange = candidates[0] if candidates else "NAS"
+        fallback_raw: dict[str, Any] | None = None
+        fallback_raw_exchange = fallback_exchange
+        last_exc: Exception | None = None
+
+        for exchange in candidates:
+            try:
+                raw = client.get_overseas_price_detail(ticker=ticker, excd=exchange)
+            except Exception as exc:
+                last_exc = exc
+                continue
+            if _has_any_value(raw, "perx", "pbrx", "epsx", "bpsx"):
+                return exchange, raw
+            if fallback_raw is None and _has_any_value(raw, "last", "tomv", "curr", "e_ordyn"):
+                fallback_raw = raw
+                fallback_raw_exchange = exchange
+
+        if fallback_raw is not None:
+            return fallback_raw_exchange, fallback_raw
+        if last_exc is not None:
+            raise last_exc
+        return fallback_exchange, {}
 
     def _portfolio_weights(self) -> tuple[dict[str, float], float, float]:
         """Returns per-ticker market value weights based on current context."""
@@ -1146,10 +1206,13 @@ class QuantTools:
         client = self._ot()
 
         # US fundamentals via overseas price detail
-        exchange = str(excd or "NAS").strip().upper()
         for ticker in us_tickers:
             try:
-                raw = client.get_overseas_price_detail(ticker=ticker, excd=exchange)
+                exchange, raw = self._fetch_us_fundamental_snapshot(
+                    client=client,
+                    ticker=ticker,
+                    requested_exchange=excd,
+                )
                 rows.append(
                     {
                         "ticker": ticker,

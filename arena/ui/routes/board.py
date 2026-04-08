@@ -119,6 +119,14 @@ var CAT_COLORS={
   context:"bg-amber-100 text-amber-700",
   other:"bg-gray-100 text-gray-600"
 };
+function escapeHtml(value){
+  return String(value==null?"":value)
+    .replace(/&/g,"&amp;")
+    .replace(/</g,"&lt;")
+    .replace(/>/g,"&gt;")
+    .replace(/"/g,"&quot;")
+    .replace(/'/g,"&#39;");
+}
 function fmtMs(ms){return ms>=1000?(ms/1000).toFixed(1)+"s":Math.round(ms)+"ms";}
 function summarizeArgs(args){
   if(!args||typeof args!=="object")return"";
@@ -159,14 +167,17 @@ function summarizeResult(r){
   return String(r).slice(0,120);
 }
 var _resultIdCounter=0;
-function buildToolPipelineHTML(data){
+function buildToolPipelineHTML(data,opts){
   var evts=data.tool_events||[];
   var mix=data.tool_mix||{};
   if(!evts.length&&!Object.keys(mix).length)
     return'<p class="text-xs text-ink-400 italic">No tool call data found for this post.</p>';
+  var hideTitle=!!(opts&&opts.hideTitle);
   var h='<div class="space-y-2">';
-  h+='<p class="text-xs font-bold uppercase tracking-widest text-ink-500 mb-2">';
-  h+='&#9881; Tool Pipeline</p>';
+  if(!hideTitle){
+    h+='<p class="text-xs font-bold uppercase tracking-widest text-ink-500 mb-2">';
+    h+='&#9881; Tool Pipeline</p>';
+  }
   var PHASE_LABELS={draft:"Draft Analysis",execution:"Execution"};
   var phases=[];var seen={};
   evts.forEach(function(ev){var p=ev.phase||"execution";if(!seen[p]){seen[p]=1;phases.push(p);}});
@@ -217,13 +228,66 @@ function buildToolPipelineHTML(data){
   });
   if(Object.keys(mix).length){
     h+='<div class="flex flex-wrap gap-2 pt-2 border-t border-ink-100/60 mt-2">';
-    h+='<span class="text-[10px] font-bold uppercase tracking-widest text-ink-400">Mix:</span>';
+    h+='<span class="text-[10px] font-bold uppercase tracking-widest text-ink-700">Mix:</span>';
     Object.keys(mix).forEach(function(k){
       var cat=k.toLowerCase();
       var cls=CAT_COLORS[cat]||CAT_COLORS.other;
       var dots="";for(var d=0;d<Math.min(mix[k],5);d++)dots+="\u25CF";
       h+='<span class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold '+cls+'">'+dots+' '+k+' ('+mix[k]+')</span>';
     });
+    h+='</div>';
+  }
+  h+='</div>';
+  return h;
+}
+function promptPhaseLabel(phase){
+  var token=String(phase||"").toLowerCase();
+  if(token==="draft")return"Draft Prompt";
+  if(token==="execution")return"Execution Prompt";
+  if(token==="board")return"Board Prompt";
+  return token?token:"Prompt";
+}
+function buildPromptSectionHTML(title,body,meta){
+  var text=String(body||"");
+  if(!text)return"";
+  var h='<div class="rounded-[18px] border border-ink-200/60 bg-white/75 p-4 shadow-sm">';
+  h+='<p class="text-[10px] font-bold uppercase tracking-widest text-ink-900">'+escapeHtml(title)+'</p>';
+  if(meta){
+    h+='<p class="mt-1 text-[10px] text-ink-700">'+escapeHtml(meta)+'</p>';
+  }
+  h+='<pre class="mt-2 max-h-96 overflow-auto whitespace-pre-wrap break-words rounded-[14px] bg-ink-950 px-3 py-3 text-[11px] leading-relaxed text-ink-50">'+escapeHtml(text)+'</pre>';
+  h+='</div>';
+  return h;
+}
+function buildPromptBundleHTML(data){
+  var payload=data&&typeof data==="object"?data:{};
+  var bundle=payload.prompt_bundle&&typeof payload.prompt_bundle==="object"?payload.prompt_bundle:{};
+  var phases=Array.isArray(bundle.phases)?bundle.phases:[];
+  var hasTools=Array.isArray(payload.tool_events)&&payload.tool_events.length;
+  if(!bundle.system_prompt&&!phases.length&&!hasTools){
+    return'<p class="text-xs text-ink-400 italic">No prompt bundle found for this post.</p>';
+  }
+  var h='<div class="space-y-3">';
+  h+='<p class="text-xs font-bold uppercase tracking-widest text-ink-900">Prompt Details</p>';
+  h+=buildPromptSectionHTML("System Prompt",bundle.system_prompt||"","");
+  phases.forEach(function(item){
+    if(!item||typeof item!=="object")return;
+    var metaBits=[];
+    if(item.session_id)metaBits.push("session "+String(item.session_id));
+    if(item.resume_session)metaBits.push("resumed");
+    h+=buildPromptSectionHTML(promptPhaseLabel(item.phase),item.prompt||"",metaBits.join(" · "));
+  });
+  if(payload.analysis_funnel&&Object.keys(payload.analysis_funnel).length){
+    h+=buildPromptSectionHTML(
+      "Analysis Funnel Snapshot",
+      JSON.stringify(payload.analysis_funnel,null,2),
+      "Pre-board funnel telemetry"
+    );
+  }
+  if(hasTools){
+    h+='<div class="rounded-[18px] border border-ink-200/60 bg-white/75 p-4 shadow-sm">';
+    h+='<p class="text-[10px] font-bold uppercase tracking-widest text-ink-900">Compacted Tool Transcript</p>';
+    h+='<div class="mt-2">'+buildToolPipelineHTML({tool_events:payload.tool_events||[],tool_mix:payload.tool_mix||{}},{hideTitle:true})+'</div>';
     h+='</div>';
   }
   h+='</div>';
@@ -274,7 +338,7 @@ function thesisEventLabel(eventType){
 function buildThesisPanelHTML(data){
   var chains=data&&Array.isArray(data.chains)?data.chains:[];
   if(!chains.length)return"";
-  var h='<p class="text-xs font-bold uppercase tracking-widest text-ink-500 mb-2">Related Thesis ('+chains.length+')</p>';
+  var h='<p class="text-xs font-bold uppercase tracking-widest text-ink-500 mb-2">Related Memory ('+chains.length+')</p>';
   h+='<div class="space-y-3">';
   chains.forEach(function(chain){
     var ticker=chain.ticker||"";
@@ -326,6 +390,42 @@ function buildThesisPanelHTML(data){
   h+='</div>';
   return h;
 }
+function setToggleLabel(btn,panel,label){
+  if(!btn||!panel)return;
+  btn.innerHTML=(panel.classList.contains("hidden")?"&#9656; ":"&#9662; ")+label;
+}
+document.addEventListener("click",function(ev){
+  var btn=ev.target.closest("[data-prompt-toggle]");
+  if(!btn)return;
+  var article=btn.closest("article");
+  var panel=article.querySelector("[data-prompt-panel]");
+  if(panel.dataset.loaded==="1"){
+    panel.classList.toggle("hidden");
+    setToggleLabel(btn,panel,"Prompt Details");
+    return;
+  }
+  btn.innerHTML="&#8987; Loading...";
+  var url="/api/board/prompt?tenant_id="+encodeURIComponent(_boardTenant)
+    +"&agent_id="+encodeURIComponent(article.dataset.agentId)
+    +"&ts="+encodeURIComponent(article.dataset.ts);
+  fetch(url).then(function(r){
+    if(!r.ok)throw new Error("HTTP "+r.status);
+    return r.json();
+  }).then(function(data){
+    if(data.error){
+      panel.innerHTML='<p class="text-xs text-red-500">'+escapeHtml(data.error)+'</p>';
+    }else{
+      panel.innerHTML=buildPromptBundleHTML(data);
+    }
+    panel.dataset.loaded="1";
+    panel.classList.remove("hidden");
+    setToggleLabel(btn,panel,"Prompt Details");
+  }).catch(function(e){
+    panel.innerHTML='<p class="text-xs text-red-500">Failed to load prompt bundle: '+escapeHtml(e.message||e)+'</p>';
+    panel.classList.remove("hidden");
+    setToggleLabel(btn,panel,"Prompt Details");
+  });
+});
 document.addEventListener("click",function(ev){
   var btn=ev.target.closest("[data-tool-toggle]");
   if(!btn)return;
@@ -333,7 +433,7 @@ document.addEventListener("click",function(ev){
   var panel=article.querySelector("[data-tool-panel]");
   if(panel.dataset.loaded==="1"){
     panel.classList.toggle("hidden");
-    btn.innerHTML=panel.classList.contains("hidden")?"&#9656; Tool Details":"&#9662; Tool Details";
+    setToggleLabel(btn,panel,"Tool Details");
     return;
   }
   btn.innerHTML="&#8987; Loading...";
@@ -351,11 +451,46 @@ document.addEventListener("click",function(ev){
     }
     panel.dataset.loaded="1";
     panel.classList.remove("hidden");
-    btn.innerHTML="&#9662; Tool Details";
+    setToggleLabel(btn,panel,"Tool Details");
   }).catch(function(e){
-    panel.innerHTML='<p class="text-xs text-red-500">Failed to load tool data: '+(e.message||e)+'</p>';
+    panel.innerHTML='<p class="text-xs text-red-500">Failed to load tool data: '+escapeHtml(e.message||e)+'</p>';
     panel.classList.remove("hidden");
-    btn.innerHTML="&#9656; Tool Details";
+    setToggleLabel(btn,panel,"Tool Details");
+  });
+});
+document.addEventListener("click",function(ev){
+  var btn=ev.target.closest("[data-memory-toggle]");
+  if(!btn)return;
+  var article=btn.closest("article");
+  var panel=article.querySelector("[data-theses-panel]");
+  if(panel.dataset.loaded==="1"){
+    panel.classList.toggle("hidden");
+    setToggleLabel(btn,panel,"Related Memory");
+    return;
+  }
+  btn.innerHTML="&#8987; Loading...";
+  var cycleId=article.dataset.cycleId||"";
+  var agentId=article.dataset.agentId||"";
+  var url="/api/board/theses?tenant_id="+encodeURIComponent(_boardTenant)
+    +"&cycle_id="+encodeURIComponent(cycleId)
+    +"&agent_id="+encodeURIComponent(agentId);
+  fetch(url).then(function(r){
+    if(!r.ok)throw new Error("HTTP "+r.status);
+    return r.json();
+  }).then(function(data){
+    var html=buildThesisPanelHTML(data);
+    if(!html){
+      panel.innerHTML='<p class="text-xs text-ink-400 italic">No related memory found for this post.</p>';
+    }else{
+      panel.innerHTML=html;
+    }
+    panel.dataset.loaded="1";
+    panel.classList.remove("hidden");
+    setToggleLabel(btn,panel,"Related Memory");
+  }).catch(function(e){
+    panel.innerHTML='<p class="text-xs text-red-500">Failed to load related memory: '+escapeHtml(e.message||e)+'</p>';
+    panel.classList.remove("hidden");
+    setToggleLabel(btn,panel,"Related Memory");
   });
 });
 document.addEventListener("click",function(ev){
@@ -409,28 +544,8 @@ document.addEventListener("DOMContentLoaded",function(){
         panel.classList.remove("hidden");
       }
     }).catch(function(e){
-      panel.innerHTML='<p class="text-xs text-red-500">Failed to load trades: '+(e.message||e)+'</p>';
+      panel.innerHTML='<p class="text-xs text-red-500">Failed to load trades: '+escapeHtml(e.message||e)+'</p>';
       panel.classList.remove("hidden");
-    });
-    var thesisPanel=article.querySelector("[data-theses-panel]");
-    if(!thesisPanel)return;
-    var thesisUrl="/api/board/theses?tenant_id="+encodeURIComponent(_boardTenant)
-      +"&cycle_id="+encodeURIComponent(cycleId)
-      +"&agent_id="+encodeURIComponent(agentId);
-    fetch(thesisUrl).then(function(r){
-      if(!r.ok)throw new Error("HTTP "+r.status);
-      return r.json();
-    }).then(function(data){
-      var html=buildThesisPanelHTML(data);
-      if(!html){
-        thesisPanel.innerHTML="";
-      }else{
-        thesisPanel.innerHTML=html;
-        thesisPanel.classList.remove("hidden");
-      }
-    }).catch(function(e){
-      thesisPanel.innerHTML='<p class="text-xs text-red-500">Failed to load thesis data: '+(e.message||e)+'</p>';
-      thesisPanel.classList.remove("hidden");
     });
   });
 });
@@ -587,6 +702,27 @@ document.addEventListener("DOMContentLoaded",function(){
         if redirect:
             return JSONResponse({"error": "auth required"}, status_code=401)
         data = deps.fetch_tool_events_for_post(
+            tenant_id=tenant,
+            agent_id=agent_id.strip().lower(),
+            ts_iso=ts,
+        )
+        return deps.json_response(data, max_age=60)
+
+    @app.get("/api/board/prompt")
+    def api_board_prompt(
+        request: Request,
+        tenant_id: str = Query(default="", description="tenant id"),
+        agent_id: str = Query(..., description="agent id"),
+        ts: str = Query(..., description="ISO timestamp of the board post"),
+    ) -> JSONResponse:
+        tenant, _, _, redirect = deps.resolve_viewer_context(
+            request,
+            requested_tenant=tenant_id,
+            next_path=f"/api/board/prompt?tenant_id={tenant_id}",
+        )
+        if redirect:
+            return JSONResponse({"error": "auth required"}, status_code=401)
+        data = deps.fetch_prompt_bundle_for_post(
             tenant_id=tenant,
             agent_id=agent_id.strip().lower(),
             ts_iso=ts,

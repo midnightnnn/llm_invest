@@ -212,6 +212,10 @@ def test_context_builder_falls_back_to_default_universe() -> None:
     assert context["order_budget"]["daily_orders_cap"] is None
     assert context["sleeve_state"]["target_sleeve_krw"] == 2_000_000
     assert context["sleeve_state"]["current_equity_krw"] == 1_200_000
+    assert "Positions:" not in context["performance_context"]
+    assert "Budget " not in context["performance_context"]
+    assert "Daily orders" not in context["performance_context"]
+    assert "Cash " not in context["performance_context"]
 
 
 def test_context_builder_loads_ticker_names_for_current_positions() -> None:

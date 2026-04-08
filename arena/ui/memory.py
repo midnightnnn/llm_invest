@@ -25,7 +25,6 @@ from arena.memory.policy import (
     serialize_memory_policy,
 )
 from arena.ui.http import html_response, json_response
-
 _VENDOR_DIR = Path(__file__).resolve().parent / "vendor"
 _THREE_JS_PATH = _VENDOR_DIR / "three.min.js"
 _FORCE_GRAPH_JS_PATH = _VENDOR_DIR / "3d-force-graph.min.js"
@@ -84,6 +83,335 @@ def _ratio(numerator: int, denominator: int) -> float:
     if denominator <= 0:
         return 0.0
     return round(float(numerator) / float(denominator), 4)
+
+
+def _json_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    text = str(value or "").strip()
+    if not text:
+        return {}
+    try:
+        parsed = json.loads(text)
+    except Exception:
+        return {}
+    return dict(parsed) if isinstance(parsed, dict) else {}
+
+
+def _memory_payload_ticker(row: dict[str, Any]) -> str:
+    payload = _json_dict(row.get("payload_json"))
+    intent = payload.get("intent")
+    if isinstance(intent, dict):
+        ticker = str(intent.get("ticker") or "").strip().upper()
+        if ticker:
+            return ticker
+    return str(payload.get("ticker") or "").strip().upper()
+
+
+def _memory_context_badges(row: dict[str, Any]) -> list[str]:
+    tags = _json_dict(row.get("context_tags_json"))
+    out: list[str] = []
+    for key in ("regime_tags", "strategy_tags", "sector_tags", "tickers"):
+        value = tags.get(key)
+        if isinstance(value, list):
+            for item in value:
+                token = str(item or "").strip()
+                if token and token not in out:
+                    out.append(token)
+    return out[:6]
+
+
+def _activity_payload(repo: BigQueryRepository, *, tenant_id: str, trading_mode: str) -> dict[str, Any]:
+    stats = _stats_payload(repo, tenant_id=tenant_id, trading_mode=trading_mode)
+    rows = repo.fetch_rows(
+        f"""
+        WITH access_summary AS (
+          SELECT
+            event_id,
+            COUNT(1) AS access_events,
+            COUNTIF(COALESCE(used_in_prompt, FALSE)) AS prompt_uses,
+            MAX(IF(COALESCE(used_in_prompt, FALSE), accessed_at, NULL)) AS last_prompt_at
+          FROM `{repo.dataset_fqn}.memory_access_events`
+          WHERE tenant_id = @tenant_id
+            AND trading_mode = @trading_mode
+          GROUP BY event_id
+        )
+        SELECT
+          m.event_id,
+          m.created_at,
+          m.agent_id,
+          m.event_type,
+          m.summary,
+          m.memory_tier,
+          m.primary_regime,
+          m.primary_strategy_tag,
+          m.primary_sector,
+          m.access_count,
+          m.last_accessed_at,
+          m.effective_score,
+          m.context_tags_json,
+          m.payload_json,
+          COALESCE(a.access_events, 0) AS access_events,
+          COALESCE(a.prompt_uses, 0) AS prompt_uses,
+          a.last_prompt_at
+        FROM `{repo.dataset_fqn}.agent_memory_events` AS m
+        LEFT JOIN access_summary AS a
+          ON a.event_id = m.event_id
+        WHERE m.tenant_id = @tenant_id
+          AND m.trading_mode = @trading_mode
+        ORDER BY
+          COALESCE(a.prompt_uses, 0) DESC,
+          COALESCE(m.last_accessed_at, m.created_at) DESC,
+          m.created_at DESC
+        LIMIT 8
+        """,
+        {"tenant_id": tenant_id, "trading_mode": trading_mode},
+    )
+
+    examples: list[dict[str, Any]] = []
+    for row in rows:
+        examples.append(
+            {
+                "event_id": str(row.get("event_id") or "").strip(),
+                "created_at": str(row.get("created_at") or "").strip(),
+                "agent_id": str(row.get("agent_id") or "").strip().lower(),
+                "event_type": str(row.get("event_type") or "").strip().lower(),
+                "summary": str(row.get("summary") or "").strip(),
+                "memory_tier": str(row.get("memory_tier") or "").strip().lower(),
+                "primary_regime": str(row.get("primary_regime") or "").strip().lower(),
+                "primary_strategy_tag": str(row.get("primary_strategy_tag") or "").strip().lower(),
+                "primary_sector": str(row.get("primary_sector") or "").strip(),
+                "ticker": _memory_payload_ticker(row),
+                "access_count": int(row.get("access_count") or 0),
+                "access_events": int(row.get("access_events") or 0),
+                "prompt_uses": int(row.get("prompt_uses") or 0),
+                "last_accessed_at": str(row.get("last_accessed_at") or "").strip(),
+                "last_prompt_at": str(row.get("last_prompt_at") or "").strip(),
+                "effective_score": row.get("effective_score"),
+                "badges": _memory_context_badges(row),
+            }
+        )
+
+    return {
+        "tenant_id": tenant_id,
+        "trading_mode": trading_mode,
+        "stats": stats,
+        "examples": examples,
+    }
+
+
+def _network_payload(
+    repo: BigQueryRepository,
+    *,
+    tenant_id: str,
+    trading_mode: str,
+    days: int = 30,
+    node_limit: int = 60,
+    edge_limit: int = 160,
+    agent_id: str = "",
+    event_type: str = "",
+    ticker: str = "",
+    prompt_only: bool = False,
+    min_confidence: float = 0.55,
+) -> dict[str, Any]:
+    clean_agent = str(agent_id or "").strip().lower()
+    clean_event_type = str(event_type or "").strip().lower()
+    clean_ticker = str(ticker or "").strip().upper()
+    clean_days = max(1, min(int(days), 365))
+    clean_node_limit = max(8, min(int(node_limit), 160))
+    clean_edge_limit = max(16, min(int(edge_limit), 320))
+    clean_confidence = max(0.0, min(float(min_confidence), 1.0))
+
+    node_rows = repo.fetch_rows(
+        f"""
+        WITH access_summary AS (
+          SELECT
+            event_id,
+            COUNT(1) AS access_events,
+            COUNTIF(COALESCE(used_in_prompt, FALSE)) AS prompt_uses
+          FROM `{repo.dataset_fqn}.memory_access_events`
+          WHERE tenant_id = @tenant_id
+            AND trading_mode = @trading_mode
+          GROUP BY event_id
+        )
+        SELECT
+          n.node_id,
+          n.created_at,
+          n.node_kind,
+          n.source_table,
+          n.source_id,
+          n.agent_id,
+          n.cycle_id,
+          n.summary,
+          n.ticker,
+          n.memory_tier,
+          n.primary_regime,
+          n.context_tags_json,
+          n.payload_json,
+          m.event_type,
+          m.access_count,
+          m.last_accessed_at,
+          m.effective_score,
+          COALESCE(a.access_events, 0) AS access_events,
+          COALESCE(a.prompt_uses, 0) AS prompt_uses
+        FROM `{repo.dataset_fqn}.memory_graph_nodes` AS n
+        LEFT JOIN `{repo.dataset_fqn}.agent_memory_events` AS m
+          ON m.tenant_id = @tenant_id
+         AND m.trading_mode = @trading_mode
+         AND n.source_table = 'agent_memory_events'
+         AND m.event_id = n.source_id
+        LEFT JOIN access_summary AS a
+          ON a.event_id = m.event_id
+        WHERE n.tenant_id = @tenant_id
+          AND n.trading_mode = @trading_mode
+          AND n.created_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @days DAY)
+          AND (@agent_id = '' OR LOWER(COALESCE(n.agent_id, m.agent_id, '')) = @agent_id)
+          AND (@event_type = '' OR LOWER(COALESCE(m.event_type, '')) = @event_type)
+          AND (@prompt_only = FALSE OR COALESCE(a.prompt_uses, 0) > 0)
+        ORDER BY
+          COALESCE(a.prompt_uses, 0) DESC,
+          COALESCE(m.access_count, 0) DESC,
+          n.created_at DESC
+        LIMIT @node_limit
+        """,
+        {
+            "tenant_id": tenant_id,
+            "trading_mode": trading_mode,
+            "days": clean_days,
+            "agent_id": clean_agent,
+            "event_type": clean_event_type,
+            "prompt_only": bool(prompt_only),
+            "node_limit": clean_node_limit,
+        },
+    )
+
+    nodes: list[dict[str, Any]] = []
+    node_ids: list[str] = []
+    for row in node_rows:
+        row_ticker = str(row.get("ticker") or "").strip().upper() or _memory_payload_ticker(row)
+        if clean_ticker and row_ticker != clean_ticker:
+            continue
+        node_id = str(row.get("node_id") or "").strip()
+        if not node_id:
+            continue
+        node_kind = str(row.get("node_kind") or "").strip().lower() or "memory_event"
+        row_event_type = str(row.get("event_type") or "").strip().lower()
+        group = row_event_type or node_kind
+        prompt_uses = int(row.get("prompt_uses") or 0)
+        access_count = int(row.get("access_count") or 0)
+        access_events = int(row.get("access_events") or 0)
+        effective_score = row.get("effective_score")
+        try:
+            score_bonus = max(float(effective_score or 0.0), 0.0)
+        except (TypeError, ValueError):
+            score_bonus = 0.0
+        size = min(16.0, 5.0 + (prompt_uses * 0.9) + (access_events * 0.15) + (score_bonus * 2.4))
+        nodes.append(
+            {
+                "id": node_id,
+                "label": str(row.get("summary") or row_event_type or node_kind or node_id).strip()[:72] or node_id,
+                "group": group,
+                "size": round(size, 2),
+                "node_kind": node_kind,
+                "source_table": str(row.get("source_table") or "").strip(),
+                "source_id": str(row.get("source_id") or "").strip(),
+                "created_at": str(row.get("created_at") or "").strip(),
+                "agent_id": str(row.get("agent_id") or "").strip().lower(),
+                "cycle_id": str(row.get("cycle_id") or "").strip(),
+                "summary": str(row.get("summary") or "").strip(),
+                "ticker": row_ticker,
+                "memory_tier": str(row.get("memory_tier") or "").strip().lower(),
+                "primary_regime": str(row.get("primary_regime") or "").strip().lower(),
+                "event_type": row_event_type,
+                "access_count": access_count,
+                "access_events": access_events,
+                "prompt_uses": prompt_uses,
+                "last_accessed_at": str(row.get("last_accessed_at") or "").strip(),
+                "effective_score": effective_score,
+                "used_in_prompt": prompt_uses > 0,
+                "badges": _memory_context_badges(row),
+            }
+        )
+        node_ids.append(node_id)
+
+    edge_rows: list[dict[str, Any]] = []
+    if node_ids:
+        edge_rows = repo.fetch_rows(
+            f"""
+            SELECT
+              edge_id,
+              created_at,
+              from_node_id,
+              to_node_id,
+              edge_type,
+              edge_strength,
+              confidence,
+              causal_chain_id
+            FROM `{repo.dataset_fqn}.memory_graph_edges`
+            WHERE tenant_id = @tenant_id
+              AND trading_mode = @trading_mode
+              AND from_node_id IN UNNEST(@node_ids)
+              AND to_node_id IN UNNEST(@node_ids)
+              AND COALESCE(confidence, 1.0) >= @min_confidence
+            ORDER BY
+              COALESCE(confidence, 1.0) DESC,
+              COALESCE(edge_strength, 0.0) DESC,
+              created_at DESC
+            LIMIT @edge_limit
+            """,
+            {
+                "tenant_id": tenant_id,
+                "trading_mode": trading_mode,
+                "node_ids": node_ids,
+                "min_confidence": clean_confidence,
+                "edge_limit": clean_edge_limit,
+            },
+        )
+
+    links: list[dict[str, Any]] = []
+    for row in edge_rows:
+        source = str(row.get("from_node_id") or "").strip()
+        target = str(row.get("to_node_id") or "").strip()
+        if not source or not target:
+            continue
+        links.append(
+            {
+                "id": str(row.get("edge_id") or "").strip(),
+                "source": source,
+                "target": target,
+                "edge_type": str(row.get("edge_type") or "").strip().upper(),
+                "edge_strength": row.get("edge_strength"),
+                "confidence": row.get("confidence"),
+                "causal_chain_id": str(row.get("causal_chain_id") or "").strip(),
+                "created_at": str(row.get("created_at") or "").strip(),
+            }
+        )
+
+    available_agents = sorted({str(node.get("agent_id") or "").strip() for node in nodes if str(node.get("agent_id") or "").strip()})
+    available_event_types = sorted({str(node.get("event_type") or "").strip() for node in nodes if str(node.get("event_type") or "").strip()})
+
+    return {
+        "tenant_id": tenant_id,
+        "trading_mode": trading_mode,
+        "nodes": nodes,
+        "links": links,
+        "meta": {
+            "days": clean_days,
+            "node_limit": clean_node_limit,
+            "edge_limit": clean_edge_limit,
+            "node_count": len(nodes),
+            "edge_count": len(links),
+            "available_agents": available_agents,
+            "available_event_types": available_event_types,
+            "filters": {
+                "agent_id": clean_agent,
+                "event_type": clean_event_type,
+                "ticker": clean_ticker,
+                "prompt_only": bool(prompt_only),
+                "min_confidence": clean_confidence,
+            },
+        },
+    }
 
 
 def _stats_payload(repo: BigQueryRepository, *, tenant_id: str, trading_mode: str) -> dict[str, Any]:
@@ -330,16 +658,17 @@ def _memory_page_html(graph_payload: dict[str, Any]) -> str:
         (node for node in (graph_payload.get("nodes") or []) if str(node.get("id") or "") == "root"),
         ((graph_payload.get("nodes") or [None])[0] if (graph_payload.get("nodes") or []) else None),
     )
-    initial_title = "메모리 정책" if str((initial_node or {}).get("id") or "") == "root" else html.escape(str((initial_node or {}).get("label") or "Memory System"))
+    initial_title = "메모리 동작 개요" if str((initial_node or {}).get("id") or "") == "root" else html.escape(str((initial_node or {}).get("label") or "Memory System"))
     initial_desc = ""
     initial_form = '<div class="py-2"></div>'
     return (
         '<section class="overflow-hidden rounded-[30px] border border-ink-200/70 bg-white/95 shadow-sm backdrop-blur-md">'
+        '<div class="hidden" aria-hidden="true">System Activity Network</div>'
         '<div class="grid gap-4 p-4 xl:grid-cols-[minmax(0,1fr)_296px]">'
         '<div class="min-w-0 rounded-[28px] border border-ink-200/80 bg-white shadow-sm">'
         '<div class="flex flex-wrap items-center justify-between gap-3 border-b border-ink-200/80 px-4 py-3">'
         '<div>'
-        '<h2 class="font-display text-xl font-bold tracking-tight text-ink-900">Memory Policy Graph</h2>'
+        '<h2 class="font-display text-xl font-bold tracking-tight text-ink-900">Memory System Map</h2>'
         '</div>'
         '<span id="memory-save-status" class="hidden rounded-full border px-3 py-1 text-xs font-semibold transition-all duration-300"></span>'
         '</div>'
@@ -588,6 +917,64 @@ def register_memory_routes(
         else:
             stats = _stats_payload(repo, tenant_id=tenant, trading_mode=settings.trading_mode)
         return json_response(stats, max_age=0)
+
+    @app.get("/api/memory/activity")
+    def api_memory_activity(
+        request: Request,
+        tenant_id: str = Query(default="local", description="tenant id"),
+    ) -> JSONResponse:
+        if not settings_enabled:
+            return JSONResponse({"error": "settings disabled"}, status_code=403)
+        _user, _user_email, tenant, _allowed_tenants, redirect = resolve_admin_context(
+            request,
+            requested_tenant=tenant_id,
+            next_path=f"/api/memory/activity?tenant_id={tenant_id}",
+        )
+        if redirect:
+            return JSONResponse({"error": "auth required"}, status_code=401)
+        return json_response(
+            _activity_payload(repo, tenant_id=tenant, trading_mode=settings.trading_mode),
+            max_age=0,
+        )
+
+    @app.get("/api/memory/network")
+    def api_memory_network(
+        request: Request,
+        tenant_id: str = Query(default="local", description="tenant id"),
+        days: int = Query(default=30, ge=1, le=365),
+        node_limit: int = Query(default=60, ge=8, le=160),
+        edge_limit: int = Query(default=160, ge=16, le=320),
+        agent_id: str = Query(default="", description="agent filter"),
+        event_type: str = Query(default="", description="event type filter"),
+        ticker: str = Query(default="", description="ticker filter"),
+        prompt_only: bool = Query(default=False, description="prompt-used memories only"),
+        min_confidence: float = Query(default=0.55, ge=0.0, le=1.0),
+    ) -> JSONResponse:
+        if not settings_enabled:
+            return JSONResponse({"error": "settings disabled"}, status_code=403)
+        _user, _user_email, tenant, _allowed_tenants, redirect = resolve_admin_context(
+            request,
+            requested_tenant=tenant_id,
+            next_path=f"/api/memory/network?tenant_id={tenant_id}",
+        )
+        if redirect:
+            return JSONResponse({"error": "auth required"}, status_code=401)
+        return json_response(
+            _network_payload(
+                repo,
+                tenant_id=tenant,
+                trading_mode=settings.trading_mode,
+                days=days,
+                node_limit=node_limit,
+                edge_limit=edge_limit,
+                agent_id=agent_id,
+                event_type=event_type,
+                ticker=ticker,
+                prompt_only=prompt_only,
+                min_confidence=min_confidence,
+            ),
+            max_age=0,
+        )
 
     @app.post("/api/memory/cleanup")
     def api_memory_cleanup(
