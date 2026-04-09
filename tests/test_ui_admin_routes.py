@@ -1074,8 +1074,8 @@ def test_memory_settings_page_uses_compact_prompt_copy(monkeypatch) -> None:
     response = client.get("/settings?tenant_id=local&tab=memory")
 
     assert response.status_code == 200
-    assert "Memory System Map" in response.text
-    assert "System" in response.text
+    assert "Memory Map" in response.text
+    assert "Map" in response.text
     assert "Activity" in response.text
     assert "Network" in response.text
     assert "회고 정리 안내문" in response.text

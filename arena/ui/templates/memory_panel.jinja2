@@ -1,43 +1,96 @@
-<section class="overflow-hidden rounded-3xl border border-ink-200/70 bg-white/95 shadow-sm backdrop-blur-md">
+<section class="overflow-hidden rounded-[30px] border border-ink-200/70 bg-white/95 shadow-sm backdrop-blur-md">
   <div class="border-b border-ink-200/70 px-5 pt-4 pb-3">
     <div class="inline-flex rounded-full border border-slate-200 bg-slate-50/80 p-1">
-      <button type="button" data-memory-tab="system" class="memory-tab-btn rounded-full bg-slate-900 px-4 py-1.5 text-xs font-semibold text-white transition-all">System</button>
+      <button type="button" data-memory-tab="map" class="memory-tab-btn rounded-full bg-slate-900 px-4 py-1.5 text-xs font-semibold text-white transition-all">Map</button>
       <button type="button" data-memory-tab="activity" class="memory-tab-btn rounded-full px-4 py-1.5 text-xs font-semibold text-slate-500 transition-all hover:bg-white hover:text-slate-700">Activity</button>
-      <button type="button" data-memory-tab="network" class="memory-tab-btn rounded-full px-4 py-1.5 text-xs font-semibold text-slate-500 transition-all hover:bg-white hover:text-slate-700">Network</button>
     </div>
   </div>
 
-  <div data-memory-tab-panel="system" class="p-4">
-    <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_280px]">
-      <div class="min-w-0 rounded-2xl border border-ink-200/80 bg-white shadow-sm">
-        <div class="flex items-center justify-between gap-3 border-b border-ink-200/80 px-5 py-3">
-          <h2 class="text-sm font-bold text-ink-900">Memory System Map</h2>
-          <span id="memory-save-status" class="hidden rounded-full border px-3 py-1 text-xs font-semibold transition-all"></span>
+  {# ── Map Tab (unified graph) ── #}
+  <div data-memory-tab-panel="map" class="p-4">
+    <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_296px]">
+      <div class="min-w-0 rounded-[28px] border border-ink-200/80 bg-white shadow-sm">
+        <div class="border-b border-ink-200/80 px-4 py-3">
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <div class="flex items-center gap-2">
+              <h2 class="font-display text-xl font-bold tracking-tight text-ink-900">Memory Map</h2>
+              <span class="group relative cursor-help">
+                <svg class="h-4 w-4 text-slate-400 transition-colors group-hover:text-slate-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4m0-4h.01"/></svg>
+                <span class="pointer-events-none absolute bottom-full left-1/2 z-30 mb-2 w-64 -translate-x-1/2 rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs leading-relaxed text-slate-600 opacity-0 shadow-lg transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">에이전트의 메모리 정책을 시각화한 지도입니다. 각 노드를 클릭해서 기억 저장, 검색, 망각 방식을 직접 설정할 수 있습니다. Memories를 켜면 실제 메모리 이벤트가 관련 정책 주변에 표시됩니다.</span>
+              </span>
+            </div>
+            <div class="flex items-center gap-3">
+              <label class="inline-flex items-center gap-2 cursor-pointer">
+                <span class="text-xs font-medium text-slate-500">Memories</span>
+                <span class="relative inline-flex h-5 w-9 items-center">
+                  <input id="memory-layer-toggle" type="checkbox" checked class="peer sr-only"/>
+                  <span class="absolute inset-0 rounded-full bg-slate-200 transition-colors peer-checked:bg-cyan-400"></span>
+                  <span class="absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform peer-checked:translate-x-4"></span>
+                </span>
+              </label>
+              <span id="memory-save-status" class="hidden rounded-full border px-3 py-1 text-xs font-semibold transition-all duration-300"></span>
+            </div>
+          </div>
+          {# ── Filter bar (hidden until Memories toggle on) ── #}
+          <div id="memory-map-filters" class="mt-3 flex flex-wrap items-end gap-2.5 border-t border-slate-100 pt-3">
+            <label class="min-w-[80px]">
+              <span class="text-[11px] font-medium text-slate-500">기간</span>
+              <select id="memory-map-days" class="mt-0.5 w-full rounded-lg border border-ink-200 bg-white px-2.5 py-1 text-xs text-ink-700 outline-none focus:ring-2 focus:ring-brand-500/40">
+                <option value="7">7일</option>
+                <option value="30" selected>30일</option>
+                <option value="90">90일</option>
+              </select>
+            </label>
+            <label class="min-w-[90px] flex-1">
+              <span class="text-[11px] font-medium text-slate-500">Agent</span>
+              <select id="memory-map-agent" class="mt-0.5 w-full rounded-lg border border-ink-200 bg-white px-2.5 py-1 text-xs text-ink-700 outline-none focus:ring-2 focus:ring-brand-500/40">
+                <option value="">전체</option>
+              </select>
+            </label>
+            <label class="min-w-[90px] flex-1">
+              <span class="text-[11px] font-medium text-slate-500">Event</span>
+              <select id="memory-map-event" class="mt-0.5 w-full rounded-lg border border-ink-200 bg-white px-2.5 py-1 text-xs text-ink-700 outline-none focus:ring-2 focus:ring-brand-500/40">
+                <option value="">전체</option>
+              </select>
+            </label>
+            <label class="min-w-[90px] flex-1">
+              <span class="text-[11px] font-medium text-slate-500">Ticker</span>
+              <input id="memory-map-ticker" type="text" placeholder="AAPL" class="mt-0.5 w-full rounded-lg border border-ink-200 bg-white px-2.5 py-1 text-xs uppercase text-ink-700 outline-none focus:ring-2 focus:ring-brand-500/40"/>
+            </label>
+            <label class="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-medium text-slate-600">
+              <input id="memory-map-prompt-only" type="checkbox" class="h-3 w-3 rounded border-slate-300 text-cyan-600 focus:ring-cyan-500/40"/>
+              <span>프롬프트만</span>
+            </label>
+            <button id="memory-map-refresh" type="button" class="rounded-lg bg-slate-900 px-3 py-1 text-[11px] font-semibold text-white transition-all hover:bg-slate-800">새로고침</button>
+          </div>
         </div>
-        <div class="relative min-w-0 overflow-hidden rounded-b-2xl bg-gradient-to-br from-white via-slate-50/40 to-blue-50/30">
+        <div class="relative min-w-0 overflow-hidden rounded-b-[28px] bg-[linear-gradient(135deg,#ffffff_0%,#f7fbff_52%,#eef5ff_100%)]">
           <div id="memory-graph" class="h-[440px] w-full min-w-0 xl:h-[460px]"></div>
         </div>
       </div>
 
       <aside id="memory-panel" class="relative xl:sticky xl:top-24 xl:max-h-[calc(100vh-7rem)] xl:overflow-y-auto styled-scrollbar">
-        <div id="memory-panel-loading" class="pointer-events-none absolute inset-0 z-20 hidden items-center justify-center rounded-2xl bg-white/70 backdrop-blur-[2px]">
-          <div class="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm">
+        <div id="memory-panel-loading" class="pointer-events-none absolute inset-0 z-20 hidden items-center justify-center rounded-[28px] bg-white/70 backdrop-blur-[2px]">
+          <div class="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-sm">
             <span class="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-slate-300 border-t-slate-700"></span>
             <span id="memory-panel-loading-text">저장 중...</span>
           </div>
         </div>
 
-        <div class="overflow-hidden rounded-2xl border border-slate-200/60 bg-white shadow-sm">
-          <div id="memory-panel-header" class="px-5 pb-4 pt-5">
-            <div id="memory-panel-breadcrumb"></div>
-            <div class="flex items-center gap-2">
-              <span id="memory-panel-dot" class="h-2 w-2 rounded-full bg-cyan-500 transition-colors"></span>
-              <h3 id="memory-panel-title" class="text-base font-bold text-slate-900">{{ initial_title }}</h3>
+        <div class="overflow-hidden rounded-[28px] border border-slate-200/60 bg-white shadow-[0_1px_3px_rgba(15,23,42,0.04),0_12px_40px_rgba(15,23,42,0.06)]">
+          <div id="memory-panel-header" class="relative overflow-hidden px-6 pb-5 pt-6">
+            <div class="absolute inset-0 bg-gradient-to-br from-slate-50/80 via-white to-slate-50/40"></div>
+            <div class="relative">
+              <div id="memory-panel-breadcrumb"></div>
+              <div class="flex items-center gap-2.5">
+                <span id="memory-panel-dot" class="h-2.5 w-2.5 rounded-full bg-cyan-500 shadow-[0_0_8px_rgba(6,182,212,0.35)] transition-colors duration-300"></span>
+                <h3 id="memory-panel-title" class="font-display text-[1.3rem] font-bold leading-tight tracking-tight text-slate-900">{{ initial_title }}</h3>
+              </div>
+              <p id="memory-panel-desc" class="hidden mt-2.5 text-[13px] leading-relaxed text-slate-500"></p>
             </div>
-            <p id="memory-panel-desc" class="hidden mt-2 text-sm leading-relaxed text-slate-500"></p>
           </div>
-          <div class="h-px bg-slate-200/80"></div>
-          <div id="memory-panel-form" class="px-5 py-4">
+          <div class="h-px bg-gradient-to-r from-transparent via-slate-200/80 to-transparent"></div>
+          <div id="memory-panel-form" class="px-5 py-5">
             <div class="py-2"></div>
           </div>
         </div>
@@ -45,58 +98,9 @@
     </div>
   </div>
 
+  {# ── Activity Tab ── #}
   <div data-memory-tab-panel="activity" class="hidden p-4">
     <div id="memory-activity-content" class="space-y-4"></div>
-  </div>
-
-  <div data-memory-tab-panel="network" class="hidden p-4">
-    <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_300px]">
-      <div class="min-w-0 rounded-2xl border border-ink-200/80 bg-white shadow-sm">
-        <div class="border-b border-ink-200/80 px-5 py-3">
-          <div class="flex flex-wrap items-end gap-3">
-            <label class="min-w-[88px]">
-              <span class="text-xs font-medium text-slate-500">기간</span>
-              <select id="memory-network-days" class="mt-1 w-full rounded-lg border border-ink-200 bg-white px-3 py-1.5 text-sm text-ink-700 outline-none focus:ring-2 focus:ring-brand-500/40">
-                <option value="7">7일</option>
-                <option value="30" selected>30일</option>
-                <option value="90">90일</option>
-              </select>
-            </label>
-            <label class="min-w-[110px] flex-1">
-              <span class="text-xs font-medium text-slate-500">Agent</span>
-              <select id="memory-network-agent" class="mt-1 w-full rounded-lg border border-ink-200 bg-white px-3 py-1.5 text-sm text-ink-700 outline-none focus:ring-2 focus:ring-brand-500/40">
-                <option value="">전체</option>
-              </select>
-            </label>
-            <label class="min-w-[110px] flex-1">
-              <span class="text-xs font-medium text-slate-500">Event</span>
-              <select id="memory-network-event" class="mt-1 w-full rounded-lg border border-ink-200 bg-white px-3 py-1.5 text-sm text-ink-700 outline-none focus:ring-2 focus:ring-brand-500/40">
-                <option value="">전체</option>
-              </select>
-            </label>
-            <label class="min-w-[110px] flex-1">
-              <span class="text-xs font-medium text-slate-500">Ticker</span>
-              <input id="memory-network-ticker" type="text" placeholder="AAPL" class="mt-1 w-full rounded-lg border border-ink-200 bg-white px-3 py-1.5 text-sm uppercase text-ink-700 outline-none focus:ring-2 focus:ring-brand-500/40"/>
-            </label>
-            <label class="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-600">
-              <input id="memory-network-prompt-only" type="checkbox" class="h-3.5 w-3.5 rounded border-slate-300 text-cyan-600 focus:ring-cyan-500/40"/>
-              <span>프롬프트만</span>
-            </label>
-            <button id="memory-network-refresh" type="button" class="rounded-lg bg-slate-900 px-4 py-1.5 text-xs font-semibold text-white transition-all hover:bg-slate-800">새로고침</button>
-          </div>
-        </div>
-        <div class="relative min-w-0 overflow-hidden rounded-b-2xl bg-gradient-to-br from-white via-slate-50/30 to-blue-50/20">
-          <div id="memory-network-graph" class="h-[440px] w-full min-w-0 xl:h-[480px]"></div>
-        </div>
-      </div>
-
-      <aside class="overflow-hidden rounded-2xl border border-slate-200/60 bg-white shadow-sm">
-        <div class="border-b border-slate-200/80 px-5 py-4">
-          <h3 class="text-sm font-bold text-slate-900">Memory Network</h3>
-        </div>
-        <div id="memory-network-panel" class="px-4 py-4"></div>
-      </aside>
-    </div>
   </div>
 </section>
 
