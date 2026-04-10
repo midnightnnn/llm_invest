@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
 from arena.ui.runtime import _to_bool_token
+from arena.ui.templating import render_ui_template
 
 
 @dataclass(frozen=True)
@@ -25,24 +26,69 @@ def _compact_masked_value(masked: str, *, head: int = 8, tail: int = 6) -> str:
     return f"{text[:head]}...{text[-tail:]}"
 
 
-def _masked_hint(masked: str) -> str:
-    if not masked:
-        return '<p class="mt-1 text-[11px] text-ink-400">저장된 키 없음</p>'
-    compact = html.escape(_compact_masked_value(masked))
-    full = html.escape(str(masked or "").strip())
-    return (
-        '<p class="mt-1 text-[11px] text-ink-500">'
-        f'<span class="inline-block max-w-full align-bottom truncate" title="{full}">저장됨: {compact}</span>'
-        "</p>"
-    )
+def _build_field_context(name: str, label: str, masked: str = "") -> dict[str, str]:
+    masked_str = str(masked or "").strip()
+    return {
+        "name": name,
+        "label": label,
+        "masked": masked_str,
+        "masked_compact": _compact_masked_value(masked_str),
+        "masked_full": masked_str,
+    }
 
 
-def _credential_field_html(field_name: str, label: str, masked: str = "") -> str:
-    return (
-        f'<label class="text-sm text-ink-700 block">{label}'
-        f"{_masked_hint(masked)}"
-        f'<input data-field="{field_name}" type="password" class="mt-1 w-full rounded-xl border border-ink-200 bg-white px-3 py-2" placeholder="변경 시 입력" autocomplete="off"/></label>'
+def _build_kis_row_context(
+    *,
+    acct: Mapping[str, Any],
+    active_kis_account_no: str,
+    allow_real_kis_credentials: bool,
+    allow_paper_kis_credentials: bool,
+) -> dict[str, Any]:
+    env_val = str(acct.get("env") or "real")
+    cano_raw = str(acct.get("cano") or "").strip()
+    prdt_cd_raw = str(acct.get("prdt_cd") or "01").strip() or "01"
+    account_no = f"{cano_raw}-{prdt_cd_raw}" if cano_raw else ""
+    account_digits = f"{cano_raw}{prdt_cd_raw}" if cano_raw else ""
+    is_active = (
+        bool(account_digits)
+        and bool(active_kis_account_no)
+        and account_digits == active_kis_account_no
     )
+    real_selected = allow_real_kis_credentials and env_val != "demo"
+    demo_selected = env_val == "demo" or not allow_real_kis_credentials
+
+    real_fields: list[dict[str, str]] = []
+    if allow_real_kis_credentials:
+        real_fields = [
+            _build_field_context("app_key", "APP KEY", str(acct.get("app_key_masked") or "")),
+            _build_field_context(
+                "app_secret", "APP SECRET", str(acct.get("app_secret_masked") or "")
+            ),
+        ]
+    paper_fields: list[dict[str, str]] = []
+    if allow_paper_kis_credentials:
+        paper_fields = [
+            _build_field_context(
+                "paper_app_key", "PAPER APP KEY", str(acct.get("paper_app_key_masked") or "")
+            ),
+            _build_field_context(
+                "paper_app_secret",
+                "PAPER APP SECRET",
+                str(acct.get("paper_app_secret_masked") or ""),
+            ),
+        ]
+
+    return {
+        "account_no": account_no,
+        "account_no_display": account_no or "new account",
+        "is_active": is_active,
+        "real_selected": real_selected,
+        "demo_selected": demo_selected,
+        "allow_real_kis_credentials": allow_real_kis_credentials,
+        "allow_paper_kis_credentials": allow_paper_kis_credentials,
+        "real_fields": real_fields,
+        "paper_fields": paper_fields,
+    }
 
 
 def _render_kis_row(
@@ -52,55 +98,13 @@ def _render_kis_row(
     allow_real_kis_credentials: bool,
     allow_paper_kis_credentials: bool,
 ) -> str:
-    env_val = html.escape(str(acct.get("env") or "real"))
-    cano_raw = str(acct.get("cano") or "").strip()
-    prdt_cd_raw = str(acct.get("prdt_cd") or "01").strip() or "01"
-    account_no = f"{cano_raw}-{prdt_cd_raw}" if cano_raw else ""
-    account_digits = f"{cano_raw}{prdt_cd_raw}" if cano_raw else ""
-    app_key_masked = str(acct.get("app_key_masked") or "")
-    app_secret_masked = str(acct.get("app_secret_masked") or "")
-    paper_app_key_masked = str(acct.get("paper_app_key_masked") or "")
-    paper_app_secret_masked = str(acct.get("paper_app_secret_masked") or "")
-    is_active = bool(account_digits) and bool(active_kis_account_no) and account_digits == active_kis_account_no
-    real_sel = "selected" if allow_real_kis_credentials and env_val != "demo" else ""
-    demo_sel = "selected" if env_val == "demo" or not allow_real_kis_credentials else ""
-    active_badge = (
-        '<span class="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold tracking-wide text-emerald-700">현재 사용 중</span>'
-        if is_active
-        else ""
+    row = _build_kis_row_context(
+        acct=acct,
+        active_kis_account_no=active_kis_account_no,
+        allow_real_kis_credentials=allow_real_kis_credentials,
+        allow_paper_kis_credentials=allow_paper_kis_credentials,
     )
-    env_options = f'<option value="demo" {demo_sel}>demo</option>'
-    if allow_real_kis_credentials:
-        env_options = (
-            f'<option value="real" {real_sel}>real</option><option value="demo" {demo_sel}>demo</option>'
-        )
-    real_fields_html = ""
-    if allow_real_kis_credentials:
-        real_fields_html = (
-            _credential_field_html("app_key", "APP KEY", app_key_masked)
-            + _credential_field_html("app_secret", "APP SECRET", app_secret_masked)
-        )
-    paper_fields_html = ""
-    if allow_paper_kis_credentials:
-        paper_fields_html = (
-            _credential_field_html("paper_app_key", "PAPER APP KEY", paper_app_key_masked)
-            + _credential_field_html("paper_app_secret", "PAPER APP SECRET", paper_app_secret_masked)
-        )
-    return (
-        '<div data-kis-row class="rounded-xl border border-ink-200/70 bg-white/70 p-4 space-y-2">'
-        '<div class="flex items-center justify-between gap-3">'
-        f'<p class="text-[11px] font-bold uppercase tracking-widest text-ink-500">{html.escape(account_no or "new account")}</p>'
-        + active_badge
-        + "</div>"
-        '<div class="grid gap-2 sm:grid-cols-2">'
-        f'<label class="text-sm text-ink-700">ENV<select data-field="env" class="mt-1 w-full rounded-xl border border-ink-200 bg-white px-3 py-2">{env_options}</select></label>'
-        f'<label class="text-sm text-ink-700">ACCOUNT NO<input data-field="account_no" value="{html.escape(account_no)}" class="mt-1 w-full rounded-xl border border-ink-200 bg-white px-3 py-2" placeholder="12345678-01"/></label>'
-        "</div>"
-        + real_fields_html
-        + paper_fields_html
-        + '<div class="flex justify-end"><button type="button" data-kis-remove class="rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-100">Remove</button></div>'
-        + "</div>"
-    )
+    return render_ui_template("settings_credentials_kis_row.jinja2", row=row)
 
 
 def build_credentials_panel(
@@ -115,22 +119,18 @@ def build_credentials_panel(
     uses_broker_credentials: bool,
     rows_html: str,
 ) -> CredentialsPanelParts:
-    kis_env_options_html = '<option value="demo" selected>demo</option>'
-    if allow_real_kis_credentials:
-        kis_env_options_html = '<option value="real">real</option><option value="demo">demo</option>'
-
-    kis_template_real_fields = ""
-    if allow_real_kis_credentials:
-        kis_template_real_fields = (
-            "<label class=\"text-sm text-ink-700 block\">APP KEY<input data-field=\"app_key\" type=\"password\" class=\"mt-1 w-full rounded-xl border border-ink-200 bg-white px-3 py-2\" placeholder=\"변경 시 입력\" autocomplete=\"off\"/></label>"
-            "<label class=\"text-sm text-ink-700 block\">APP SECRET<input data-field=\"app_secret\" type=\"password\" class=\"mt-1 w-full rounded-xl border border-ink-200 bg-white px-3 py-2\" placeholder=\"변경 시 입력\" autocomplete=\"off\"/></label>"
-        )
-    kis_template_paper_fields = ""
-    if allow_paper_kis_credentials:
-        kis_template_paper_fields = (
-            "<label class=\"text-sm text-ink-700 block\">PAPER APP KEY<input data-field=\"paper_app_key\" type=\"password\" class=\"mt-1 w-full rounded-xl border border-ink-200 bg-white px-3 py-2\" placeholder=\"변경 시 입력\" autocomplete=\"off\"/></label>"
-            "<label class=\"text-sm text-ink-700 block\">PAPER APP SECRET<input data-field=\"paper_app_secret\" type=\"password\" class=\"mt-1 w-full rounded-xl border border-ink-200 bg-white px-3 py-2\" placeholder=\"변경 시 입력\" autocomplete=\"off\"/></label>"
-        )
+    kis_env_options_html = render_ui_template(
+        "settings_credentials_kis_env_options.jinja2",
+        allow_real_kis_credentials=allow_real_kis_credentials,
+    )
+    kis_template_real_fields = render_ui_template(
+        "settings_credentials_kis_template_real.jinja2",
+        allow_real_kis_credentials=allow_real_kis_credentials,
+    )
+    kis_template_paper_fields = render_ui_template(
+        "settings_credentials_kis_template_paper.jinja2",
+        allow_paper_kis_credentials=allow_paper_kis_credentials,
+    )
 
     kis_rows_html = ""
     if uses_broker_credentials:
@@ -149,38 +149,16 @@ def build_credentials_panel(
             allow_paper_kis_credentials=allow_paper_kis_credentials,
         )
 
-    kis_section_html = (
-        '<section class="rounded-[24px] border border-ink-200/60 bg-white/80 p-6 shadow-sm backdrop-blur-md">'
-        + '<h3 class="font-display text-lg font-semibold">KIS Accounts <span class="click-tip">?<span class="tip-body" style="left:0;right:auto;"><a href="https://apiportal.koreainvestment.com" target="_blank">KIS Developers</a>에서 회원가입 후 API 신청 → APP KEY / SECRET 발급. 모의투자(Paper)·실전(Real) 키를 각각 발급받으세요. 저장 시 GCP Secret Manager에 암호화됩니다.</span></span></h3>'
-        + (
-            f'<p class="mt-2 text-sm text-amber-700">{html.escape(credentials_mode_note)}</p>'
-            if credentials_mode_note
-            else ""
-        )
-        + (
-            f'<p class="mt-2 text-sm text-ink-600">현재 활성 계좌: <span class="font-semibold text-ink-900">{html.escape(active_kis_account_no_masked)}</span></p>'
-            if active_kis_account_no_masked
-            else '<p class="mt-2 text-sm text-ink-500">현재 활성 계좌 정보가 없습니다.</p>'
-        )
-        + '<form id="kis-accounts-form" class="mt-4 space-y-3" method="post" action="/settings/save">'
-        + f'<input type="hidden" name="tenant_id" value="{html.escape(tenant)}"/>'
-        + '<input type="hidden" id="kis_accounts_json" name="kis_accounts_json" value="[]"/>'
-        + (
-            f'<div data-kis-rows class="space-y-3">{kis_rows_html}</div>'
-            if uses_broker_credentials
-            else '<div data-kis-rows class="space-y-3"></div><p class="text-sm text-ink-500">이 배포 모드에서는 KIS 계정을 저장하지 않습니다.</p>'
-        )
-        + (
-            '<button type="button" data-kis-add class="rounded-xl border border-dashed border-ink-300 bg-white/60 px-4 py-2 text-sm text-ink-600 hover:bg-ink-50">+ Add Account</button>'
-            if uses_broker_credentials
-            else ""
-        )
-        + '<div class="flex items-center gap-3">'
-        + '<button class="rounded-xl bg-ink-900 px-4 py-2 text-sm font-medium text-white hover:bg-ink-700" type="submit">Save</button>'
-        + "</div></form></section>"
+    kis_section_html = render_ui_template(
+        "settings_credentials_kis.jinja2",
+        tenant=tenant,
+        credentials_mode_note=credentials_mode_note,
+        active_kis_account_no_masked=active_kis_account_no_masked,
+        uses_broker_credentials=uses_broker_credentials,
+        kis_rows_html=kis_rows_html,
     )
 
-    panel_html = '<div data-settings-panel="credentials" class="settings-panel space-y-4"></div>'
+    panel_html = render_ui_template("settings_credentials_panel.jinja2")
 
     return CredentialsPanelParts(
         panel_html=panel_html,

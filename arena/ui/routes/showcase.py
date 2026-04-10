@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Callable
 from urllib.parse import urlencode
 
@@ -116,6 +117,15 @@ def _showcase_layout(deps: ShowcaseRouteDeps, title: str, body: str, *, active: 
     )
 
 
+def _post_ts_iso(row: dict[str, object]) -> str:
+    value = row.get("created_at")
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.isoformat()
+    return str(value or "")
+
+
 def register_showcase_routes(app: FastAPI, *, deps: ShowcaseRouteDeps) -> None:
     # ── Redirect /showcase → /showcase/{tenant}/board ──
     @app.get("/showcase", response_class=HTMLResponse)
@@ -149,7 +159,7 @@ def register_showcase_routes(app: FastAPI, *, deps: ShowcaseRouteDeps) -> None:
         token_agent = agent_id.strip().lower() or None
         if token_agent and token_agent not in scoped_agent_ids:
             token_agent = None
-        token_date = date.strip() or None
+        token_date = date.strip()[:10] if date.strip() else None
         offset = (page - 1) * limit
         agent_key = ",".join(sorted(scoped_agent_ids))
 
@@ -161,41 +171,38 @@ def register_showcase_routes(app: FastAPI, *, deps: ShowcaseRouteDeps) -> None:
             offset=offset,
             agent_ids=scoped_agent_ids,
             agent_id=token_agent,
+            start_date=token_date,
+            end_date=token_date,
         )
 
-        from arena.config import research_generation_status
-        tenant_settings = deps.settings_for_tenant(t)
-        research_status = research_generation_status(tenant_settings)
-
-        board_items = []
+        posts = []
         for row in rows:
-            post_id = str(row.get("post_id") or row.get("id") or "")
-            board_items.append({
-                "post_id": post_id,
+            posts.append({
                 "created_at_label": deps.fmt_ts(row.get("created_at")),
+                "ts_iso": _post_ts_iso(row),
                 "agent_id": str(row.get("agent_id") or ""),
                 "title": str(row.get("title") or ""),
                 "body_html": deps.md_block(str(row.get("body") or ""), classes="mt-2 text-sm leading-relaxed text-ink-700"),
                 "cycle_id": str(row.get("cycle_id") or ""),
-                "market": str(row.get("market") or ""),
             })
 
-        qs_base = {k: v for k, v in {"agent_id": agent_id.strip(), "date": date.strip(), "limit": str(limit)}.items() if v}
+        qs_base = {k: v for k, v in {"agent_id": agent_id.strip(), "date": token_date or "", "limit": str(limit)}.items() if v}
         prev_qs = urlencode({**qs_base, "page": str(max(1, page - 1))})
         next_qs = urlencode({**qs_base, "page": str(page + 1)})
-        has_next = len(rows) >= limit
+        has_next = len(rows) == limit
 
         body = render_ui_template(
             "board_body.jinja2",
-            auth_enabled=True,
-            tenant=t,
-            board_items=board_items,
-            agent_options=[{"value": a, "label": a, "selected": a == agent_id} for a in scoped_agent_ids],
-            date_filter=date.strip(),
+            posts=posts,
             page=page,
             prev_url=f"/showcase/{t}/board?{prev_qs}" if page > 1 else "",
             next_url=f"/showcase/{t}/board?{next_qs}" if has_next else "",
-            research_status=research_status,
+            prev_disabled=page <= 1,
+            next_disabled=not has_next,
+            empty_state_message="게시글이 없습니다.",
+            show_detail_buttons=False,
+            tool_accordion_js="",
+            datepicker_js="",
         )
         return deps.html_response(_showcase_layout(deps, "게시판", body, active="board", tenant=t, needs_datepicker=True), max_age=60)
 

@@ -36,6 +36,12 @@ OPERATOR_EMAILS="${ARENA_OPERATOR_EMAILS:-}"
 PUBLIC_DEMO_TENANT="${ARENA_PUBLIC_DEMO_TENANT:-}"
 SHOWCASE_TENANT="${ARENA_SHOWCASE_TENANT:-}"
 SHARED_RESEARCH_GEMINI_SOURCE_TENANT="${ARENA_SHARED_RESEARCH_GEMINI_SOURCE_TENANT:-}"
+UI_MIN_INSTANCES="${CLOUD_RUN_UI_MIN_INSTANCES:-${CLOUD_RUN_MIN_INSTANCES:-0}}"
+
+if ! [[ "${UI_MIN_INSTANCES}" =~ ^[0-9]+$ ]]; then
+  echo "ERROR: CLOUD_RUN_UI_MIN_INSTANCES must be a non-negative integer."
+  exit 1
+fi
 
 cd "${ROOT_DIR}"
 
@@ -168,7 +174,7 @@ DEPLOY_CMD=(
   --service-account "${RUN_SERVICE_ACCOUNT}"
   --update-env-vars "${RUN_ENV_VARS}"
   --port 8080
-  --min-instances 0
+  --min-instances "${UI_MIN_INSTANCES}"
   --memory 512Mi
   --cpu 1
   --concurrency 80
@@ -190,4 +196,5 @@ echo "Done"
 echo "Cloud Run Service: ${SERVICE_NAME}"
 echo "Image: ${IMAGE}"
 echo "Service Account: ${RUN_SERVICE_ACCOUNT}"
+echo "Min instances: ${UI_MIN_INSTANCES}"
 echo "URL: ${SERVICE_URL}"

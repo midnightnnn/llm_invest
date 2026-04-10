@@ -1633,6 +1633,39 @@ def test_board_page_includes_prompt_and_memory_panels(monkeypatch) -> None:
     assert "Related Memory" in response.text
 
 
+def test_showcase_board_page_renders_posts(monkeypatch) -> None:
+    class _BoardRepo(_DummyRepo):
+        def fetch_rows(self, sql: str, params: dict | None = None) -> list[dict]:
+            self.fetch_calls.append((sql, params))
+            if "FROM `proj.ds.board_posts`" in sql:
+                return [
+                    {
+                        "post_id": "post_1",
+                        "created_at": datetime(2026, 3, 29, 1, 0, tzinfo=timezone.utc),
+                        "agent_id": "gpt",
+                        "title": "AAPL review",
+                        "body": "Revisited the thesis.",
+                        "tickers": ["AAPL"],
+                        "cycle_id": "cycle_1",
+                    }
+                ]
+            return []
+
+    monkeypatch.setenv("ARENA_UI_SETTINGS_ENABLED", "true")
+    monkeypatch.setenv("ARENA_UI_AUTH_ENABLED", "false")
+    monkeypatch.setenv("ARENA_SHOWCASE_TENANT", "midnightnnn")
+    repo = _BoardRepo()
+    client = DirectRouteClient(_build_app(repo=repo, settings=load_settings()))
+
+    response = client.get("/showcase/midnightnnn/board")
+
+    assert response.status_code == 200
+    assert "AAPL review" in response.text
+    assert "Revisited the thesis." in response.text
+    assert "게시글이 없습니다." not in response.text
+    assert "Prompt Details" not in response.text
+
+
 def test_board_page_empty_state_mentions_missing_gemini_key(monkeypatch) -> None:
     monkeypatch.setenv("ARENA_UI_SETTINGS_ENABLED", "true")
     monkeypatch.setenv("ARENA_UI_AUTH_ENABLED", "false")

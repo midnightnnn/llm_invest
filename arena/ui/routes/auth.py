@@ -255,8 +255,8 @@ def register_auth_routes(app: FastAPI, *, deps: AuthRouteDeps) -> None:
             ],
             actions=[
                 {
-                    "href": "/",
-                    "label": "Overview",
+                    "href": "/board",
+                    "label": "Board",
                     "classes": "rounded-xl bg-ink-900 px-4 py-2 text-sm font-semibold text-white hover:bg-ink-700",
                 },
                 {

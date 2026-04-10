@@ -1,0 +1,70 @@
+<div class="agent-card rounded-xl border border-ink-200/60 bg-white/70 shadow-sm overflow-hidden" data-agent-id="{{ card.aid }}">
+  <div class="px-4 py-3 space-y-2.5">
+    <div class="flex items-center justify-between">
+      <div class="flex items-center gap-2">
+        <span class="font-display text-sm font-bold text-ink-900">{{ card.aid }}</span>
+        {% if card.has_key %}
+          <span class="inline-block rounded-full bg-green-100 px-2 py-0.5 text-[10px] font-bold text-green-700">KEY OK</span>
+        {% else %}
+          <span class="inline-block rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-bold text-red-600">NO KEY</span>
+        {% endif %}
+      </div>
+      <div class="flex items-center gap-1.5">
+        <button type="button" class="agent-save-btn hidden rounded-lg bg-blue-600 px-3 py-1 text-xs font-semibold text-white hover:bg-blue-700 transition-colors shadow-sm">Save</button>
+        <button type="button" class="agent-toggle-btn text-ink-400 hover:text-ink-700 text-sm px-2 py-1 rounded transition-colors" title="Detail">&#9660;</button>
+        <button type="button" class="agent-remove-btn text-red-400 hover:text-red-600 text-lg font-bold px-1 transition-colors" title="Remove">&times;</button>
+      </div>
+    </div>
+
+    <input type="hidden" data-field="provider" value="{{ card.provider }}"/>
+
+    <div class="grid gap-x-3 gap-y-1 grid-cols-2 sm:grid-cols-4 items-end">
+      <label class="text-[10px] font-semibold uppercase tracking-widest text-ink-400">
+        Market<span class="field-tip">?<span class="tip-body">에이전트가 거래할 시장. US(나스닥+NYSE) 또는 KOSPI. 복수 선택 시 양쪽 모두 거래합니다.</span></span>
+        <div class="mt-0.5 flex gap-1.5 flex-wrap agent-market-pills">
+          {% for m in card.markets %}
+            <button type="button" data-market="{{ m.key }}"
+              class="market-pill inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors select-none{% if m.selected %} border-blue-400 bg-blue-50 text-blue-700 pill-on{% else %} border-ink-200 bg-white text-ink-500 hover:border-ink-300{% endif %}">{{ m.label }}</button>
+          {% endfor %}
+        </div>
+      </label>
+
+      <label class="text-[10px] font-semibold uppercase tracking-widest text-ink-400">
+        Model<span class="field-tip">?<span class="tip-body">LLM 모델 ID. 예: gpt-5.2, gemini-3-flash-preview, claude-sonnet-4-6</span></span>
+        <input type="text" data-field="model" value="{{ card.model }}" class="mt-0.5 block w-full rounded-lg border border-ink-200 bg-white px-2 py-1.5 text-sm text-ink-900" placeholder="model"/>
+      </label>
+
+      <label class="text-[10px] font-semibold uppercase tracking-widest text-ink-400">
+        Capital ₩<span class="field-tip">?<span class="tip-body">가상 배정 자본금(원). 저장 시 agent별 자본 기준과 NAV가 즉시 다시 맞춰집니다.</span></span>
+        <input type="number" data-field="capital" value="{{ card.capital_value }}" class="mt-0.5 block w-full rounded-lg border border-ink-200 bg-white px-2 py-1.5 text-sm text-right text-ink-900" min="0" step="100000"/>
+      </label>
+
+      <label class="text-[10px] font-semibold uppercase tracking-widest text-ink-400">
+        API Key<span class="click-tip">?<span class="tip-body">{{ card.api_key_help|safe }}</span></span>
+        <input type="password" data-field="api_key" placeholder="&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;" class="mt-0.5 block w-full rounded-lg border border-ink-200 bg-white px-2 py-1.5 text-xs text-ink-900" autocomplete="off"/>
+      </label>
+    </div>
+  </div>
+
+  <div class="agent-detail hidden border-t border-ink-200/40 px-4 py-4 space-y-4 bg-ink-50/30">
+    <div>
+      <p class="text-xs font-semibold text-ink-700 mb-1">User Prompt <span class="field-tip">?<span class="tip-body">에이전트의 투자 성향·전략을 지시하는 시스템 프롬프트. 비워두면 기본 프롬프트가 적용됩니다. 에이전트별로 다른 전략을 부여할 수 있습니다.</span></span></p>
+      <textarea data-field="system_prompt" rows="10" placeholder="Agent-specific prompt" class="agent-detail-prompt w-full rounded-lg border border-ink-200 bg-white px-2 py-1.5 font-mono text-xs text-ink-900 resize-y min-h-[60px]">{{ card.display_prompt }}</textarea>
+    </div>
+
+    <hr class="border-ink-200/30"/>
+
+    <div>
+      <p class="text-xs font-semibold text-ink-700 mb-1">Risk Policy <span class="field-tip">?<span class="tip-body">에이전트별 리스크 한도. 빈칸이면 전역 기본값(placeholder)이 적용됩니다. 최대 주문 금액, 일일 회전율, 종목 비중, 현금 버퍼 등을 개별 조정할 수 있습니다.</span></span></p>
+      <div class="grid gap-2 sm:grid-cols-4 agent-risk-grid">
+        {% for rf in card.risk_inputs %}
+          <label class="text-xs text-ink-600">{{ rf.label }}
+            <input data-risk-field="{{ rf.key }}" value="{{ rf.value }}" placeholder="{{ rf.placeholder }}"
+              class="agent-detail-risk mt-0.5 w-full rounded-lg border border-ink-200 bg-white px-2 py-1 text-xs text-ink-900"/>
+          </label>
+        {% endfor %}
+      </div>
+    </div>
+
+  </div>
+</div>

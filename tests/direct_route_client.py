@@ -67,7 +67,7 @@ class DirectRouteClient:
         json: dict | None = None,
         params: dict | None = None,
     ) -> DirectResponse:
-        endpoint = self._resolve_endpoint(method, path)
+        endpoint, path_params = self._resolve_endpoint(method, path)
         query_items = list(parse_qsl(urlsplit(path).query, keep_blank_values=True))
         if params:
             query_items.extend((str(k), str(v)) for k, v in params.items())
@@ -105,7 +105,7 @@ class DirectRouteClient:
             receive=receive,
         )
         values = {}
-        merged: dict[str, object] = {}
+        merged: dict[str, object] = dict(path_params)
         for qk, qv in query_items:
             merged[qk] = qv
         if params:
@@ -139,5 +139,17 @@ class DirectRouteClient:
             route_path = getattr(route, "path", "")
             route_methods = getattr(route, "methods", set()) or set()
             if route_path == request_path and method_token in route_methods:
-                return route.endpoint
+                return route.endpoint, {}
+            path_regex = getattr(route, "path_regex", None)
+            if path_regex is None or method_token not in route_methods:
+                continue
+            match = path_regex.match(request_path)
+            if not match:
+                continue
+            path_params = match.groupdict()
+            for key, value in list(path_params.items()):
+                convertor = getattr(route, "param_convertors", {}).get(key)
+                if convertor is not None:
+                    path_params[key] = convertor.convert(value)
+            return route.endpoint, path_params
         raise LookupError(f"route not found: {method_token} {request_path}")
