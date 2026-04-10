@@ -6,6 +6,7 @@ import hashlib
 import io
 import json
 import logging
+import math
 import os
 import uuid
 from datetime import date, datetime
@@ -50,6 +51,21 @@ _FORECAST_MODE_ALIASES: dict[str, tuple[str, ...]] = {
     "avg": ("avg", "average", "simple_average", "equal_weight", "ensemble_avg"),
     "base": ("base", "base_model", "base_models"),
 }
+
+
+def _finite_float_or_none(value: object) -> float | None:
+    try:
+        if value is None:
+            return None
+        text = str(value).strip().replace(",", "")
+        if not text:
+            return None
+        parsed = float(text)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(parsed):
+        return None
+    return float(parsed)
 
 
 class MarketStore:
@@ -226,13 +242,60 @@ class MarketStore:
         sql = f"""
         WITH latest AS (
           SELECT as_of_ts, ticker, exchange_code, instrument_id, close_price_krw, close_price_native, quote_currency, fx_rate_used, ret_5d, ret_20d, volatility_20d, sentiment_score, source, updated_at,
-                 ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY as_of_ts DESC, updated_at DESC) AS rn
+                 ROW_NUMBER() OVER (
+                   PARTITION BY ticker
+                   ORDER BY
+                     CASE
+                       WHEN ret_5d IS NOT NULL AND ret_20d IS NOT NULL AND volatility_20d IS NOT NULL THEN 0
+                       ELSE 1
+                     END,
+                     as_of_ts DESC,
+                     updated_at DESC
+                 ) AS rn
           FROM `{self.session.dataset_fqn}.market_features_latest`
           {where}
         )
         SELECT as_of_ts, ticker, exchange_code, instrument_id, close_price_krw, close_price_native, quote_currency, fx_rate_used, ret_5d, ret_20d, volatility_20d, sentiment_score, source
         FROM latest
         WHERE rn = 1
+        ORDER BY as_of_ts DESC
+        LIMIT @limit
+        """
+        return self.session.fetch_rows(sql, params)
+
+    def latest_missing_daily_feature_tickers(
+        self,
+        *,
+        sources: list[str] | None = None,
+        limit: int = 1000,
+    ) -> list[dict[str, Any]]:
+        """Returns latest tickers whose newest snapshot lacks daily-history features."""
+        lim = max(1, min(int(limit), 10_000))
+        filters: list[str] = []
+        params: dict[str, Any] = {"limit": lim}
+        if sources:
+            filters.append("source IN UNNEST(@sources)")
+            params["sources"] = sources
+
+        where = "WHERE " + " AND ".join(filters) if filters else ""
+        sql = f"""
+        WITH ranked AS (
+          SELECT as_of_ts, ticker, exchange_code, instrument_id, ret_5d, ret_20d, volatility_20d, source, updated_at,
+                 ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY as_of_ts DESC, updated_at DESC) AS rn,
+                 MAX(
+                   CASE
+                     WHEN ret_5d IS NOT NULL AND ret_20d IS NOT NULL AND volatility_20d IS NOT NULL THEN 1
+                     ELSE 0
+                   END
+                 ) OVER (PARTITION BY ticker) AS has_complete_features
+          FROM `{self.session.dataset_fqn}.market_features_latest`
+          {where}
+        )
+        SELECT as_of_ts, ticker, exchange_code, instrument_id, source
+        FROM ranked
+        WHERE rn = 1
+          AND (ret_5d IS NULL OR ret_20d IS NULL OR volatility_20d IS NULL)
+          AND has_complete_features = 0
         ORDER BY as_of_ts DESC
         LIMIT @limit
         """
@@ -377,7 +440,11 @@ class MarketStore:
         direction = order.strip().lower()
         direction = "asc" if direction == "asc" else "desc"
 
-        filters: list[str] = []
+        filters: list[str] = [
+            "ret_5d IS NOT NULL",
+            "ret_20d IS NOT NULL",
+            "volatility_20d IS NOT NULL",
+        ]
         params: dict[str, Any] = {"limit": max(1, min(int(top_n), 500))}
 
         if tickers is not None:
@@ -1366,21 +1433,13 @@ class MarketStore:
             ticker = str(row.get("ticker", "")).strip().upper()
             if not ticker:
                 continue
-            try:
-                ret_20d = float(row.get("ret_20d") or 0.0)
-            except (TypeError, ValueError):
-                ret_20d = 0.0
-            try:
-                ret_5d = float(row.get("ret_5d") or 0.0)
-            except (TypeError, ValueError):
-                ret_5d = 0.0
-            try:
-                vol = float(row.get("volatility_20d") or 0.0)
-            except (TypeError, ValueError):
-                vol = 0.0
-            try:
-                sentiment = float(row.get("sentiment_score") or 0.0)
-            except (TypeError, ValueError):
+            ret_20d = _finite_float_or_none(row.get("ret_20d"))
+            ret_5d = _finite_float_or_none(row.get("ret_5d"))
+            vol = _finite_float_or_none(row.get("volatility_20d"))
+            if ret_20d is None or ret_5d is None or vol is None:
+                continue
+            sentiment = _finite_float_or_none(row.get("sentiment_score"))
+            if sentiment is None:
                 sentiment = 0.0
             quality = max(0.0, 1.0 - min(max(vol, 0.0), 1.5) / 1.5)
             score = (0.60 * ret_20d) + (0.20 * ret_5d) + (0.15 * sentiment) + (0.05 * quality)

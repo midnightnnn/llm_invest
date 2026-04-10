@@ -118,6 +118,15 @@ def _cloud_run_execution_body(*, source: str = "") -> dict[str, object]:
     }
 
 
+def _daily_history_sources_for_markets(markets: list[str] | set[str] | tuple[str, ...]) -> list[str]:
+    """Returns live market sources that carry daily history, excluding quote snapshots."""
+    return [
+        source
+        for source in live_market_sources_for_markets(markets)
+        if not str(source or "").endswith("_quote")
+    ]
+
+
 def _tenant_lease_enabled() -> bool:
     """Enables tenant execution leases by default in Cloud Run jobs only."""
     cli = _cli()
@@ -230,13 +239,13 @@ def _batch_phase(
     now = cli.utc_now()
 
     def _probe_source_ticker_count(markets_to_probe: list[str]) -> int:
-        sources = live_market_sources_for_markets(markets_to_probe)
+        sources = _daily_history_sources_for_markets(markets_to_probe)
         if not sources:
             return 0
         return max(repo.market_source_distinct_tickers(source=source) for source in sources)
 
     def _probe_daily_coverage(markets_to_probe: list[str], *, trading_day: date) -> tuple[str | None, int]:
-        sources = live_market_sources_for_markets(markets_to_probe)
+        sources = _daily_history_sources_for_markets(markets_to_probe)
         best_source = None
         best_coverage = 0
         for source in sources:

@@ -15,6 +15,7 @@ class FakeRepo:
         self._latest_dates = {}
         self._spans = {}
         self.latest_instrument_map_calls = []
+        self.latest_market_features_calls = []
 
     def insert_market_features(self, rows):
         self.rows.extend(rows)
@@ -34,10 +35,42 @@ class FakeRepo:
         self.latest_instrument_map_calls.append(list(tickers))
         return {}
 
+    def latest_market_features(self, *, tickers, limit, sources=None):
+        self.latest_market_features_calls.append(
+            {
+                "tickers": list(tickers),
+                "limit": limit,
+                "sources": list(sources or []),
+            }
+        )
+        rows = []
+        for ticker in tickers:
+            token = str(ticker).strip().upper()
+            if not token:
+                continue
+            is_kospi = token.isdigit() and len(token) == 6
+            rows.append(
+                {
+                    "ticker": token,
+                    "exchange_code": "KRX" if is_kospi else "NASD",
+                    "instrument_id": f"{'KRX' if is_kospi else 'NASD'}:{token}",
+                    "ret_5d": 0.01,
+                    "ret_20d": 0.04,
+                    "volatility_20d": 0.12,
+                    "sentiment_score": 0.1,
+                }
+            )
+        return rows[:limit]
+
+    def latest_missing_daily_feature_tickers(self, *, sources=None, limit=1000):
+        _ = (sources, limit)
+        return []
+
 
 class FakeClient:
     def __init__(self):
         self.domestic_daily_requests = []
+        self.overseas_daily_requests = []
 
     def get_usd_krw_daily_chart(self, *, symbol, start_date="", end_date="", market_div_code="X", period="D", max_pages=8):
         _ = (symbol, start_date, end_date, market_div_code, period, max_pages)
@@ -58,6 +91,15 @@ class FakeClient:
         return {"curr": "USD", "t_rate": "1311"}
 
     def get_overseas_daily_price(self, ticker, excd, bymd, gubn, modp):
+        self.overseas_daily_requests.append(
+            {
+                "ticker": ticker,
+                "excd": excd,
+                "bymd": bymd,
+                "gubn": gubn,
+                "modp": modp,
+            }
+        )
         return [
             {"xymd": "20260101", "clos": "90"},
             {"xymd": "20260102", "clos": "95"},
@@ -390,6 +432,74 @@ def test_market_sync_kospi_forces_backfill_when_existing_history_is_too_shallow(
     assert len([r for r in repo.rows if r["ticker"] == "005930"]) == 6
 
 
+def test_market_sync_us_forces_backfill_when_existing_history_is_too_shallow() -> None:
+    repo = FakeRepo()
+    repo._latest_dates = {"AAPL": datetime.strptime("20260106", "%Y%m%d").date()}
+    repo._spans = {
+        "AAPL": {
+            "min_d": datetime.strptime("20260106", "%Y%m%d").date(),
+            "max_d": datetime.strptime("20260106", "%Y%m%d").date(),
+            "row_count": 1,
+        }
+    }
+    settings = _settings("nasdaq", ["AAPL"])
+    settings.usd_krw_fx_symbol = "USDKRW"
+    client = FakeClient()
+    service = MarketDataSyncService(settings=settings, repo=repo, client=client)
+
+    result = service.sync_market_features()
+
+    assert result.inserted_rows == 24
+    assert client.overseas_daily_requests
+    assert len([r for r in repo.rows if r["ticker"] == "AAPL"]) == 6
+
+
+def test_market_sync_us_includes_existing_tickers_missing_daily_features() -> None:
+    class RepoWithMissingFeatureTicker(FakeRepo):
+        def latest_missing_daily_feature_tickers(self, *, sources=None, limit=1000):
+            _ = (sources, limit)
+            return [
+                {
+                    "ticker": "MISS",
+                    "exchange_code": "NASD",
+                    "instrument_id": "NASD:MISS",
+                    "source": "open_trading_us_quote",
+                }
+            ]
+
+    class LongHistoryClient(FakeClient):
+        def get_overseas_daily_price(self, ticker, excd, bymd, gubn, modp):
+            self.overseas_daily_requests.append(
+                {
+                    "ticker": ticker,
+                    "excd": excd,
+                    "bymd": bymd,
+                    "gubn": gubn,
+                    "modp": modp,
+                }
+            )
+            return [
+                {"xymd": f"202601{idx:02d}", "clos": str(90 + idx)}
+                for idx in range(1, 26)
+            ]
+
+    repo = RepoWithMissingFeatureTicker()
+    settings = _settings("nasdaq", ["AAPL"])
+    settings.usd_krw_fx_symbol = "USDKRW"
+    client = LongHistoryClient()
+    service = MarketDataSyncService(settings=settings, repo=repo, client=client)
+
+    result = service.sync_market_features()
+
+    assert result.attempted_tickers == 5
+    assert result.inserted_rows == 125
+    miss_rows = [row for row in repo.rows if row["ticker"] == "MISS"]
+    assert miss_rows
+    assert miss_rows[-1]["ret_5d"] is not None
+    assert miss_rows[-1]["ret_20d"] is not None
+    assert miss_rows[-1]["volatility_20d"] is not None
+
+
 def test_account_sync_overseas_persists_snapshot() -> None:
     repo = FakeRepo()
     settings = _settings("nasdaq", ["AAPL"])
@@ -600,6 +710,34 @@ def test_quote_sync_us_rows_include_native_price_and_fx() -> None:
     assert aapl_rows[-1]["close_price_native"] == pytest.approx(100.0)
     assert aapl_rows[-1]["fx_rate_used"] == pytest.approx(1311.0)
     assert aapl_rows[-1]["close_price_krw"] == pytest.approx(131100.0)
+    assert aapl_rows[-1]["ret_20d"] == pytest.approx(0.04)
+    assert aapl_rows[-1]["volatility_20d"] == pytest.approx(0.12)
+
+
+def test_quote_sync_us_skips_quote_rows_when_daily_features_are_missing() -> None:
+    class RepoWithoutDailyBase(FakeRepo):
+        def latest_market_features(self, *, tickers, limit, sources=None):
+            self.latest_market_features_calls.append(
+                {
+                    "tickers": list(tickers),
+                    "limit": limit,
+                    "sources": list(sources or []),
+                }
+            )
+            return []
+
+    repo = RepoWithoutDailyBase()
+    settings = _settings("nasdaq", ["AAPL"])
+    settings.usd_krw_fx_symbol = "USDKRW"
+    client = FakeClient()
+    service = MarketDataSyncService(settings=settings, repo=repo, client=client)
+
+    result = service.sync_market_quotes()
+
+    assert result.inserted_rows == 0
+    assert sorted(result.failed_tickers) == ["AAPL", "DIA", "QQQ", "SPY"]
+    assert client.overseas_daily_requests == []
+    assert repo.rows == []
 
 
 def test_quote_sync_us_held_ticker_probes_exchange() -> None:

@@ -50,7 +50,6 @@ def build_resume_prompt(
                     "order_budget": context.get("order_budget", {}),
                     "risk_policy": context.get("risk_policy", {}),
                     "analysis_funnel": model_facing_funnel_metrics(analysis_funnel),
-                    "opportunity_working_set": context.get("opportunity_working_set", []),
                     "candidate_cases": context.get("candidate_cases", []),
                     "decision_frame": context.get("decision_frame", ""),
                     "tool_budget": {

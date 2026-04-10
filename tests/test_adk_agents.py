@@ -264,6 +264,8 @@ def test_user_prompt_omits_sleeve_state_payload() -> None:
             "order_budget": {"max_buy_notional_krw": 0.0},
             "sleeve_state": {"buy_blocked": True, "over_target": True},
             "analysis_funnel": {"discovered_nonheld": 3, "analyzed_nonheld": 1, "pending_nonheld": 2},
+            "active_thesis_context": "Active Thesis:\n- [AAPL | open] compact thesis",
+            "active_theses": [{"ticker": "AAPL", "payload_json": '{"raw": "large"}'}],
             "opportunity_working_set": [{"ticker": "TSLA", "status": "pending"}],
             "decision_frame": "Compare self-discovered opportunities against cash first.",
         },
@@ -274,9 +276,11 @@ def test_user_prompt_omits_sleeve_state_payload() -> None:
     json_start = prompt.index("{", prompt.index(marker))
     payload = json.loads(prompt[json_start:])
     assert "sleeve_state" not in payload
+    assert payload["active_thesis_context"] == "Active Thesis:\n- [AAPL | open] compact thesis"
+    assert "active_theses" not in payload
     assert payload["analysis_funnel"]["screened_only_candidates"] == 2
     assert "pending_nonheld" not in payload["analysis_funnel"]
-    assert payload["opportunity_working_set"] == [{"ticker": "TSLA", "status": "pending"}]
+    assert "opportunity_working_set" not in payload
     assert payload["candidate_cases"] == []
     assert payload["decision_frame"] == "Compare self-discovered opportunities against cash first."
     assert payload["tool_budget"]["max_tool_calls"] == 5

@@ -200,6 +200,53 @@ def test_ticker_name_map_falls_back_to_instrument_master() -> None:
     assert out == {"025860": "남해화학", "005930": "삼성전자"}
 
 
+def test_rebuild_universe_candidates_skips_rows_without_daily_history_features() -> None:
+    session = _FakeSession(
+        responses=[
+            [
+                {
+                    "as_of_ts": "2026-01-01T00:00:00+00:00",
+                    "ticker": "MISSING",
+                    "exchange_code": "NASD",
+                    "instrument_id": "NASD:MISSING",
+                    "ret_20d": None,
+                    "ret_5d": None,
+                    "volatility_20d": None,
+                    "sentiment_score": 1.0,
+                },
+                {
+                    "as_of_ts": "2026-01-01T00:00:00+00:00",
+                    "ticker": "ZERO",
+                    "exchange_code": "NASD",
+                    "instrument_id": "NASD:ZERO",
+                    "ret_20d": 0.0,
+                    "ret_5d": 0.0,
+                    "volatility_20d": 0.0,
+                    "sentiment_score": 0.0,
+                },
+                {
+                    "as_of_ts": "2026-01-01T00:00:00+00:00",
+                    "ticker": "GOOD",
+                    "exchange_code": "NASD",
+                    "instrument_id": "NASD:GOOD",
+                    "ret_20d": 0.1,
+                    "ret_5d": 0.02,
+                    "volatility_20d": 0.12,
+                    "sentiment_score": 0.2,
+                },
+            ]
+        ],
+        client=_InsertClient(),
+    )
+    store = MarketStore(session)
+
+    out = store.rebuild_universe_candidates(top_n=10, allowed_tickers=["MISSING", "ZERO", "GOOD"])
+
+    assert out["count"] == 2
+    written = {row["ticker"] for row in session.client.payloads}
+    assert written == {"ZERO", "GOOD"}
+
+
 # ---------------------------------------------------------------------------
 # SleeveStore subclasses (override methods the tests customise)
 # ---------------------------------------------------------------------------
@@ -443,6 +490,32 @@ def test_latest_market_features_does_not_retry_legacy_on_empty_rows() -> None:
     assert rows == []
     assert len(store.session.calls) == 1
     assert "market_features_latest" in store.session.calls[0]
+    assert "ret_5d IS NOT NULL AND ret_20d IS NOT NULL AND volatility_20d IS NOT NULL" in store.session.calls[0]
+
+
+def test_latest_missing_daily_feature_tickers_queries_newest_incomplete_snapshots() -> None:
+    store = _make_market_store(
+        [
+            [
+                {
+                    "as_of_ts": "2026-01-01T00:00:00+00:00",
+                    "ticker": "MISS",
+                    "exchange_code": "NASD",
+                    "instrument_id": "NASD:MISS",
+                    "source": "open_trading_us_quote",
+                }
+            ]
+        ]
+    )
+
+    rows = store.latest_missing_daily_feature_tickers(sources=["open_trading_us_quote"], limit=5)
+
+    assert rows[0]["ticker"] == "MISS"
+    sql, params = store.session.call_pairs[-1]
+    assert "market_features_latest" in sql
+    assert "ret_5d IS NULL OR ret_20d IS NULL OR volatility_20d IS NULL" in sql
+    assert "has_complete_features = 0" in sql
+    assert params["sources"] == ["open_trading_us_quote"]
 
 
 def test_screen_latest_features_does_not_retry_legacy_on_empty_rows() -> None:
@@ -453,6 +526,9 @@ def test_screen_latest_features_does_not_retry_legacy_on_empty_rows() -> None:
     assert rows == []
     assert len(store.session.calls) == 1
     assert "market_features_latest" in store.session.calls[0]
+    assert "ret_5d IS NOT NULL" in store.session.calls[0]
+    assert "ret_20d IS NOT NULL" in store.session.calls[0]
+    assert "volatility_20d IS NOT NULL" in store.session.calls[0]
 
 
 def test_latest_fundamentals_snapshot_does_not_retry_on_empty_rows() -> None:

@@ -92,6 +92,29 @@ def _safe_float(value: object, default: float = 0.0) -> float:
         return float(default)
 
 
+def _finite_float_or_none(value: object) -> float | None:
+    try:
+        if value is None:
+            return None
+        text = str(value).strip().replace(",", "")
+        if not text:
+            return None
+        parsed = float(text)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(parsed):
+        return None
+    return float(parsed)
+
+
+def _has_required_market_history(row: dict[str, object]) -> bool:
+    """True when a snapshot has real daily-history features, not quote-only nulls."""
+    return all(
+        _finite_float_or_none(row.get(key)) is not None
+        for key in ("ret_5d", "ret_20d", "volatility_20d")
+    )
+
+
 def _zscore_map(values: dict[str, float]) -> dict[str, float]:
     if not values:
         return {}
@@ -192,6 +215,8 @@ def build_discovery_rows(
         ticker = str(row.get("ticker") or "").strip().upper()
         if not ticker:
             continue
+        if not _has_required_market_history(row):
+            continue
         row_map[ticker] = dict(row)
     if not row_map:
         return []
@@ -207,10 +232,16 @@ def build_discovery_rows(
         if isinstance(row, dict) and str(row.get("ticker") or "").strip()
     }
 
-    ret5 = {ticker: _safe_float(row.get("ret_5d")) for ticker, row in row_map.items()}
-    ret20 = {ticker: _safe_float(row.get("ret_20d")) for ticker, row in row_map.items()}
+    ret5 = {
+        ticker: float(_finite_float_or_none(row.get("ret_5d")) or 0.0)
+        for ticker, row in row_map.items()
+    }
+    ret20 = {
+        ticker: float(_finite_float_or_none(row.get("ret_20d")) or 0.0)
+        for ticker, row in row_map.items()
+    }
     vol20 = {
-        ticker: max(0.0, _safe_float(row.get("volatility_20d"), default=0.0))
+        ticker: max(0.0, float(_finite_float_or_none(row.get("volatility_20d")) or 0.0))
         for ticker, row in row_map.items()
     }
     sentiment = {ticker: _safe_float(row.get("sentiment_score")) for ticker, row in row_map.items()}

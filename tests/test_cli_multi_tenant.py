@@ -1027,7 +1027,7 @@ def test_build_forecast_tickers_uses_quote_aware_sources() -> None:
     assert {"AAPL", "MSFT"}.issubset(set(out))
 
 
-def test_batch_phase_uses_quote_sources_for_live_us_probe(monkeypatch) -> None:
+def test_batch_phase_uses_daily_sources_for_live_us_seed_probe(monkeypatch) -> None:
     settings = load_settings()
     settings.kis_target_market = "us"
 
@@ -1055,9 +1055,10 @@ def test_batch_phase_uses_quote_sources_for_live_us_probe(monkeypatch) -> None:
 
     phase, out_window = cli._batch_phase(True, settings, repo)
 
-    assert phase == "open_cycle"
+    assert phase == "seed"
     assert out_window is window
-    assert repo.sources[0] == "open_trading_us_quote"
+    assert repo.sources[0] == "open_trading_us"
+    assert all(not source.endswith("_quote") for source in repo.sources)
 
 
 def test_cmd_run_shared_prep_dispatches_agent_job(monkeypatch) -> None:

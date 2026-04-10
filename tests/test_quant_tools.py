@@ -260,6 +260,43 @@ def test_screen_market_returns_rows() -> None:
     assert rows[0]["evidence_level"] == "screened_only"
 
 
+def test_screen_market_excludes_quote_only_rows_without_history_features() -> None:
+    class _SparseRepo(FakeRepo):
+        def __init__(self):
+            super().__init__()
+            self._features = [
+                {
+                    "as_of_ts": "2026-01-01T00:00:00+00:00",
+                    "ticker": "MISSING",
+                    "ret_20d": None,
+                    "ret_5d": None,
+                    "volatility_20d": None,
+                    "sentiment_score": 1.0,
+                    "close_price_krw": 1000.0,
+                    "source": "open_trading_us_quote",
+                },
+                {
+                    "as_of_ts": "2026-01-01T00:00:00+00:00",
+                    "ticker": "ZERO",
+                    "ret_20d": 0.0,
+                    "ret_5d": 0.0,
+                    "volatility_20d": 0.0,
+                    "sentiment_score": 0.0,
+                    "close_price_krw": 1000.0,
+                    "source": "open_trading_us",
+                },
+            ]
+            self.universe_rows = ["MISSING", "ZERO"]
+
+    settings = _settings()
+    settings.default_universe = ["MISSING", "ZERO"]
+    qt = QuantTools(repo=_SparseRepo(), settings=settings)
+
+    rows = qt.screen_market(bucket="defensive", top_n=5)
+
+    assert {row["ticker"] for row in rows} == {"ZERO"}
+
+
 def test_target_universe_filters_us_markets_to_alpha_tickers() -> None:
     settings = _settings()
     settings.kis_target_market = "us"

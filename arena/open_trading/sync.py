@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from statistics import stdev
@@ -61,6 +62,29 @@ def _to_float(value: object, default: float = 0.0) -> float:
         return default
 
 
+def _finite_float_or_none(value: object) -> float | None:
+    try:
+        if value is None:
+            return None
+        text = str(value).strip().replace(",", "")
+        if not text:
+            return None
+        parsed = float(text)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(parsed):
+        return None
+    return float(parsed)
+
+
+def _has_daily_feature_metrics(row: dict[str, object]) -> bool:
+    """True when quote enrichment has daily-history based feature metrics."""
+    return all(
+        _finite_float_or_none(row.get(key)) is not None
+        for key in ("ret_5d", "ret_20d", "volatility_20d")
+    )
+
+
 def _pick_str(row: dict[str, object], keys: list[str]) -> str:
     """Returns the first non-empty string value for keys."""
     for key in keys:
@@ -71,28 +95,28 @@ def _pick_str(row: dict[str, object], keys: list[str]) -> str:
     return ""
 
 
-def _window_return(closes: list[float], window: int) -> float:
+def _window_return(closes: list[float], window: int) -> float | None:
     """Computes trailing return for the provided lookback window."""
     if len(closes) <= window:
-        return 0.0
+        return None
     base = closes[-(window + 1)]
     if base <= 0:
-        return 0.0
+        return None
     return (closes[-1] / base) - 1.0
 
 
-def _volatility_20d(closes: list[float]) -> float:
+def _volatility_20d(closes: list[float]) -> float | None:
     """Computes rolling 20-day return volatility (daily std dev)."""
-    if len(closes) < 3:
-        return 0.0
+    if len(closes) <= 20:
+        return None
     daily_returns: list[float] = []
     for idx in range(1, len(closes)):
         prev = closes[idx - 1]
         now = closes[idx]
         if prev > 0:
             daily_returns.append((now / prev) - 1.0)
-    if len(daily_returns) < 2:
-        return 0.0
+    if len(daily_returns) < 20:
+        return None
     sample = daily_returns[-20:]
     return float(stdev(sample))
 
@@ -390,6 +414,49 @@ class MarketDataSyncService:
 
         return result
 
+    def _include_missing_daily_feature_symbols(self, symbols: list[dict[str, str]]) -> list[dict[str, str]]:
+        """Adds existing latest tickers with missing daily features to the daily sync target set."""
+        loader = getattr(self.repo, "latest_missing_daily_feature_tickers", None)
+        if not callable(loader):
+            return symbols
+
+        limit = max(200, min(max(int(self.settings.universe_per_exchange_cap) * 4, 200), 2_000))
+        try:
+            rows = loader(sources=self._all_sources(), limit=limit)
+        except Exception as exc:
+            logger.warning("[yellow]Missing daily feature scan skipped[/yellow] err=%s", str(exc))
+            return symbols
+        if not rows:
+            return symbols
+
+        out = list(symbols)
+        seen = {str(row.get("ticker") or "").strip().upper() for row in out if str(row.get("ticker") or "").strip()}
+        added = 0
+        for row in rows:
+            ticker = str(row.get("ticker") or "").strip().upper()
+            if not ticker or ticker in seen:
+                continue
+            if self._is_kospi_ticker(ticker):
+                if not self._has_kospi_market():
+                    continue
+                out.append({"ticker": ticker, "quote_excd": "KRX"})
+            else:
+                if not self._has_us_market() or ticker[:1].isdigit():
+                    continue
+                exchange_code = str(row.get("exchange_code") or "").strip().upper()
+                quote_excd = _order_to_quote_exchange(exchange_code)
+                if not quote_excd:
+                    quote_excd = self._known_us_quote_exchange(ticker)
+                if not quote_excd:
+                    quote_excd = str(self.settings.kis_overseas_quote_excd or "NAS").strip().upper() or "NAS"
+                out.append({"ticker": ticker, "quote_excd": quote_excd})
+            seen.add(ticker)
+            added += 1
+
+        if added:
+            logger.info("[cyan]Missing daily feature backfill targets added[/cyan] count=%d", added)
+        return out
+
     @staticmethod
     def _parse_chart_date(token: object) -> datetime | None:
         """Parses YYYYMMDD tokens used across KIS daily chart APIs."""
@@ -495,9 +562,9 @@ class MarketDataSyncService:
                     "close_price_native": float(native_close),
                     "quote_currency": quote_currency,
                     "fx_rate_used": float(fx_used),
-                    "ret_5d": float(ret_5d),
-                    "ret_20d": float(ret_20d),
-                    "volatility_20d": float(vol_20d),
+                    "ret_5d": float(ret_5d) if ret_5d is not None else None,
+                    "ret_20d": float(ret_20d) if ret_20d is not None else None,
+                    "volatility_20d": float(vol_20d) if vol_20d is not None else None,
                     "sentiment_score": float(sentiment),
                     "source": source,
                 }
@@ -989,9 +1056,30 @@ class MarketDataSyncService:
             return True
         return min_d > target_start
 
+    def _should_force_us_backfill(
+        self,
+        *,
+        ticker: str,
+        span: dict[str, Any] | None,
+    ) -> bool:
+        """Returns whether US history should be fully backfilled again."""
+        if not span:
+            return False
+        row_count = int(span.get("row_count") or 0)
+        if row_count < 21:
+            return True
+        min_d = span.get("min_d")
+        target_start = (
+            datetime.now(timezone.utc).date()
+            - timedelta(days=max(int(self.settings.market_sync_history_days), 400))
+        )
+        if not isinstance(min_d, date):
+            return True
+        return min_d > target_start
+
     def sync_market_features(self) -> MarketSyncResult:
         """Fetches market data and writes feature rows into BigQuery."""
-        symbols = self._target_symbols()
+        symbols = self._include_missing_daily_feature_symbols(self._target_symbols())
         if not symbols:
             logger.warning("[yellow]No tickers selected for market sync[/yellow] target=%s", self.settings.kis_target_market)
             return MarketSyncResult(inserted_rows=0, attempted_tickers=0, failed_tickers=[])
@@ -1046,6 +1134,16 @@ class MarketDataSyncService:
                     )
                 else:
                     src = self._daily_source("us")
+                    if self._should_force_us_backfill(
+                        ticker=ticker,
+                        span=(spans_by_source.get(src) or {}).get(ticker),
+                    ):
+                        since_date = None
+                        logger.info(
+                            "[cyan]US history backfill triggered[/cyan] ticker=%s source=%s",
+                            ticker,
+                            src,
+                        )
                     new_rows, instrument_row = self._sync_us_daily(
                         ticker=ticker,
                         preferred_excd=preferred_excd,
@@ -1158,6 +1256,8 @@ class MarketDataSyncService:
                     if last <= 0:
                         raise ValueError("quote returned empty last")
                     base = daily_map.get((ticker, "KRX"), daily_map.get((ticker, ""), {}))
+                    if not _has_daily_feature_metrics(base):
+                        raise ValueError("daily history features unavailable for quote snapshot")
                     rows.append(
                         {
                             "as_of_ts": as_of_ts,
@@ -1193,6 +1293,8 @@ class MarketDataSyncService:
                     quote_meta, instrument_row = self._sync_us_quote(ticker=ticker, preferred_excd=preferred_excd)
                     exchange_code = str(quote_meta.get("exchange_code") or "").strip().upper()
                     base = daily_map.get((ticker, exchange_code), daily_map.get((ticker, ""), {}))
+                    if not _has_daily_feature_metrics(base):
+                        raise ValueError("daily history features unavailable for quote snapshot")
                     rows.append(
                         {
                             "as_of_ts": as_of_ts,
