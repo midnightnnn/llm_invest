@@ -13,6 +13,7 @@ ANALYSIS_TOOLS: frozenset[str] = frozenset(
 )
 ORDERABLE_SIDES: frozenset[str] = frozenset({"BUY", "SELL"})
 EXECUTED_REPORT_STATUSES: frozenset[str] = frozenset({"FILLED", "SIMULATED"})
+CANDIDATE_NEXT_CHECKS: tuple[str, ...] = ("forecast_returns", "technical_signals", "get_fundamentals")
 
 
 def tickers_from_tool_args(args: dict[str, Any]) -> list[str]:
@@ -85,12 +86,34 @@ def discovery_rows_from_tool_result(tool_name: str, result: Any) -> list[dict[st
             return
         seen.add(ticker)
         bucket = str(row.get("bucket") or "").strip().lower() or None
+        evidence: dict[str, Any] = {}
+        for field in (
+            "bucket",
+            "bucket_rank",
+            "score",
+            "reason",
+            "reason_for",
+            "reason_risk",
+            "ret_20d",
+            "ret_5d",
+            "volatility_20d",
+            "sentiment_score",
+            "per",
+            "pbr",
+            "roe",
+            "debt_ratio",
+            "close_price_krw",
+            "evidence_level",
+        ):
+            if row.get(field) is not None:
+                evidence[field] = row.get(field)
         out.append(
             {
                 "ticker": ticker,
                 "rank": rank,
                 "source_tool": _source_tool(bucket),
                 "bucket": bucket,
+                "evidence": evidence,
             }
         )
 
@@ -157,6 +180,9 @@ def update_candidate_ledger(
             except (TypeError, ValueError):
                 rank = 0
             entry["last_seen_rank"] = rank if prev_rank_int is None else min(prev_rank_int, rank)
+            evidence = item.get("evidence") if isinstance(item.get("evidence"), dict) else {}
+            if evidence:
+                entry["discovery_evidence"] = dict(evidence)
         return
 
     if tool_name not in ANALYSIS_TOOLS:
@@ -189,23 +215,41 @@ def discovered_candidate_tickers(
     return [str(row.get("ticker") or "").strip().upper() for row in rows if str(row.get("ticker") or "").strip()]
 
 
+def _workflow_status(entry: dict[str, Any]) -> str:
+    if entry.get("executed_by"):
+        return "executed"
+    if entry.get("intended_by") or entry.get("ordered_by"):
+        return "ordered"
+    if entry.get("skip_reasons"):
+        return "skipped"
+    if entry.get("analyzed_by"):
+        return "analyzed"
+    return "pending"
+
+
+def _candidate_status(entry: dict[str, Any]) -> str:
+    status = _workflow_status(entry)
+    if status == "pending":
+        return "screened_only"
+    return status
+
+
+def _candidate_evidence_level(entry: dict[str, Any]) -> str:
+    evidence = entry.get("discovery_evidence") if isinstance(entry.get("discovery_evidence"), dict) else {}
+    raw_level = str(evidence.get("evidence_level") or "").strip().lower()
+    if raw_level and raw_level != "screened_only":
+        return raw_level
+    if entry.get("analyzed_by"):
+        return "screen_and_analysis"
+    return "screened_only"
+
+
 def opportunity_working_set(
     candidate_ledger: dict[str, dict[str, Any]],
     *,
     limit: int = 5,
 ) -> list[dict[str, Any]]:
     """Builds a compact self-discovered opportunity list for prompt visibility."""
-
-    def _status(entry: dict[str, Any]) -> str:
-        if entry.get("executed_by"):
-            return "executed"
-        if entry.get("intended_by") or entry.get("ordered_by"):
-            return "ordered"
-        if entry.get("skip_reasons"):
-            return "skipped"
-        if entry.get("analyzed_by"):
-            return "analyzed"
-        return "pending"
 
     priority = {
         "pending": 0,
@@ -228,10 +272,12 @@ def opportunity_working_set(
             }
         )
         analyzed_by = sorted(str(tool).strip() for tool in raw_entry.get("analyzed_by", set()) if str(tool).strip())
-        status = _status(raw_entry)
+        workflow_status = _workflow_status(raw_entry)
         row: dict[str, Any] = {
             "ticker": ticker,
-            "status": status,
+            "status": _candidate_status(raw_entry),
+            "workflow_status": workflow_status,
+            "evidence_level": _candidate_evidence_level(raw_entry),
             "source_tools": source_tools,
             "analyzed_by": analyzed_by,
         }
@@ -249,7 +295,7 @@ def opportunity_working_set(
             last_seen_rank = None
         if last_seen_rank is not None:
             row["last_seen_rank"] = last_seen_rank
-        if status == "skipped":
+        if workflow_status == "skipped":
             skip_reasons = raw_entry.get("skip_reasons")
             if isinstance(skip_reasons, dict):
                 row["skip_reasons"] = {
@@ -261,13 +307,80 @@ def opportunity_working_set(
 
     rows.sort(
         key=lambda item: (
-            priority.get(str(item.get("status") or "pending"), 99),
+            priority.get(str(item.get("workflow_status") or "pending"), 99),
             int(item.get("last_seen_rank") or 9999),
             -int(item.get("discovery_count") or 0),
             str(item.get("ticker") or ""),
         )
     )
     return rows[: max(1, min(int(limit), 10))]
+
+
+def candidate_cases(
+    candidate_ledger: dict[str, dict[str, Any]],
+    *,
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    """Builds model-facing non-held candidate cases without inventing thesis memory."""
+    working_rows = opportunity_working_set(candidate_ledger, limit=limit)
+    out: list[dict[str, Any]] = []
+    for row in working_rows:
+        ticker = str(row.get("ticker") or "").strip().upper()
+        entry = candidate_ledger.get(ticker)
+        if not ticker or not isinstance(entry, dict):
+            continue
+        evidence = entry.get("discovery_evidence") if isinstance(entry.get("discovery_evidence"), dict) else {}
+        source_tools = list(row.get("source_tools") or [])
+        analyzed_by = list(row.get("analyzed_by") or [])
+        analyzed_set = set(analyzed_by)
+        case_for = str(evidence.get("reason_for") or evidence.get("reason") or "").strip()
+        if not case_for:
+            buckets = row.get("discovery_buckets") if isinstance(row.get("discovery_buckets"), list) else []
+            if buckets:
+                case_for = "Discovered by screen_market buckets: " + ", ".join(str(bucket) for bucket in buckets)
+            elif source_tools:
+                case_for = "Discovered by " + ", ".join(source_tools[:3])
+            else:
+                case_for = "Discovered by market screening."
+        case_risk = str(evidence.get("reason_risk") or "").strip()
+        if not case_risk:
+            if analyzed_by:
+                case_risk = "Review recent analysis outputs before initiating a new position."
+            else:
+                case_risk = "Screen-only evidence; confirm with forecast/technical/fundamental tools before initiating."
+        missing_checks = [tool for tool in CANDIDATE_NEXT_CHECKS if tool not in analyzed_set]
+        item: dict[str, Any] = {
+            "ticker": ticker,
+            "current_status": "candidate",
+            "candidate_status": row.get("status") or _candidate_status(entry),
+            "workflow_status": row.get("workflow_status") or _workflow_status(entry),
+            "evidence_level": row.get("evidence_level") or _candidate_evidence_level(entry),
+            "case_for": case_for,
+            "case_risk": case_risk,
+            "source_tools": source_tools,
+            "analyzed_by": analyzed_by,
+            "suggested_next_checks": missing_checks[:3],
+        }
+        for field in (
+            "bucket",
+            "bucket_rank",
+            "score",
+            "ret_20d",
+            "ret_5d",
+            "volatility_20d",
+            "sentiment_score",
+            "per",
+            "pbr",
+            "roe",
+            "debt_ratio",
+            "close_price_krw",
+        ):
+            if evidence.get(field) is not None:
+                item[field] = evidence.get(field)
+        if row.get("discovery_buckets"):
+            item["discovery_buckets"] = row.get("discovery_buckets")
+        out.append(item)
+    return out
 
 
 def record_candidate_orders(
@@ -390,3 +503,32 @@ def funnel_metrics(
         "skipped_nonheld": skipped_nonheld,
         "skip_reasons": skip_reasons,
     }
+
+
+def model_facing_funnel_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
+    """Renames internal funnel counters for prompt-facing candidate evidence levels."""
+    raw = metrics if isinstance(metrics, dict) else {}
+
+    def _int(key: str, alias: str) -> int:
+        try:
+            value = raw.get(key)
+            if value is None:
+                value = raw.get(alias)
+            return int(value or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    out: dict[str, Any] = {
+        "discovered_candidates": _int("discovered_nonheld", "discovered_candidates"),
+        "screened_only_candidates": _int("pending_nonheld", "screened_only_candidates"),
+        "fully_analyzed_candidates": _int("analyzed_nonheld", "fully_analyzed_candidates"),
+        "analyzed_held_positions": _int("analyzed_held", "analyzed_held_positions"),
+        "ordered_candidates": _int("ordered_nonheld", "ordered_candidates"),
+        "intended_candidates": _int("intended_nonheld", "intended_candidates"),
+        "executed_candidates": _int("executed_nonheld", "executed_candidates"),
+        "skipped_candidates": _int("skipped_nonheld", "skipped_candidates"),
+    }
+    skip_reasons = raw.get("skip_reasons")
+    if isinstance(skip_reasons, dict) and skip_reasons:
+        out["skip_reasons"] = dict(skip_reasons)
+    return out

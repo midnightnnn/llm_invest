@@ -138,17 +138,71 @@ function promptPhaseLabel(phase){
   if(token==="board")return"Board Prompt";
   return token?token:"Prompt";
 }
-function buildPromptSectionHTML(title,body,meta){
-  var text=String(body||"");
-  if(!text)return"";
-  var h='<div class="rounded-[18px] border border-ink-200/60 bg-white/75 p-4 shadow-sm">';
-  h+='<p class="text-[10px] font-bold uppercase tracking-widest text-ink-900">'+escapeHtml(title)+'</p>';
-  if(meta){
-    h+='<p class="mt-1 text-[10px] text-ink-700">'+escapeHtml(meta)+'</p>';
+function stringifyTranscriptValue(value){
+  if(value==null)return"";
+  try{return JSON.stringify(value,null,2);}
+  catch(_e){return String(value);}
+}
+function buildToolTranscriptText(ev,index){
+  var lines=[];
+  var tool=String((ev&&ev.tool)||"tool");
+  var phase=String((ev&&ev.phase)||"execution").toUpperCase();
+  lines.push("----- TOOL RESULT "+(index+1)+" ["+phase+"] "+tool+" -----");
+  if(ev&&ev.source)lines.push("source: "+String(ev.source));
+  if(ev&&ev.elapsed_ms!=null)lines.push("elapsed_ms: "+String(ev.elapsed_ms));
+  if(ev&&ev.args&&typeof ev.args==="object"&&Object.keys(ev.args).length){
+    lines.push("args:");
+    lines.push(stringifyTranscriptValue(ev.args));
   }
-  h+='<pre class="mt-2 max-h-96 overflow-auto whitespace-pre-wrap break-words rounded-[14px] bg-ink-950 px-3 py-3 text-[11px] leading-relaxed text-ink-50">'+escapeHtml(text)+'</pre>';
-  h+='</div>';
-  return h;
+  var result=ev?(ev.result!=null?ev.result:ev.result_preview):null;
+  if(result!=null){
+    lines.push("result:");
+    lines.push(stringifyTranscriptValue(result));
+  }
+  if(ev&&ev.error){
+    lines.push("error:");
+    lines.push(String(ev.error));
+  }
+  return lines.join("\n");
+}
+function buildModelVisibleTranscriptText(payload){
+  var bundle=payload.prompt_bundle&&typeof payload.prompt_bundle==="object"?payload.prompt_bundle:{};
+  var phases=Array.isArray(bundle.phases)?bundle.phases:[];
+  var tools=Array.isArray(payload.tool_events)?payload.tool_events:[];
+  var usedTools={};
+  var lines=[];
+  if(bundle.system_prompt){
+    lines.push("===== SYSTEM INSTRUCTION =====");
+    lines.push(String(bundle.system_prompt));
+    lines.push("");
+  }
+  phases.forEach(function(item){
+    if(!item||typeof item!=="object")return;
+    var phaseToken=String(item.phase||"").toLowerCase();
+    var prompt=String(item.prompt||"");
+    if(prompt){
+      lines.push("===== USER PROMPT: "+promptPhaseLabel(phaseToken).toUpperCase()+" =====");
+      var metaBits=[];
+      if(item.session_id)metaBits.push("session "+String(item.session_id));
+      if(item.resume_session)metaBits.push("resumed");
+      if(metaBits.length)lines.push("# "+metaBits.join(" | "));
+      lines.push(prompt);
+      lines.push("");
+    }
+    tools.forEach(function(ev,idx){
+      var evPhase=String((ev&&ev.phase)||"execution").toLowerCase();
+      if(evPhase!==phaseToken)return;
+      usedTools[idx]=1;
+      lines.push(buildToolTranscriptText(ev,idx));
+      lines.push("");
+    });
+  });
+  tools.forEach(function(ev,idx){
+    if(usedTools[idx])return;
+    lines.push(buildToolTranscriptText(ev,idx));
+    lines.push("");
+  });
+  return lines.join("\n").trim();
 }
 function buildPromptBundleHTML(data){
   var payload=data&&typeof data==="object"?data:{};
@@ -158,29 +212,13 @@ function buildPromptBundleHTML(data){
   if(!bundle.system_prompt&&!phases.length&&!hasTools){
     return'<p class="text-xs text-ink-400 italic">No prompt bundle found for this post.</p>';
   }
+  var transcript=buildModelVisibleTranscriptText(payload);
   var h='<div class="space-y-3">';
   h+='<p class="text-xs font-bold uppercase tracking-widest text-ink-900">Prompt Details</p>';
-  h+=buildPromptSectionHTML("System Prompt",bundle.system_prompt||"","");
-  phases.forEach(function(item){
-    if(!item||typeof item!=="object")return;
-    var metaBits=[];
-    if(item.session_id)metaBits.push("session "+String(item.session_id));
-    if(item.resume_session)metaBits.push("resumed");
-    h+=buildPromptSectionHTML(promptPhaseLabel(item.phase),item.prompt||"",metaBits.join(" \u00b7 "));
-  });
-  if(payload.analysis_funnel&&Object.keys(payload.analysis_funnel).length){
-    h+=buildPromptSectionHTML(
-      "Analysis Funnel Snapshot",
-      JSON.stringify(payload.analysis_funnel,null,2),
-      "Pre-board funnel telemetry"
-    );
-  }
-  if(hasTools){
-    h+='<div class="rounded-[18px] border border-ink-200/60 bg-white/75 p-4 shadow-sm">';
-    h+='<p class="text-[10px] font-bold uppercase tracking-widest text-ink-900">Compacted Tool Transcript</p>';
-    h+='<div class="mt-2">'+buildToolPipelineHTML({tool_events:payload.tool_events||[],tool_mix:payload.tool_mix||{}},{hideTitle:true})+'</div>';
-    h+='</div>';
-  }
+  h+='<div class="rounded-[18px] border border-ink-200/60 bg-white/75 p-4 shadow-sm">';
+  h+='<p class="text-[10px] font-bold uppercase tracking-widest text-ink-900">Model-Visible Transcript</p>';
+  h+='<pre class="mt-2 max-h-[42rem] overflow-auto whitespace-pre-wrap break-words rounded-[14px] border border-ink-100 bg-ink-50 px-3 py-3 font-mono text-[11px] leading-relaxed text-ink-900">'+escapeHtml(transcript)+'</pre>';
+  h+='</div>';
   h+='</div>';
   return h;
 }

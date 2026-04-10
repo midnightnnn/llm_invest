@@ -189,6 +189,7 @@ def test_prepare_decision_prompt_resume_reuses_session_and_includes_board_contex
             "order_budget": {"max_buy_notional_krw": 1_000_000},
             "risk_policy": {"max_position_ratio": 0.2},
             "decision_frame": "Compare opportunities against weakest holding.",
+            "candidate_cases": [{"ticker": "MSFT", "case_for": "screened candidate"}],
         },
         default_universe=["AAPL"],
         phase="execution",
@@ -202,6 +203,7 @@ def test_prepare_decision_prompt_resume_reuses_session_and_includes_board_contex
     assert needs_new_session is False
     assert "peer conviction is rising" in prompt
     assert "Compare opportunities against weakest holding." in prompt
+    assert "screened candidate" in prompt
     assert '"max_tool_calls": 12' in prompt
 
 
@@ -272,8 +274,10 @@ def test_user_prompt_omits_sleeve_state_payload() -> None:
     json_start = prompt.index("{", prompt.index(marker))
     payload = json.loads(prompt[json_start:])
     assert "sleeve_state" not in payload
-    assert payload["analysis_funnel"]["pending_nonheld"] == 2
+    assert payload["analysis_funnel"]["screened_only_candidates"] == 2
+    assert "pending_nonheld" not in payload["analysis_funnel"]
     assert payload["opportunity_working_set"] == [{"ticker": "TSLA", "status": "pending"}]
+    assert payload["candidate_cases"] == []
     assert payload["decision_frame"] == "Compare self-discovered opportunities against cash first."
     assert payload["tool_budget"]["max_tool_calls"] == 5
 
@@ -646,8 +650,15 @@ def test_candidate_ledger_tracks_discovery_and_analysis_from_result_tickers() ->
         {},
         [
             {"ticker": "AAPL", "bucket": "momentum"},
-            {"ticker": "MSFT", "bucket": "value"},
-            {"ticker": "TSLA", "bucket": "pullback"},
+            {
+                "ticker": "MSFT",
+                "bucket": "value",
+                "score": 1.7,
+                "reason_for": "Valuation support: PER 14.0",
+                "reason_risk": "Screen-only evidence; confirm first.",
+                "ret_20d": 0.04,
+            },
+            {"ticker": "TSLA", "bucket": "pullback", "reason": "Recent pullback"},
         ],
     )
 
@@ -657,8 +668,15 @@ def test_candidate_ledger_tracks_discovery_and_analysis_from_result_tickers() ->
     assert runner._current_context["_candidate_tickers"] == ["MSFT", "TSLA"]
     assert runner._current_context["_discovered_candidate_tickers"] == ["MSFT", "TSLA"]
     assert [row["ticker"] for row in runner._current_context["opportunity_working_set"]] == ["MSFT", "TSLA"]
-    assert runner._current_context["opportunity_working_set"][0]["status"] == "pending"
+    assert runner._current_context["opportunity_working_set"][0]["status"] == "screened_only"
+    assert runner._current_context["opportunity_working_set"][0]["workflow_status"] == "pending"
     assert runner._current_context["opportunity_working_set"][0]["discovery_buckets"] == ["value"]
+    assert runner._current_context["analysis_funnel_prompt"]["screened_only_candidates"] == 2
+    assert runner._current_context["candidate_cases"][0]["ticker"] == "MSFT"
+    assert runner._current_context["candidate_cases"][0]["case_for"].startswith("Valuation support")
+    assert runner._current_context["candidate_cases"][0]["case_risk"] == "Screen-only evidence; confirm first."
+    assert runner._current_context["candidate_cases"][0]["evidence_level"] == "screened_only"
+    assert "thesis_summary" not in runner._current_context["candidate_cases"][0]
 
     runner._update_candidate_ledger(
         "forecast_returns",
@@ -669,6 +687,8 @@ def test_candidate_ledger_tracks_discovery_and_analysis_from_result_tickers() ->
     assert runner._candidate_ledger["MSFT"]["analyzed_by"] == {"forecast_returns"}
     assert runner._current_context["analysis_funnel"]["analyzed_nonheld"] == 1
     assert runner._current_context["analysis_funnel"]["pending_nonheld"] == 1
+    assert runner._current_context["analysis_funnel_prompt"]["fully_analyzed_candidates"] == 1
+    assert runner._current_context["analysis_funnel_prompt"]["screened_only_candidates"] == 1
     assert runner._current_context["opportunity_working_set"][0]["ticker"] == "TSLA"
 
 
@@ -688,6 +708,8 @@ def test_candidate_ledger_records_screen_market_momentum_bucket_source() -> None
 
     assert runner._candidate_ledger["PBR"]["source_tools"] == {"screen_market:momentum"}
     assert runner._current_context["opportunity_working_set"][0]["discovery_buckets"] == ["momentum"]
+    assert runner._current_context["opportunity_working_set"][0]["status"] == "screened_only"
+    assert runner._current_context["candidate_cases"][0]["ticker"] == "PBR"
 
 
 def test_funnel_metrics_counts_held_analysis_from_result_tickers() -> None:
@@ -790,6 +812,8 @@ def test_sync_pipeline_context_adds_decision_frame_when_opportunities_have_budge
     runner._sync_pipeline_context()
 
     assert "Compare any self-discovered opportunities" in runner._current_context["decision_frame"]
+    assert runner._current_context["candidate_cases"][0]["ticker"] == "MSFT"
+    assert runner._current_context["candidate_cases"][0]["candidate_status"] == "screened_only"
 
 
 class _RepoForPortfolioDiagnosis:
@@ -1246,6 +1270,8 @@ def test_compact_tool_result_screen_market_keeps_bucket_reason_and_value_fields(
                 "bucket_rank": 1,
                 "score": 2.14,
                 "reason": "Valuation support: PER 6.2, PBR 1.1",
+                "reason_for": "Valuation support: PER 6.2, PBR 1.1",
+                "reason_risk": "Screen-only evidence; confirm first.",
                 "ret_20d": 0.11,
                 "ret_5d": -0.02,
                 "volatility_20d": 0.21,
@@ -1262,6 +1288,8 @@ def test_compact_tool_result_screen_market_keeps_bucket_reason_and_value_fields(
     assert out[0]["ticker"] == "PBR"
     assert out[0]["bucket"] == "value"
     assert out[0]["reason"].startswith("Valuation support")
+    assert out[0]["reason_for"].startswith("Valuation support")
+    assert out[0]["reason_risk"] == "Screen-only evidence; confirm first."
     assert out[0]["per"] == 6.2
     assert out[0]["pbr"] == 1.1
 

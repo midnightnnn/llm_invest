@@ -131,6 +131,46 @@ def _append_metric(row: dict[str, object], key: str, value: object) -> None:
     row[key] = float(val)
 
 
+def _screen_reason_risk(
+    *,
+    bucket: str,
+    ret_5d: float,
+    ret_20d: float,
+    volatility_20d: float,
+    fundamentals: dict[str, object] | None = None,
+) -> str:
+    """Builds a compact, data-backed caution note for screened candidates."""
+    notes: list[str] = []
+    bucket_token = str(bucket or "").strip().lower()
+
+    if volatility_20d >= 0.50:
+        notes.append(f"High 20d volatility {volatility_20d:.3f}.")
+    elif volatility_20d >= 0.30:
+        notes.append(f"Elevated 20d volatility {volatility_20d:.3f}.")
+
+    if ret_5d < 0.0:
+        notes.append(f"5d return is cooling at {ret_5d:+.2%}.")
+    elif bucket_token == "momentum" and ret_20d >= 0.25:
+        notes.append(f"20d move is already stretched at {ret_20d:+.2%}.")
+
+    if bucket_token == "value":
+        fund = fundamentals or {}
+        per = _safe_float(fund.get("per"), default=np.nan)
+        pbr = _safe_float(fund.get("pbr"), default=np.nan)
+        roe = _safe_float(fund.get("roe"), default=np.nan)
+        debt = _safe_float(fund.get("debt_ratio"), default=np.nan)
+        if not np.isfinite(per) and not np.isfinite(pbr):
+            notes.append("Valuation snapshot is incomplete.")
+        if np.isfinite(roe) and roe <= 0.0:
+            notes.append(f"ROE is weak at {roe:.2f}.")
+        if np.isfinite(debt) and debt >= 200.0:
+            notes.append(f"Debt ratio is elevated at {debt:.1f}.")
+
+    if not notes:
+        notes.append("Screen-only evidence; confirm with forecast/technical/fundamental tools before initiating.")
+    return " ".join(notes)
+
+
 def build_discovery_rows(
     latest_rows: list[dict[str, object]],
     *,
@@ -258,10 +298,19 @@ def build_discovery_rows(
         row = dict(base_row)
         row["bucket"] = "momentum"
         row["score"] = round(float(momentum_score), 6)
-        row["reason"] = (
+        reason_for = (
             f"Multi-window momentum {momentum.get(ticker, 0.0):+.2f}, "
             f"20d return {ret20.get(ticker, 0.0):+.2%}"
         )
+        row["reason"] = reason_for
+        row["reason_for"] = reason_for
+        row["reason_risk"] = _screen_reason_risk(
+            bucket="momentum",
+            ret_5d=ret5.get(ticker, 0.0),
+            ret_20d=ret20.get(ticker, 0.0),
+            volatility_20d=vol20.get(ticker, 0.0),
+        )
+        row["evidence_level"] = "screened_only"
         bucket_rows["momentum"].append(row)
 
         pullback_score = (
@@ -274,10 +323,19 @@ def build_discovery_rows(
         row = dict(base_row)
         row["bucket"] = "pullback"
         row["score"] = round(float(pullback_score), 6)
-        row["reason"] = (
+        reason_for = (
             f"Uptrend intact but recent pullback: 20d {ret20.get(ticker, 0.0):+.2%}, "
             f"5d {ret5.get(ticker, 0.0):+.2%}"
         )
+        row["reason"] = reason_for
+        row["reason_for"] = reason_for
+        row["reason_risk"] = _screen_reason_risk(
+            bucket="pullback",
+            ret_5d=ret5.get(ticker, 0.0),
+            ret_20d=ret20.get(ticker, 0.0),
+            volatility_20d=vol20.get(ticker, 0.0),
+        )
+        row["evidence_level"] = "screened_only"
         bucket_rows["pullback"].append(row)
 
         recovery_score = (
@@ -290,10 +348,19 @@ def build_discovery_rows(
         row = dict(base_row)
         row["bucket"] = "recovery"
         row["score"] = round(float(recovery_score), 6)
-        row["reason"] = (
+        reason_for = (
             f"Recent recovery bias: 5d {ret5.get(ticker, 0.0):+.2%}, "
             f"20d {ret20.get(ticker, 0.0):+.2%}, sentiment {sentiment.get(ticker, 0.0):+.2f}"
         )
+        row["reason"] = reason_for
+        row["reason_for"] = reason_for
+        row["reason_risk"] = _screen_reason_risk(
+            bucket="recovery",
+            ret_5d=ret5.get(ticker, 0.0),
+            ret_20d=ret20.get(ticker, 0.0),
+            volatility_20d=vol20.get(ticker, 0.0),
+        )
+        row["evidence_level"] = "screened_only"
         bucket_rows["recovery"].append(row)
 
         defensive_score = (
@@ -305,10 +372,19 @@ def build_discovery_rows(
         row = dict(base_row)
         row["bucket"] = "defensive"
         row["score"] = round(float(defensive_score), 6)
-        row["reason"] = (
+        reason_for = (
             f"Lower-volatility profile: vol20 {vol20.get(ticker, 0.0):.3f}, "
             f"20d {ret20.get(ticker, 0.0):+.2%}"
         )
+        row["reason"] = reason_for
+        row["reason_for"] = reason_for
+        row["reason_risk"] = _screen_reason_risk(
+            bucket="defensive",
+            ret_5d=ret5.get(ticker, 0.0),
+            ret_20d=ret20.get(ticker, 0.0),
+            volatility_20d=vol20.get(ticker, 0.0),
+        )
+        row["evidence_level"] = "screened_only"
         bucket_rows["defensive"].append(row)
 
         fundamentals = fundamentals_map.get(ticker) or {}
@@ -337,10 +413,20 @@ def build_discovery_rows(
             row = dict(base_row)
             row["bucket"] = "value"
             row["score"] = round(float(value_score), 6)
-            row["reason"] = (
+            reason_for = (
                 f"Valuation support: PER {per if per is not None else 'n/a'}, "
                 f"PBR {pbr if pbr is not None else 'n/a'}"
             )
+            row["reason"] = reason_for
+            row["reason_for"] = reason_for
+            row["reason_risk"] = _screen_reason_risk(
+                bucket="value",
+                ret_5d=ret5.get(ticker, 0.0),
+                ret_20d=ret20.get(ticker, 0.0),
+                volatility_20d=vol20.get(ticker, 0.0),
+                fundamentals=fundamentals,
+            )
+            row["evidence_level"] = "screened_only"
             _append_metric(row, "per", per)
             _append_metric(row, "pbr", pbr)
             _append_metric(row, "eps", eps)

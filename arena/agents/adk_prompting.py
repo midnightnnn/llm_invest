@@ -10,6 +10,7 @@ from typing import Any, Callable
 
 from arena.config import AgentConfig
 from arena.data.bq import BigQueryRepository
+from arena.agents.adk_runner_state import model_facing_funnel_metrics
 from arena.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
@@ -130,14 +131,13 @@ _DRAFT_FORMAT = """\
 
 EXECUTION_FORMAT = """\
 ## 주문 규칙
-정수(whole-share) 단위의 주식 주문만 지원되며, 소수점 단위 주식(fractional shares) 거래는 허용되지 않습니다.
-size_ratio는 슬리브 자본(sleeve equity) 대비 목표 익스포저의 공격성(0.0~1.0)을 의미합니다.
-size_ratio=1을 무조건적인 풀매수(all-in)가 아닌, 가장 강한 확신의 설정치로 간주하십시오.
-최종 체결 가능 수량은 런타임 포트폴리오 및 브로커의 제약 조건에 따라 조정될 수 있습니다.
-BUY(매수)의 경우 예상 주식 수(sleeve_equity * size_ratio / price_per_share)가 최소 1 이상이 되도록 size_ratio를 설정하십시오. 1 미만일 경우 해당 티커에 대해 HOLD(보유)를 사용하십시오.
-
-항상 컨텍스트 상의 런타임 슬리브 제약 조건을 준수하십시오.
-sleeve_state.buy_blocked가 참(true)이거나 order_budget.max_buy_notional_krw가 0(또는 0에 근접)인 경우, 이번 사이클에서 BUY 주문을 내지 마십시오. SELL 또는 HOLD만 사용하십시오.
+- 정수(whole-share) 단위의 주식 주문만 지원합니다. 소수점 단위 주식(fractional shares)은 주문하지 마십시오.
+- side는 BUY, SELL, HOLD 중 하나입니다.
+- size_ratio는 0.0~1.0 범위입니다. BUY는 sleeve_equity 대비 목표 익스포저의 공격성, SELL은 보유 수량 대비 매도 비율을 의미합니다.
+- size_ratio=1은 무조건적인 풀매수(all-in)가 아니라 가장 강한 확신의 설정치입니다. 최종 체결 가능 수량은 런타임 포트폴리오와 브로커 제약에 따라 조정될 수 있습니다.
+- BUY는 예상 주식 수(sleeve_equity * size_ratio / price_per_share)가 최소 1 이상이 되도록 설정하십시오. 1 미만이면 해당 티커는 HOLD를 사용하십시오.
+- sleeve_state.buy_blocked가 true이거나 order_budget.max_buy_notional_krw가 0 또는 0에 가까우면 BUY를 내지 말고 SELL 또는 HOLD만 사용하십시오.
+- orders 배열에는 여러 종목의 주문을 넣을 수 있습니다. 거래가 필요 없으면 빈 배열 []로 반환하십시오.
 
 ## 출력 형식 (반드시 이 JSON 형식을 준수)
 ```json
@@ -153,13 +153,7 @@ sleeve_state.buy_blocked가 참(true)이거나 order_budget.max_buy_notional_krw
     }
   ]
 }
-```
-
-필드 규칙:
-- side: BUY, SELL, HOLD 중 하나
-- size_ratio: 0.0~1.0 범위. BUY는 sleeve_equity 대비 투자 비중, SELL은 보유 수량 대비 매도 비율
-- orders 배열에 여러 주문을 넣을 수 있습니다. 한 사이클에 여러 종목을 동시에 매수/매도 가능합니다
-- 거래가 필요 없으면 orders를 빈 배열 []로 반환"""
+```"""
 
 
 def _user_prompt(context: dict[str, Any], default_universe: list[str], *, max_tool_calls: int = 50) -> str:
@@ -168,6 +162,10 @@ def _user_prompt(context: dict[str, Any], default_universe: list[str], *, max_to
 
     phase = context.get("cycle_phase", "execution")
     phase_format = _DRAFT_FORMAT if phase == "draft" else EXECUTION_FORMAT
+
+    analysis_funnel = context.get("analysis_funnel_prompt")
+    if not isinstance(analysis_funnel, dict):
+        analysis_funnel = model_facing_funnel_metrics(context.get("analysis_funnel", {}))
 
     payload = {
         "cycle_phase": phase,
@@ -180,8 +178,9 @@ def _user_prompt(context: dict[str, Any], default_universe: list[str], *, max_to
         "risk_policy": context.get("risk_policy", {}),
         "order_budget": context.get("order_budget", {}),
         "active_theses": context.get("active_theses", []),
-        "analysis_funnel": context.get("analysis_funnel", {}),
+        "analysis_funnel": analysis_funnel,
         "opportunity_working_set": context.get("opportunity_working_set", []),
+        "candidate_cases": context.get("candidate_cases", []),
         "decision_frame": context.get("decision_frame", ""),
         "investment_style_context": context.get("investment_style_context", ""),
         "recent_memory_summaries": [

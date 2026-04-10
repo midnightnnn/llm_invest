@@ -78,6 +78,8 @@ def _compact_tool_result_for_prompt(
                 "bucket_rank",
                 "score",
                 "reason",
+                "reason_for",
+                "reason_risk",
                 "ret_20d",
                 "ret_5d",
                 "volatility_20d",
@@ -87,10 +89,11 @@ def _compact_tool_result_for_prompt(
                 "roe",
                 "debt_ratio",
                 "close_price_krw",
+                "evidence_level",
             ),
             limit=12,
-            text_fields=("reason",),
-            max_text=120,
+            text_fields=("reason", "reason_for", "reason_risk"),
+            max_text=140,
         )
     elif token == "forecast_returns":
         rows = _compact_rows(

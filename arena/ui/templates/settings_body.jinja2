@@ -87,7 +87,11 @@ setTimeout(function(){
 <style>
   input:not([type="hidden"]),
   select,
-  textarea { pointer-events: none !important; opacity: 0.65 !important; }
+  textarea {
+    pointer-events: none !important;
+    background-color: rgba(241, 245, 249, 0.8) !important;
+    cursor: not-allowed !important;
+  }
   button[type="submit"] { pointer-events: none !important; opacity: 0.45 !important; }
   .toggle-switch input { pointer-events: none !important; opacity: 0.45 !important; }
   .agent-tool-toggle { pointer-events: none !important; opacity: 0.5 !important; }

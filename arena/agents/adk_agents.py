@@ -65,8 +65,10 @@ from arena.agents.adk_runner_bootstrap import (
     runner_identity,
 )
 from arena.agents.adk_runner_state import (
+    candidate_cases,
     discovered_candidate_tickers,
     funnel_metrics,
+    model_facing_funnel_metrics,
     opportunity_working_set,
     record_candidate_executions,
     record_candidate_order_feedback,
@@ -350,7 +352,10 @@ class _ADKDecisionRunner:
         self._current_context["_candidate_tickers"] = self._unresolved_candidates()
         self._current_context["_discovered_candidate_tickers"] = self._discovered_candidates()
         self._current_context["opportunity_working_set"] = self._opportunity_working_set()
-        self._current_context["analysis_funnel"] = self._funnel_metrics()
+        metrics = self._funnel_metrics()
+        self._current_context["analysis_funnel"] = metrics
+        self._current_context["analysis_funnel_prompt"] = model_facing_funnel_metrics(metrics)
+        self._current_context["candidate_cases"] = self._candidate_cases()
         self._current_context["decision_frame"] = self._decision_frame()
 
     def _update_candidate_ledger(self, tool_name: str, args: dict[str, Any], result: Any) -> None:
@@ -374,6 +379,11 @@ class _ADKDecisionRunner:
         if not bool(getattr(getattr(self, "settings", None), "autonomy_working_set_enabled", True)):
             return []
         return opportunity_working_set(self._candidate_ledger)
+
+    def _candidate_cases(self) -> list[dict[str, Any]]:
+        if not bool(getattr(getattr(self, "settings", None), "autonomy_working_set_enabled", True)):
+            return []
+        return candidate_cases(self._candidate_ledger)
 
     def _decision_frame(self) -> str:
         """Returns a light-touch decision frame without forcing exploration."""
@@ -403,6 +413,9 @@ class _ADKDecisionRunner:
             self._tool_events,
             self._held_tickers_cache,
         )
+
+    def _funnel_metrics_for_prompt(self) -> dict[str, Any]:
+        return model_facing_funnel_metrics(self._funnel_metrics())
 
     def record_candidate_orders(self, orders: list[dict[str, Any]]) -> None:
         """Syncs raw model orders into the candidate ledger for funnel telemetry."""
@@ -588,7 +601,7 @@ class _ADKDecisionRunner:
             base_session_id=self._session_id,
             max_tool_events=self._max_tool_events,
             resume_session_id=resume_session_id,
-            analysis_funnel=self._funnel_metrics(),
+            analysis_funnel=self._funnel_metrics_for_prompt(),
         )
         if needs_new_session:
             self._run_on_loop(

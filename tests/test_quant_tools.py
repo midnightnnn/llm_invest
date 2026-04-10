@@ -255,6 +255,9 @@ def test_screen_market_returns_rows() -> None:
     assert rows[0]["ticker"]
     assert rows[0]["bucket"] in {"momentum", "pullback", "recovery", "defensive", "value"}
     assert "score" in rows[0]
+    assert rows[0]["reason_for"]
+    assert rows[0]["reason_risk"]
+    assert rows[0]["evidence_level"] == "screened_only"
 
 
 def test_target_universe_filters_us_markets_to_alpha_tickers() -> None:
@@ -348,6 +351,8 @@ def test_screen_market_momentum_bucket_outputs_scores() -> None:
     assert "ticker" in rows[0]
     assert "score" in rows[0]
     assert rows[0]["bucket"] == "momentum"
+    assert rows[0]["reason_for"].startswith("Multi-window momentum")
+    assert "Screen-only evidence" in rows[0]["reason_risk"] or "volatility" in rows[0]["reason_risk"]
 
 
 def test_screen_market_momentum_bucket_live_us_passes_quote_sources() -> None:
@@ -434,6 +439,8 @@ def test_screen_market_value_bucket_prefers_snapshot_valuation() -> None:
 
     assert [row["ticker"] for row in rows] == ["CHEAP", "EXPNSV"]
     assert rows[0]["bucket"] == "value"
+    assert rows[0]["reason_for"].startswith("Valuation support")
+    assert rows[0]["reason_risk"]
     assert repo.last_fundamentals_kwargs is not None
 
 

@@ -1630,6 +1630,8 @@ def test_board_page_includes_prompt_and_memory_panels(monkeypatch) -> None:
     assert "/api/board/prompt" in response.text
     assert "/api/board/theses" in response.text
     assert "Prompt Details" in response.text
+    assert "Model-Visible Transcript" in response.text
+    assert "Compacted Tool Transcript" not in response.text
     assert "Related Memory" in response.text
 
 
