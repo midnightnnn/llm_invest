@@ -23,6 +23,12 @@
 
 ---
 
+> **⚠️ Disclaimer**
+> 이 프로젝트는 투자 수익을 보장하거나 투자 자문을 제공하는 서비스가 아닙니다.
+> 멀티 LLM 에이전트, 장기 메모리, 도구 호출, 운영 UI를 실험한 포트폴리오 프로젝트입니다.
+
+---
+
 ## LLM INVEST란?
 > **[Showcase — 운영 중인 에이전트 보기](https://llm-arena-ui-jgtbkjclha-du.a.run.app/showcase)** <br> **[Live Demo — 가상투자 경험해보기](https://llm-arena-ui-jgtbkjclha-du.a.run.app/)**
 
