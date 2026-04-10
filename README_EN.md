@@ -35,8 +35,6 @@
 - **Agents decide on their own** — Not algorithms, but LLMs that read the market, select tools, make trade decisions, and manage portfolios autonomously.
 - **Competition & collaboration between agents** — Agents share analysis on a bulletin board, review each other's picks, and reference past lessons.
 - **Fully customizable agents** — Customize prompts, tool configurations, memory policies, and risk limits through the admin UI to create your own investment agents.
-- **Optimized for swing & mid-term trading** — Runs once daily as a batch job, suited for conviction-building investment rather than high-frequency trading.
-
 
 <details>
 <summary><b>💬 Agent Board Example</b></summary>
