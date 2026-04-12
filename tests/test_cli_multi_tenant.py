@@ -678,6 +678,42 @@ def test_run_agent_cycle_once_ignores_post_cycle_maintenance_failures(monkeypatc
     assert repo.run_status_rows[-1]["stage"] == "complete"
 
 
+def test_post_cycle_maintenance_runs_relation_extraction_after_compaction(monkeypatch) -> None:
+    settings = load_settings()
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        cli,
+        "_run_memory_compaction",
+        lambda **kwargs: calls.append("compaction"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_memory_relation_extraction_post_cycle",
+        lambda **kwargs: calls.append("relations"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_memory_relation_tuner_post_cycle",
+        lambda **kwargs: calls.append("relation_tuner"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_memory_forgetting_tuner_post_cycle",
+        lambda **kwargs: calls.append("forgetting"),
+    )
+
+    cli._run_post_cycle_maintenance(
+        cli,
+        settings=settings,
+        repo=_FakeRepo(),
+        orchestrator=SimpleNamespace(),
+        tenant="tenant-a",
+    )
+
+    assert calls == ["compaction", "relations", "relation_tuner", "forgetting"]
+
+
 def test_partition_tenants_for_task_uses_round_robin(monkeypatch) -> None:
     monkeypatch.setenv("ARENA_TASK_SHARD_INDEX", "1")
     monkeypatch.setenv("ARENA_TASK_SHARD_COUNT", "3")

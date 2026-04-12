@@ -39,6 +39,26 @@ def _run_post_cycle_maintenance(
         )
 
     try:
+        run_relation_extraction = getattr(cli_module, "_run_memory_relation_extraction_post_cycle")
+        run_relation_extraction(settings=settings, repo=repo, tenant=tenant)
+    except Exception as exc:
+        logger.warning(
+            "[yellow]Post-cycle memory relation extraction failed; continuing[/yellow] tenant=%s err=%s",
+            tenant,
+            str(exc),
+        )
+
+    try:
+        run_relation_tuner = getattr(cli_module, "_run_memory_relation_tuner_post_cycle")
+        run_relation_tuner(settings=settings, repo=repo, tenant=tenant)
+    except Exception as exc:
+        logger.warning(
+            "[yellow]Post-cycle memory relation tuner failed; continuing[/yellow] tenant=%s err=%s",
+            tenant,
+            str(exc),
+        )
+
+    try:
         run_forgetting = getattr(cli_module, "_run_memory_forgetting_tuner_post_cycle")
         run_forgetting(settings=settings, repo=repo, tenant=tenant)
     except Exception as exc:

@@ -19,6 +19,7 @@ from arena.market_sources import (
     parse_markets,
 )
 from arena.memory.forgetting import effective_memory_score
+from arena.memory.candidates import CANDIDATE_MEMORY_EVENT_TYPES
 from arena.memory.graph import memory_event_node_id
 from arena.memory.policy import (
     get_memory_policy_value,
@@ -33,6 +34,13 @@ from arena.memory.policy import (
     memory_graph_inferred_edge_min_confidence,
     memory_graph_max_expanded_nodes,
     memory_graph_max_expansion_hops,
+    memory_graph_semantic_triples_boost_bonus_base,
+    memory_graph_semantic_triples_boost_bonus_cap,
+    memory_graph_semantic_triples_boost_enabled,
+    memory_graph_semantic_triples_inject_enabled,
+    memory_graph_semantic_triples_max_candidates,
+    memory_graph_semantic_triples_max_relation_context_items,
+    memory_graph_semantic_triples_min_confidence,
     memory_hierarchy_enabled,
     memory_hierarchy_episodic_ttl_days,
     memory_hierarchy_working_ttl_hours,
@@ -44,6 +52,7 @@ from arena.memory.policy import (
     memory_vector_search_enabled,
     memory_vector_search_limit,
 )
+from arena.memory.relations import semantic_entity_node_id, ticker_node_id
 from arena.memory.tags import extract_context_tags, normalize_context_tags, sector_tag_for_ticker
 from arena.memory.store import MemoryStore
 from arena.memory.thesis import CLOSED_THESIS_EVENT_TYPES
@@ -80,6 +89,7 @@ _MEMORY_TICKER_STOPWORDS = {
     "YOY",
     "QOQ",
 }
+_CANDIDATE_MEMORY_EVENT_TYPES = set(CANDIDATE_MEMORY_EVENT_TYPES)
 
 
 def _safe_json(value: Any) -> Any:
@@ -708,6 +718,14 @@ class ContextBuilder:
             return self._memory_policy_float("retrieval.reranking.type_bonus_manual", 0.16)
         if token == "react_tools_summary":
             return self._memory_policy_float("retrieval.reranking.type_bonus_react_tools", -0.12)
+        if token == "candidate_thesis":
+            return 0.34
+        if token == "candidate_watchlist":
+            return 0.24
+        if token == "candidate_rejected":
+            return 0.20
+        if token == "candidate_screen_hit":
+            return 0.12
         return 0.0
 
     def _memory_recency_bonus(self, age_days: Any) -> float:
@@ -809,6 +827,101 @@ class ContextBuilder:
                 rows.append(self._normalize_memory_row(raw))
         return rows, hydrated_bonus
 
+    def _relation_seed_node_ids(
+        self,
+        *,
+        focus_tickers: list[str],
+        current_context_tags: dict[str, list[str]],
+    ) -> list[str]:
+        seeds: list[str] = []
+        for ticker in focus_tickers[:8]:
+            node_id = ticker_node_id(ticker)
+            if node_id and node_id not in seeds:
+                seeds.append(node_id)
+        for entity_type, key in [
+            ("regime", "regimes"),
+            ("strategy_tag", "strategies"),
+            ("sector", "sectors"),
+        ]:
+            for label in (current_context_tags.get(key) or [])[:4]:
+                node_id = semantic_entity_node_id(entity_type, label)
+                if node_id and node_id not in seeds:
+                    seeds.append(node_id)
+        return seeds
+
+    def _relation_trace_text(self, row: dict[str, Any]) -> str:
+        predicate = str(row.get("relation_predicate") or "").strip().lower()
+        object_type = str(row.get("relation_object_type") or "").strip().lower()
+        object_label = self._trim_text(row.get("relation_object_label"), max_len=60)
+        evidence = self._trim_text(row.get("relation_evidence_text"), max_len=120)
+        bits = [part for part in [predicate, object_type, object_label] if part]
+        prefix = " ".join(bits) if bits else "relation match"
+        return f"{prefix}: {evidence}" if evidence else prefix
+
+    def _relation_memory_candidates(
+        self,
+        *,
+        agent_id: str,
+        focus_tickers: list[str],
+        current_context_tags: dict[str, list[str]],
+        limit: int,
+    ) -> tuple[list[dict[str, Any]], dict[str, float], dict[str, list[str]]]:
+        if not memory_graph_semantic_triples_boost_enabled(self.settings.memory_policy):
+            return [], {}, {}
+        loader = getattr(self.repo, "memory_relation_memory_candidates", None)
+        if not callable(loader):
+            return [], {}, {}
+        seed_node_ids = self._relation_seed_node_ids(
+            focus_tickers=focus_tickers,
+            current_context_tags=current_context_tags,
+        )
+        if not seed_node_ids:
+            return [], {}, {}
+        max_candidates = min(
+            max(1, int(limit)),
+            memory_graph_semantic_triples_max_candidates(self.settings.memory_policy),
+        )
+        try:
+            rows = list(
+                loader(
+                    agent_id=agent_id,
+                    seed_node_ids=seed_node_ids,
+                    trading_mode=self.settings.trading_mode,
+                    min_confidence=memory_graph_semantic_triples_min_confidence(self.settings.memory_policy),
+                    limit=max_candidates,
+                )
+            )
+        except Exception as exc:
+            logger.warning("[yellow]relation memory candidates failed[/yellow] agent=%s err=%s", agent_id, str(exc))
+            return [], {}, {}
+
+        bonus_base = memory_graph_semantic_triples_boost_bonus_base(self.settings.memory_policy)
+        bonus_cap = memory_graph_semantic_triples_boost_bonus_cap(self.settings.memory_policy)
+        relation_bonus: dict[str, float] = {}
+        relation_traces: dict[str, list[str]] = {}
+        normalized_rows: list[dict[str, Any]] = []
+        for raw in rows:
+            if not isinstance(raw, dict):
+                continue
+            row = dict(raw)
+            event_id = str(row.get("event_id") or "").strip()
+            if not event_id:
+                continue
+            try:
+                confidence = max(0.0, min(float(row.get("relation_confidence") or 0.0), 1.0))
+            except (TypeError, ValueError):
+                confidence = 0.0
+            bonus = min(bonus_cap, bonus_base * confidence)
+            relation_bonus[event_id] = max(float(relation_bonus.get(event_id, 0.0)), bonus)
+            trace = self._relation_trace_text(row)
+            if trace:
+                traces = relation_traces.setdefault(event_id, [])
+                if trace not in traces:
+                    traces.append(trace)
+            row["relation_candidate"] = True
+            normalized_rows.append(row)
+        return normalized_rows, relation_bonus, relation_traces
+
     def _rerank_memory_rows(
         self,
         rows: list[dict[str, Any]],
@@ -816,11 +929,15 @@ class ContextBuilder:
         active_tickers: set[str],
         current_context_tags: dict[str, list[str]],
         vector_bonus: dict[str, float],
+        relation_bonus: dict[str, float] | None = None,
+        relation_traces: dict[str, list[str]] | None = None,
         limit: int,
     ) -> list[dict[str, Any]]:
         """Ranks memory candidates by actionability rather than raw insertion order."""
         ranked: list[dict[str, Any]] = []
         seen: set[str] = set()
+        relation_bonus = relation_bonus or {}
+        relation_traces = relation_traces or {}
         for raw in rows:
             row = self._normalize_memory_row(raw)
             key = str(row.get("event_id") or row.get("summary") or "").strip()
@@ -844,12 +961,20 @@ class ContextBuilder:
             retrieval_score += self._outcome_decisiveness_bonus(row.get("outcome_score"))
             retrieval_score += self._memory_effective_score_bonus(row)
             retrieval_score += float(vector_bonus.get(str(row.get("event_id") or ""), 0.0))
+            event_id = str(row.get("event_id") or "").strip()
+            rel_bonus = float(relation_bonus.get(event_id, 0.0))
+            retrieval_score += rel_bonus
             if self._is_simulated_trade_memory(row):
                 retrieval_score -= 0.22
             row["outcome_label"] = self._outcome_label(row.get("outcome_score"))
             resolved_effective_score = self._resolved_effective_score(row)
             if resolved_effective_score is not None:
                 row["effective_score"] = round(resolved_effective_score, 4)
+            if rel_bonus > 0:
+                row["relation_boost"] = round(rel_bonus, 4)
+                traces = relation_traces.get(event_id) or []
+                if traces:
+                    row["relation_traces"] = traces[:3]
             row["retrieval_score"] = round(retrieval_score, 4)
             ranked.append(row)
 
@@ -895,6 +1020,26 @@ class ContextBuilder:
         """Builds a sectioned memory summary instead of a flat log dump."""
         if not rows:
             return ""
+
+        if any(str(row.get("memory_track") or "").strip() for row in rows):
+            sections: list[str] = []
+            used: set[str] = set()
+            for title, track in (
+                ("Portfolio Memory", "portfolio"),
+                ("Candidate Memory", "candidate"),
+                ("Neutral Lessons", "neutral"),
+            ):
+                picked = [
+                    row for row in rows
+                    if str(row.get("memory_track") or "").strip().lower() == track
+                    and str(row.get("event_id") or row.get("summary") or "") not in used
+                ]
+                if not picked:
+                    continue
+                sections.append("\n".join([f"{title}:"] + [self._format_memory_line(row) for row in picked]))
+                for row in picked:
+                    used.add(str(row.get("event_id") or row.get("summary") or ""))
+            return "\n".join(sections)
 
         sections: list[str] = []
         used: set[str] = set()
@@ -1180,6 +1325,75 @@ class ContextBuilder:
                 queries.append(query)
         return [q for q in dict.fromkeys(queries)]
 
+    def _build_research_context(self, *, focus_tickers: list[str]) -> tuple[str, list[dict[str, Any]]]:
+        """Builds a compact stored-research block for prompt/debug visibility."""
+        loader = getattr(self.repo, "get_research_briefings", None)
+        if not callable(loader):
+            return "", []
+        tickers = [str(t or "").strip().upper() for t in focus_tickers if str(t or "").strip()]
+        tickers = list(dict.fromkeys(tickers))[:4]
+        try:
+            rows = list(
+                loader(
+                    tickers=tickers or None,
+                    categories=["global_market", "geopolitical", "sector"],
+                    limit=6,
+                    trading_mode=self.settings.trading_mode,
+                )
+            )
+        except Exception as exc:
+            logger.warning("[yellow]research context load failed[/yellow] err=%s", str(exc))
+            return "", []
+        lines: list[str] = []
+        compact_rows: list[dict[str, Any]] = []
+        for row in rows[:6]:
+            if not isinstance(row, dict):
+                continue
+            ticker = str(row.get("ticker") or "").strip().upper()
+            category = str(row.get("category") or "").strip().lower()
+            headline = self._trim_text(row.get("headline"), max_len=90)
+            summary = self._trim_text(row.get("summary"), max_len=160)
+            label = ticker or category or "research"
+            text = " - ".join(part for part in [headline, summary] if part)
+            if text:
+                lines.append(f"- [{label}] {text}")
+            compact_rows.append(
+                {
+                    "briefing_id": str(row.get("briefing_id") or "").strip(),
+                    "created_at": row.get("created_at"),
+                    "ticker": ticker or None,
+                    "category": category or None,
+                    "headline": headline,
+                    "summary": summary,
+                }
+            )
+        return "\n".join(lines), compact_rows
+
+    def _compress_relation_context(self, rows: list[dict[str, Any]]) -> str:
+        if not memory_graph_semantic_triples_inject_enabled(self.settings.memory_policy):
+            return ""
+        max_items = memory_graph_semantic_triples_max_relation_context_items(self.settings.memory_policy)
+        if max_items <= 0:
+            return ""
+        lines: list[str] = ["Relation Hints:"]
+        seen: set[str] = set()
+        for row in rows:
+            event_summary = self._trim_text(row.get("summary"), max_len=90)
+            for trace in row.get("relation_traces") or []:
+                text = self._trim_text(trace, max_len=160)
+                if not text or text in seen:
+                    continue
+                seen.add(text)
+                if event_summary:
+                    lines.append(f"- {text} | memory: {event_summary}")
+                else:
+                    lines.append(f"- {text}")
+                if len(lines) - 1 >= max_items:
+                    break
+            if len(lines) - 1 >= max_items:
+                break
+        return "\n".join(lines) if len(lines) > 1 else ""
+
     def _build_memory_search_queries(
         self,
         agent_id: str,
@@ -1437,15 +1651,286 @@ class ContextBuilder:
             queries=vector_queries,
             limit=limit,
         )
-        if not vector_rows:
+        relation_rows, relation_bonus, relation_traces = self._relation_memory_candidates(
+            agent_id=agent_id,
+            focus_tickers=[str(t or "").strip().upper() for t in focus_tickers if str(t or "").strip()],
+            current_context_tags=current_context_tags,
+            limit=limit,
+        )
+        if not vector_rows and not relation_rows:
             return []
 
         return self._rerank_memory_rows(
-            vector_rows,
+            [*vector_rows, *relation_rows],
             active_tickers=active_tickers,
             current_context_tags=current_context_tags,
             vector_bonus=vector_bonus,
+            relation_bonus=relation_bonus,
+            relation_traces=relation_traces,
             limit=limit,
+        )
+
+    def _fetch_candidate_memory_rows(
+        self,
+        *,
+        agent_id: str,
+        focus_tickers: list[str],
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        loader = getattr(self.repo, "candidate_memory_events", None)
+        if not callable(loader):
+            return []
+        try:
+            rows = loader(
+                agent_id=agent_id,
+                exclude_tickers=[str(t or "").strip().upper() for t in focus_tickers if str(t or "").strip()],
+                limit=max(1, int(limit)),
+                trading_mode=self.settings.trading_mode,
+            )
+        except Exception as exc:
+            logger.warning("[yellow]candidate memory load failed[/yellow] agent=%s err=%s", agent_id, str(exc))
+            return []
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            normalized = self._normalize_memory_row(row)
+            if self._memory_is_expired(normalized):
+                continue
+            normalized["memory_track"] = "candidate"
+            out.append(normalized)
+        return out
+
+    @staticmethod
+    def _memory_row_key(row: dict[str, Any]) -> str:
+        return str(row.get("event_id") or row.get("summary") or "").strip()
+
+    @staticmethod
+    def _memory_row_tickers(row: dict[str, Any]) -> set[str]:
+        tickers: set[str] = set()
+        for field in ("canonical_tickers", "derived_tickers", "tickers"):
+            value = row.get(field)
+            if isinstance(value, list):
+                tickers.update(str(token or "").strip().upper() for token in value if str(token or "").strip())
+        return {token for token in tickers if token}
+
+    def _memory_balance_bucket(self, row: dict[str, Any], *, held_tickers: set[str]) -> str:
+        event_type = str(row.get("event_type") or "").strip().lower()
+        if event_type in _CANDIDATE_MEMORY_EVENT_TYPES:
+            return "candidate"
+        tickers = self._memory_row_tickers(row)
+        if tickers & held_tickers:
+            return "held"
+        if tickers:
+            return "nonheld"
+        return "neutral"
+
+    def _annotate_memory_track(self, row: dict[str, Any], *, held_tickers: set[str], default_track: str) -> dict[str, Any]:
+        annotated = dict(row)
+        event_type = str(annotated.get("event_type") or "").strip().lower()
+        row_tickers = self._memory_row_tickers(annotated)
+        if event_type in _CANDIDATE_MEMORY_EVENT_TYPES:
+            track = "candidate"
+        elif row_tickers & held_tickers:
+            track = "portfolio"
+        elif default_track == "portfolio" and (not held_tickers or not row_tickers):
+            track = "neutral"
+        elif default_track in {"candidate", "neutral", "portfolio"}:
+            track = default_track
+        else:
+            track = "neutral"
+        annotated["memory_track"] = track
+        annotated["balance_bucket"] = self._memory_balance_bucket(annotated, held_tickers=held_tickers)
+        return annotated
+
+    def _append_memory_prompt_rows(
+        self,
+        target: list[dict[str, Any]],
+        rows: list[dict[str, Any]],
+        *,
+        seen: set[str],
+        held_tickers: set[str],
+        ticker_counts: dict[str, int],
+        event_counts: dict[str, int],
+        limit: int,
+        track: str,
+        same_ticker_cap: int = 2,
+        trade_cap: int = 2,
+    ) -> None:
+        if limit <= 0 or len(target) >= limit:
+            return
+        for row in rows:
+            key = self._memory_row_key(row)
+            if not key or key in seen:
+                continue
+            event_type = str(row.get("event_type") or "").strip().lower()
+            if event_type == "trade_execution" and event_counts.get("trade_execution", 0) >= trade_cap:
+                continue
+            tickers = self._memory_row_tickers(row)
+            if tickers and all(ticker_counts.get(ticker, 0) >= same_ticker_cap for ticker in tickers):
+                continue
+            annotated = self._annotate_memory_track(row, held_tickers=held_tickers, default_track=track)
+            target.append(annotated)
+            seen.add(key)
+            event_counts[event_type] = event_counts.get(event_type, 0) + 1
+            for ticker in tickers:
+                ticker_counts[ticker] = ticker_counts.get(ticker, 0) + 1
+            if len(target) >= limit:
+                return
+
+    @staticmethod
+    def _cash_ratio(snapshot: AccountSnapshot) -> float:
+        try:
+            equity = float(snapshot.total_equity_krw or 0.0)
+        except (TypeError, ValueError):
+            equity = 0.0
+        if equity <= 0:
+            return 0.0
+        try:
+            return max(0.0, min(float(snapshot.cash_krw or 0.0) / equity, 1.5))
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _select_prompt_memory_rows(
+        self,
+        *,
+        portfolio_rows: list[dict[str, Any]],
+        candidate_rows: list[dict[str, Any]],
+        neutral_rows: list[dict[str, Any]],
+        snapshot: AccountSnapshot,
+        focus_tickers: list[str],
+        total_limit: int = 6,
+    ) -> list[dict[str, Any]]:
+        """Selects prompt-visible memories with track slots and repetition caps."""
+        cap = max(1, min(int(total_limit), 6))
+        held_tickers = {str(t or "").strip().upper() for t in focus_tickers if str(t or "").strip()}
+        candidate_slots = 0
+        if candidate_rows:
+            candidate_slots = min(2, cap)
+            if not held_tickers or self._cash_ratio(snapshot) >= 0.30:
+                candidate_slots = min(3, cap)
+        neutral_slots = 1 if neutral_rows and cap - candidate_slots > 0 else 0
+        portfolio_slots = max(cap - candidate_slots - neutral_slots, 0)
+        if portfolio_rows and portfolio_slots <= 0:
+            portfolio_slots = 1
+            if candidate_slots >= neutral_slots and candidate_slots > 0:
+                candidate_slots -= 1
+            elif neutral_slots > 0:
+                neutral_slots -= 1
+
+        selected: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        ticker_counts: dict[str, int] = {}
+        event_counts: dict[str, int] = {}
+        self._append_memory_prompt_rows(
+            selected,
+            portfolio_rows,
+            seen=seen,
+            held_tickers=held_tickers,
+            ticker_counts=ticker_counts,
+            event_counts=event_counts,
+            limit=portfolio_slots,
+            track="portfolio",
+        )
+        self._append_memory_prompt_rows(
+            selected,
+            candidate_rows,
+            seen=seen,
+            held_tickers=held_tickers,
+            ticker_counts=ticker_counts,
+            event_counts=event_counts,
+            limit=len(selected) + candidate_slots,
+            track="candidate",
+        )
+        self._append_memory_prompt_rows(
+            selected,
+            neutral_rows,
+            seen=seen,
+            held_tickers=held_tickers,
+            ticker_counts=ticker_counts,
+            event_counts=event_counts,
+            limit=len(selected) + neutral_slots,
+            track="neutral",
+        )
+
+        tail = [*portfolio_rows, *candidate_rows, *neutral_rows]
+        tail.sort(
+            key=lambda r: (
+                float(r.get("retrieval_score") or 0.0),
+                float(r.get("importance_score") or 0.0),
+                -int(r.get("age_days") or 9999) if isinstance(r.get("age_days"), int) else -9999,
+            ),
+            reverse=True,
+        )
+        self._append_memory_prompt_rows(
+            selected,
+            tail,
+            seen=seen,
+            held_tickers=held_tickers,
+            ticker_counts=ticker_counts,
+            event_counts=event_counts,
+            limit=cap,
+            track="neutral",
+        )
+        return selected[:cap]
+
+    def _combine_memory_retrieval_rows(
+        self,
+        *,
+        portfolio_rows: list[dict[str, Any]],
+        candidate_rows: list[dict[str, Any]],
+        neutral_rows: list[dict[str, Any]],
+        focus_tickers: list[str],
+    ) -> list[dict[str, Any]]:
+        held_tickers = {str(t or "").strip().upper() for t in focus_tickers if str(t or "").strip()}
+        combined: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for track, rows in (
+            ("portfolio", portfolio_rows),
+            ("candidate", candidate_rows),
+            ("neutral", neutral_rows),
+        ):
+            for row in rows:
+                key = self._memory_row_key(row)
+                if not key or key in seen:
+                    continue
+                combined.append(self._annotate_memory_track(row, held_tickers=held_tickers, default_track=track))
+                seen.add(key)
+        return combined
+
+    def _log_memory_balance_metrics(
+        self,
+        *,
+        agent_id: str,
+        cycle_id: str | None,
+        retrieved_rows: list[dict[str, Any]],
+        prompt_rows: list[dict[str, Any]],
+        focus_tickers: list[str],
+    ) -> None:
+        held_tickers = {str(t or "").strip().upper() for t in focus_tickers if str(t or "").strip()}
+
+        def _counts(rows: list[dict[str, Any]]) -> dict[str, int]:
+            out = {"held": 0, "candidate": 0, "nonheld": 0, "neutral": 0, "trade_execution": 0}
+            for row in rows:
+                bucket = self._memory_balance_bucket(row, held_tickers=held_tickers)
+                out[bucket] = out.get(bucket, 0) + 1
+                if str(row.get("event_type") or "").strip().lower() == "trade_execution":
+                    out["trade_execution"] += 1
+            return out
+
+        retrieved = _counts(retrieved_rows)
+        prompt = _counts(prompt_rows)
+        retrieved_total = max(1, len(retrieved_rows))
+        prompt_total = max(1, len(prompt_rows))
+        logger.info(
+            "[cyan]memory balance[/cyan] agent=%s cycle_id=%s retrieved_held=%.2f prompt_held=%.2f prompt_candidate=%.2f prompt_neutral=%.2f trades=%d",
+            agent_id,
+            str(cycle_id or "").strip() or "-",
+            retrieved.get("held", 0) / retrieved_total,
+            prompt.get("held", 0) / prompt_total,
+            prompt.get("candidate", 0) / prompt_total,
+            prompt.get("neutral", 0) / prompt_total,
+            prompt.get("trade_execution", 0),
         )
 
     def _log_memory_access_events(
@@ -1455,6 +1940,8 @@ class ContextBuilder:
         rows: list[dict[str, Any]],
         query: str | list[str],
         cycle_id: str | None = None,
+        prompt_rows: list[dict[str, Any]] | None = None,
+        focus_tickers: list[str] | None = None,
     ) -> None:
         if not memory_forgetting_access_log_enabled(self.settings.memory_policy):
             return
@@ -1467,10 +1954,16 @@ class ContextBuilder:
         else:
             query_text = str(query or "").strip()
         query_text = query_text[:500]
+        visible_rows = prompt_rows if prompt_rows is not None else rows[:6]
         prompt_keys = {
             str(row.get("event_id") or row.get("summary") or "").strip()
-            for row in rows[:6]
+            for row in visible_rows
             if str(row.get("event_id") or row.get("summary") or "").strip()
+        }
+        held_tickers = {
+            str(token or "").strip().upper()
+            for token in (focus_tickers or [])
+            if str(token or "").strip()
         }
         accessed_at = utc_now()
         payload_rows: list[dict[str, Any]] = []
@@ -1479,6 +1972,16 @@ class ContextBuilder:
             if not event_id:
                 continue
             row_key = str(row.get("event_id") or row.get("summary") or "").strip()
+            canonical_tickers = [
+                str(token or "").strip().upper()
+                for token in (row.get("canonical_tickers") or [])
+                if str(token or "").strip()
+            ]
+            derived_tickers = [
+                str(token or "").strip().upper()
+                for token in (row.get("derived_tickers") or [])
+                if str(token or "").strip()
+            ]
             payload_rows.append(
                 {
                     "access_id": f"acc_{uuid4().hex[:12]}",
@@ -1496,6 +1999,11 @@ class ContextBuilder:
                         "rank": idx + 1,
                         "event_type": str(row.get("event_type") or "").strip().lower() or None,
                         "memory_tier": str(row.get("memory_tier") or "").strip().lower() or None,
+                        "memory_track": str(row.get("memory_track") or "").strip().lower() or None,
+                        "balance_bucket": self._memory_balance_bucket(row, held_tickers=held_tickers),
+                        "canonical_tickers": canonical_tickers,
+                        "derived_tickers": derived_tickers,
+                        "relation_boost": row.get("relation_boost"),
                     },
                 }
             )
@@ -1597,21 +2105,52 @@ class ContextBuilder:
                 focus_tickers=[],
                 market_rows=market_rows,
             )
-        memory_rows = self._merge_memory_query_tracks(
+        candidate_memory_rows = self._fetch_candidate_memory_rows(
+            agent_id=agent_id,
+            focus_tickers=focus_tickers,
+            limit=max(6, min(self.settings.context_max_memory_events, 12)),
+        )
+        legacy_memory_rows = self._merge_memory_query_tracks(
             primary_rows=primary_memory_rows,
             opportunity_rows=opportunity_memory_rows,
             total_limit=self.settings.context_max_memory_events,
         )
+        memory_rows = self._combine_memory_retrieval_rows(
+            portfolio_rows=legacy_memory_rows,
+            candidate_rows=candidate_memory_rows,
+            neutral_rows=opportunity_memory_rows,
+            focus_tickers=focus_tickers,
+        )
+        prompt_memory_rows = self._select_prompt_memory_rows(
+            portfolio_rows=primary_memory_rows,
+            candidate_rows=candidate_memory_rows,
+            neutral_rows=opportunity_memory_rows,
+            snapshot=snapshot,
+            focus_tickers=focus_tickers,
+            total_limit=min(6, self.settings.context_max_memory_events),
+        )
+        research_context, research_rows = self._build_research_context(focus_tickers=focus_tickers)
         active_thesis_rows = self._active_thesis_rows(agent_id=agent_id, focus_tickers=focus_tickers)
         active_thesis_context = self._compress_active_thesis_context(active_thesis_rows)
         logged_queries = list(memory_query)
         if opportunity_query:
             logged_queries.append(opportunity_query)
+        if candidate_memory_rows:
+            logged_queries.append("candidate memory track")
+        self._log_memory_balance_metrics(
+            agent_id=agent_id,
+            cycle_id=cycle_id,
+            retrieved_rows=memory_rows,
+            prompt_rows=prompt_memory_rows,
+            focus_tickers=focus_tickers,
+        )
         self._log_memory_access_events(
             agent_id=agent_id,
             rows=memory_rows,
             query=logged_queries,
             cycle_id=cycle_id,
+            prompt_rows=prompt_memory_rows,
+            focus_tickers=focus_tickers,
         )
 
         board_rows: list[dict[str, Any]] = []
@@ -1956,13 +2495,14 @@ class ContextBuilder:
             style_lines.append("Use incremental adds/trims; avoid reacting to single-point noise.")
         investment_style_context = "\n".join(style_lines)
 
-        graph_rows = self._fetch_graph_neighbors(memory_rows[:6])
-        memory_context = self._compress_memory_context(memory_rows[:6])
-        graph_context = self._compress_graph_context(memory_rows[:6], graph_rows)
+        graph_rows = self._fetch_graph_neighbors(prompt_memory_rows)
+        memory_context = self._compress_memory_context(prompt_memory_rows)
+        graph_context = self._compress_graph_context(prompt_memory_rows, graph_rows)
         if graph_context:
             memory_context = f"{memory_context}\n{graph_context}".strip() if memory_context else graph_context
+        relation_context = self._compress_relation_context(prompt_memory_rows)
         memory_event_counts: dict[str, int] = {}
-        for row in memory_rows[:12]:
+        for row in prompt_memory_rows[:12]:
             key = str(row.get("event_type") or "").strip().lower() or "unknown"
             memory_event_counts[key] = memory_event_counts.get(key, 0) + 1
         logger.info(
@@ -2015,12 +2555,17 @@ class ContextBuilder:
             "fx_info": _safe_json(fx_info),
             "performance_context": "\n".join(perf_lines).strip(),
             "active_thesis_context": active_thesis_context,
+            "market_context": _safe_json(market_rows),
+            "research_context": research_context,
+            "relation_context": relation_context,
             "memory_context": memory_context,
             "graph_context": graph_context,
             "board_context": board_context,
             "market_features": _safe_json(market_rows),
+            "research_briefings": _safe_json(research_rows),
             "active_theses": _safe_json(active_thesis_rows),
-            "memory_events": _safe_json(memory_rows),
+            "memory_events": _safe_json(prompt_memory_rows),
+            "retrieved_memory_events": _safe_json(memory_rows),
             "graph_events": _safe_json(graph_rows),
             "board_posts": _safe_json(board_rows),
             "investment_style_context": investment_style_context,

@@ -8,8 +8,9 @@ import re
 from typing import Any
 
 from arena.data.bq import BigQueryRepository
+from arena.memory.candidates import CANDIDATE_MEMORY_EVENT_TYPES, candidate_memory_records
 from arena.memory.graph import ensure_memory_event_graph_ids, infer_memory_event_causal_chain_id, memory_event_node_id
-from arena.models import ExecutionReport, MemoryEvent, OrderIntent, RiskDecision
+from arena.models import ExecutionReport, MemoryEvent, OrderIntent, RiskDecision, utc_now
 from arena.memory.policy import (
     memory_embed_cache_max,
     memory_event_enabled,
@@ -219,6 +220,10 @@ class MemoryStore:
             ticker = str(intent.get("ticker") or "").strip().upper() if isinstance(intent, dict) else ""
             status = str(report.get("status") or "").strip().upper() if isinstance(report, dict) else ""
             return bool(ticker and status in {"FILLED", "SIMULATED"})
+        if kind in CANDIDATE_MEMORY_EVENT_TYPES:
+            ticker = str(data.get("ticker") or "").strip().upper() if isinstance(data, dict) else ""
+            source = str(data.get("source") or "").strip().lower() if isinstance(data, dict) else ""
+            return bool(ticker and source == "candidate_discovery")
         if kind in {"thesis_invalidated", "thesis_realized"}:
             thesis_id = str(data.get("thesis_id") or "").strip() if isinstance(data, dict) else ""
             ticker = str(data.get("ticker") or "").strip().upper() if isinstance(data, dict) else ""
@@ -687,11 +692,14 @@ class MemoryStore:
         score: float = 0.5,
         payload: dict | None = None,
         semantic_key: str | None = None,
+        memory_tier: str | None = None,
+        expires_at: datetime | None = None,
     ) -> None:
         """Stores a memory event."""
         if not memory_event_enabled(self.memory_policy, event_type, True):
             return
         context_tags = self._context_tags(event_type=event_type, summary=summary, payload=payload)
+        tier = str(memory_tier or "").strip().lower() or self._memory_tier(event_type=event_type, payload=payload)
         event = MemoryEvent(
             agent_id=agent_id,
             event_type=event_type,
@@ -701,14 +709,14 @@ class MemoryStore:
             importance_score=max(0.0, min(float(score), 1.0)),
             outcome_score=None,
             score=max(0.0, min(float(score), 1.0)),
-            memory_tier=self._memory_tier(event_type=event_type, payload=payload),
+            memory_tier=tier,
             semantic_key=str(semantic_key or "").strip() or None,
             context_tags=context_tags,
             primary_regime=(context_tags.get("regimes") or [None])[0],
             primary_strategy_tag=(context_tags.get("strategies") or [None])[0],
             primary_sector=(context_tags.get("sectors") or [None])[0],
         )
-        event.expires_at = self._memory_expiry(created_at=event.created_at, memory_tier=event.memory_tier)
+        event.expires_at = expires_at or self._memory_expiry(created_at=event.created_at, memory_tier=event.memory_tier)
         ensure_memory_event_graph_ids(event)
         self.repo.write_memory_event(event)
         if self._should_index_memory_event(
@@ -739,6 +747,85 @@ class MemoryStore:
                 graph_node_id=event.graph_node_id or "",
                 causal_chain_id=event.causal_chain_id or "",
             )
+
+    def _candidate_memory_exists(self, *, agent_id: str, semantic_key: str) -> bool:
+        key = str(semantic_key or "").strip()
+        if not key:
+            return False
+        loader = getattr(self.repo, "memory_events_by_semantic_keys", None)
+        if callable(loader):
+            try:
+                rows = loader(
+                    agent_id=agent_id,
+                    semantic_keys=[key],
+                    event_types=list(CANDIDATE_MEMORY_EVENT_TYPES),
+                    trading_mode=self.trading_mode,
+                )
+                return bool(rows)
+            except Exception:
+                pass
+        exists = getattr(self.repo, "memory_event_exists_by_semantic_key", None)
+        if callable(exists):
+            for event_type in CANDIDATE_MEMORY_EVENT_TYPES:
+                try:
+                    if exists(
+                        agent_id=agent_id,
+                        event_type=event_type,
+                        semantic_key=key,
+                        trading_mode=self.trading_mode,
+                    ):
+                        return True
+                except Exception:
+                    continue
+        return False
+
+    def record_candidate_memories(
+        self,
+        *,
+        agent_id: str,
+        candidate_ledger: dict[str, dict[str, Any]],
+        held_tickers: set[str] | None = None,
+        cycle_id: str = "",
+        phase: str = "",
+        limit: int = 5,
+    ) -> int:
+        """Persists bounded non-held screening candidates as short-lived memory."""
+        records = candidate_memory_records(
+            candidate_ledger,
+            held_tickers=held_tickers or set(),
+            agent_id=agent_id,
+            trading_mode=self.trading_mode,
+            cycle_id=cycle_id,
+            phase=phase,
+            as_of=utc_now().date(),
+            limit=limit,
+        )
+        written = 0
+        for record in records:
+            semantic_key = str(record.get("semantic_key") or "").strip()
+            if self._candidate_memory_exists(agent_id=agent_id, semantic_key=semantic_key):
+                continue
+            ttl_days = record.get("ttl_days")
+            expires_at = None
+            try:
+                if ttl_days is not None:
+                    expires_at = utc_now() + timedelta(days=max(1, int(ttl_days)))
+            except (TypeError, ValueError):
+                expires_at = None
+            self.record_memory(
+                agent_id=agent_id,
+                summary=str(record.get("summary") or ""),
+                event_type=str(record.get("event_type") or "candidate_screen_hit"),
+                score=float(record.get("score") or 0.25),
+                payload=record.get("payload") if isinstance(record.get("payload"), dict) else {},
+                semantic_key=semantic_key,
+                memory_tier="episodic",
+                expires_at=expires_at,
+            )
+            written += 1
+        if written:
+            logger.info("[cyan]Candidate memory[/cyan] agent=%s written=%d", agent_id, written)
+        return written
 
     def record_reflection(
         self,

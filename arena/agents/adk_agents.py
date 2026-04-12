@@ -285,6 +285,8 @@ class _ADKDecisionRunner:
             search_tool_memories=self._search_tool_memories,
             apply_tool_schema_metadata=_apply_tool_schema_metadata,
         )
+        self._disabled_tool_ids = set(tool_resolution.disabled_tool_ids)
+        self._mcp_toolset_count = int(tool_resolution.mcp_toolset_count)
         self._wrapped_tool_names = tool_resolution.wrapped_tool_names
         self._agent = build_agent(
             agent_id=self.agent_id,
@@ -312,6 +314,49 @@ class _ADKDecisionRunner:
             session_service=self._session_service,
             identity=identity,
             run_on_loop=self._run_on_loop,
+        )
+
+    def _available_tools_payload(self) -> list[dict[str, Any]]:
+        """Returns the built-in tool catalog visible to the model for prompt inspection."""
+        tools: list[dict[str, Any]] = []
+        for entry in self._registry.list_entries(require_callable=True):
+            if str(entry.tool_id or "").strip() in self._disabled_tool_ids:
+                continue
+            tools.append(
+                {
+                    "tool_id": entry.tool_id,
+                    "name": entry.name,
+                    "category": entry.category,
+                    "tier": entry.tier,
+                    "description": entry.description,
+                }
+            )
+        if self._mcp_toolset_count > 0:
+            tools.append(
+                {
+                    "tool_id": "mcp_toolsets",
+                    "name": "MCP toolsets",
+                    "category": "external",
+                    "tier": "optional",
+                    "description": f"{self._mcp_toolset_count} configured MCP toolset(s) exposed through ADK.",
+                }
+            )
+        return tools
+
+    @staticmethod
+    def _prompt_context_sections(context: dict[str, Any] | None) -> dict[str, Any]:
+        """Captures the high-level context blocks operators expect to see in prompt details."""
+        if not isinstance(context, dict):
+            return {}
+        return _safe_json(
+            {
+                "portfolio_context": context.get("portfolio", {}),
+                "market_context": context.get("market_context", context.get("market_features", [])),
+                "board_context": context.get("board_context") or context.get("board_posts", []),
+                "research_context": context.get("research_context", ""),
+                "relation_context": context.get("relation_context", ""),
+                "memory_context": context.get("memory_context", ""),
+            }
         )
 
     def _seed_seen_memory_ids(self, context: dict[str, Any]) -> None:
@@ -464,6 +509,29 @@ class _ADKDecisionRunner:
             payload=payload,
         )
 
+    def _persist_candidate_memories(self, *, cycle_id: str = "") -> int:
+        writer = getattr(self._memory_store, "record_candidate_memories", None)
+        if not callable(writer) or not self._candidate_ledger:
+            return 0
+        try:
+            return int(
+                writer(
+                    agent_id=self.agent_id,
+                    candidate_ledger=self._candidate_ledger,
+                    held_tickers=self._held_tickers_cache,
+                    cycle_id=str(cycle_id or "").strip(),
+                    phase=self._current_phase,
+                )
+                or 0
+            )
+        except Exception as exc:
+            logger.warning(
+                "[yellow]Candidate memory write failed[/yellow] agent=%s err=%s",
+                self.agent_id,
+                str(exc),
+            )
+            return 0
+
     def _record_prompt_snapshot(
         self,
         *,
@@ -471,6 +539,7 @@ class _ADKDecisionRunner:
         session_id: str,
         prompt: str,
         resumed: bool,
+        context: dict[str, Any] | None = None,
     ) -> None:
         """Stores one application-visible prompt snapshot per phase."""
         phase_token = str(phase or "").strip().lower() or "unknown"
@@ -483,6 +552,9 @@ class _ADKDecisionRunner:
             "resume_session": bool(resumed),
             "prompt": prompt_text,
         }
+        context_sections = self._prompt_context_sections(context)
+        if context_sections:
+            snapshot["context_sections"] = context_sections
         retained = [
             dict(item)
             for item in self._prompt_snapshots
@@ -507,6 +579,7 @@ class _ADKDecisionRunner:
         ]
         return {
             "system_prompt": self._system_prompt_snapshot,
+            "available_tools": _safe_json(self._available_tools_payload()),
             "phases": _safe_json(phases),
             "note": (
                 "Application-visible prompt bundle captured around board generation. "
@@ -616,6 +689,7 @@ class _ADKDecisionRunner:
             session_id=session_id,
             prompt=prompt,
             resumed=bool(resume_session_id),
+            context=context,
         )
 
         text = self._run_on_loop(self._run_async(self._runner, session_id, prompt))
@@ -659,6 +733,7 @@ class _ADKDecisionRunner:
             session_id=session_id,
             prompt=board_prompt,
             resumed=True,
+            context=self._current_context,
         )
         text = self._run_on_loop(self._run_async(self._runner, session_id, board_prompt))
         board_decision = parse_board_response(text)
@@ -894,6 +969,9 @@ class AdkTradingAgent:
         record_candidate_executions = getattr(self.runner, "record_candidate_executions", None)
         if callable(record_candidate_executions):
             record_candidate_executions(intents, reports)
+        persist_candidate_memories = getattr(self.runner, "_persist_candidate_memories", None)
+        if callable(persist_candidate_memories):
+            persist_candidate_memories(cycle_id=cycle_id)
 
         title = str(board_decision.get("board_title", "")).strip()[:120] or str(initial_post.title or "").strip()[:120] or "거래 아이디어"
         body = str(board_decision.get("board_body", "")).strip()[:1800] or execution_summary

@@ -173,6 +173,8 @@ def _user_prompt(context: dict[str, Any], default_universe: list[str], *, max_to
         "active_thesis_context": context.get("active_thesis_context", ""),
         "memory_context": context.get("memory_context", ""),
         "board_context": context.get("board_context", ""),
+        "market_context": context.get("market_context", context.get("market_features", [])),
+        "research_context": context.get("research_context", ""),
         "portfolio": context.get("portfolio", {}),
         "ticker_names": context.get("ticker_names", {}),
         "risk_policy": context.get("risk_policy", {}),
@@ -191,6 +193,9 @@ def _user_prompt(context: dict[str, Any], default_universe: list[str], *, max_to
             "note": f"You have up to {max_tool_calls} tool calls. Plan accordingly and always output final JSON before exhausting your budget.",
         },
     }
+    relation_context = str(context.get("relation_context") or "").strip()
+    if relation_context:
+        payload["relation_context"] = relation_context
     return (
         phase_format
         + "\n\nContext payload JSON (output JSON only):\n"

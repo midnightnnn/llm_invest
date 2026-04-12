@@ -15,6 +15,7 @@ MEMORY_POLICY_CONFIG_KEY = "memory_policy"
 GLOBAL_MEMORY_PROMPT_CONFIG_KEY = "memory_compactor_prompt"
 GLOBAL_MEMORY_PROMPT_TENANT = "global"
 MEMORY_FORGETTING_TUNING_STATE_CONFIG_KEY = "memory_forgetting_tuning_state"
+MEMORY_RELATION_TUNING_STATE_CONFIG_KEY = "memory_relation_tuning_state"
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,6 +88,20 @@ BRANCH_SPECS: tuple[dict[str, str], ...] = (
         "parent": "forgetting",
         "description": "Shadow recommendations, EMA rollout, and auto-promotion guardrails.",
     },
+    {
+        "id": "graph.semantic_triples",
+        "label": "Semantic Triples",
+        "group": "graph",
+        "parent": "graph",
+        "description": "Shadow/boost/inject controls for source-grounded relation triples.",
+    },
+    {
+        "id": "graph.semantic_triples.tuning",
+        "label": "Triple Tuning",
+        "group": "graph",
+        "parent": "graph.semantic_triples",
+        "description": "Automatic shadow/inject transitions based on relation quality, safety, and impact metrics.",
+    },
 )
 
 
@@ -156,6 +171,34 @@ FIELD_SPECS: tuple[MemoryFieldSpec, ...] = (
         group="event_types",
         value_type="toggle",
         description="Persist thesis-realized memories when the investment case closes successfully.",
+    ),
+    MemoryFieldSpec(
+        path="event_types.candidate_screen_hit",
+        label="candidate_screen_hit",
+        group="event_types",
+        value_type="toggle",
+        description="Persist short-lived non-held candidates surfaced by screening.",
+    ),
+    MemoryFieldSpec(
+        path="event_types.candidate_watchlist",
+        label="candidate_watchlist",
+        group="event_types",
+        value_type="toggle",
+        description="Persist non-held candidates that repeated or received follow-up analysis.",
+    ),
+    MemoryFieldSpec(
+        path="event_types.candidate_rejected",
+        label="candidate_rejected",
+        group="event_types",
+        value_type="toggle",
+        description="Persist rejected candidate notes so repeated screen hits keep their negative prior.",
+    ),
+    MemoryFieldSpec(
+        path="event_types.candidate_thesis",
+        label="candidate_thesis",
+        group="event_types",
+        value_type="toggle",
+        description="Persist non-held candidate thesis memories when explicit thesis evidence exists.",
     ),
     MemoryFieldSpec(
         path="hierarchy.enabled",
@@ -540,6 +583,135 @@ FIELD_SPECS: tuple[MemoryFieldSpec, ...] = (
         description="Minimum confidence required before inferred graph edges are used.",
     ),
     MemoryFieldSpec(
+        path="graph.semantic_triples.enabled",
+        label="Semantic Triples",
+        group="graph",
+        value_type="toggle",
+        description="Collect and optionally use source-grounded relation triples.",
+    ),
+    MemoryFieldSpec(
+        path="graph.semantic_triples.mode",
+        label="Triple Mode",
+        group="graph",
+        value_type="select",
+        options=("shadow", "boost", "inject"),
+        description="shadow stores only, boost affects retrieval score, inject also adds relation hints to prompts.",
+    ),
+    MemoryFieldSpec(
+        path="graph.semantic_triples.min_confidence",
+        label="Triple Confidence",
+        group="graph",
+        value_type="float",
+        min_value=0.0,
+        max_value=1.0,
+        step=0.01,
+        description="Minimum relation confidence used for boost/inject read paths.",
+    ),
+    MemoryFieldSpec(
+        path="graph.semantic_triples.max_candidates",
+        label="Triple Candidates",
+        group="graph",
+        value_type="int",
+        min_value=1,
+        max_value=64,
+        step=1,
+        description="Maximum relation-linked memory candidates considered per retrieval track.",
+    ),
+    MemoryFieldSpec(
+        path="graph.semantic_triples.boost_bonus_base",
+        label="Triple Boost Base",
+        group="graph",
+        value_type="float",
+        min_value=0.0,
+        max_value=1.0,
+        step=0.01,
+        description="Base retrieval bonus multiplied by relation confidence.",
+    ),
+    MemoryFieldSpec(
+        path="graph.semantic_triples.boost_bonus_cap",
+        label="Triple Boost Cap",
+        group="graph",
+        value_type="float",
+        min_value=0.0,
+        max_value=1.0,
+        step=0.01,
+        description="Maximum retrieval bonus from semantic relation triples.",
+    ),
+    MemoryFieldSpec(
+        path="graph.semantic_triples.max_relation_context_items",
+        label="Relation Hints",
+        group="graph",
+        value_type="int",
+        min_value=0,
+        max_value=16,
+        step=1,
+        description="Maximum relation hints injected into prompt context when mode is inject.",
+    ),
+    MemoryFieldSpec(
+        path="graph.semantic_triples.tuning.enabled",
+        label="Triple Auto Tuning",
+        group="graph",
+        value_type="toggle",
+        description="Automatically evaluate semantic triple metrics for shadow/inject transitions.",
+    ),
+    MemoryFieldSpec(
+        path="graph.semantic_triples.tuning.auto_transition_enabled",
+        label="Triple Auto Mode",
+        group="graph",
+        value_type="toggle",
+        description="Allow metric gates to switch semantic triples between shadow and inject without manual approval.",
+    ),
+    MemoryFieldSpec(
+        path="graph.semantic_triples.tuning.lookback_days",
+        label="Triple Lookback Days",
+        group="graph",
+        value_type="int",
+        min_value=3,
+        max_value=180,
+        step=1,
+        description="Window used to evaluate relation extraction health.",
+    ),
+    MemoryFieldSpec(
+        path="graph.semantic_triples.tuning.stability_window_days",
+        label="Triple Stability Days",
+        group="graph",
+        value_type="int",
+        min_value=1,
+        max_value=60,
+        step=1,
+        description="Recent sub-window compared with the longer baseline for drift.",
+    ),
+    MemoryFieldSpec(
+        path="graph.semantic_triples.tuning.required_healthy_evaluations",
+        label="Healthy Runs",
+        group="graph",
+        value_type="int",
+        min_value=2,
+        max_value=30,
+        step=1,
+        description="Consecutive healthy evaluations required before shadow can auto-promote to inject.",
+    ),
+    MemoryFieldSpec(
+        path="graph.semantic_triples.tuning.demote_unhealthy_evaluations",
+        label="Unhealthy Runs",
+        group="graph",
+        value_type="int",
+        min_value=1,
+        max_value=30,
+        step=1,
+        description="Consecutive unhealthy evaluations required before inject auto-demotes to shadow.",
+    ),
+    MemoryFieldSpec(
+        path="graph.semantic_triples.tuning.post_demote_cooldown_evaluations",
+        label="Demote Cooldown",
+        group="graph",
+        value_type="int",
+        min_value=0,
+        max_value=30,
+        step=1,
+        description="Evaluations to wait after demotion before promotion can happen again. Zero derives from Healthy Runs.",
+    ),
+    MemoryFieldSpec(
         path="compaction.enabled",
         label="Compaction Enabled",
         group="compaction",
@@ -907,6 +1079,10 @@ def default_memory_policy(
             "thesis_update": True,
             "thesis_invalidated": True,
             "thesis_realized": True,
+            "candidate_screen_hit": True,
+            "candidate_watchlist": True,
+            "candidate_rejected": True,
+            "candidate_thesis": True,
         },
         "hierarchy": {
             "enabled": True,
@@ -958,6 +1134,27 @@ def default_memory_policy(
             "max_expansion_hops": 1,
             "max_expanded_nodes": 12,
             "inferred_edge_min_confidence": 0.75,
+            "semantic_triples": {
+                "enabled": True,
+                "mode": "shadow",
+                "min_confidence": 0.75,
+                "max_candidates": 8,
+                "boost_bonus_base": 0.12,
+                "boost_bonus_cap": 0.18,
+                "max_relation_context_items": 4,
+                "tuning": {
+                    "enabled": True,
+                    "auto_transition_enabled": True,
+                    "lookback_days": 30,
+                    "stability_window_days": 7,
+                    "min_sources": 0,
+                    "min_accepted_triples": 0,
+                    "required_healthy_evaluations": 3,
+                    "demote_unhealthy_evaluations": 2,
+                    "post_demote_cooldown_evaluations": 0,
+                    "demote_on_version_change": True,
+                },
+            },
         },
         "compaction": {
             "enabled": bool(compaction_enabled),
@@ -1094,7 +1291,11 @@ def _apply_aliases(raw: dict[str, Any]) -> dict[str, Any]:
 
 
 def normalize_memory_policy(raw: Any, *, defaults: dict[str, Any] | None = None) -> dict[str, Any]:
-    base = copy.deepcopy(defaults or default_memory_policy())
+    base = copy.deepcopy(
+        _deep_merge(default_memory_policy(), _parse_json_object(defaults))
+        if defaults is not None
+        else default_memory_policy()
+    )
     parsed = _apply_aliases(_parse_json_object(raw))
     merged = _deep_merge(base, parsed)
 
@@ -1439,6 +1640,170 @@ def normalize_memory_policy(raw: Any, *, defaults: dict[str, Any] | None = None)
         base["graph"]["inferred_edge_min_confidence"],
         min_value=0.0,
         max_value=1.0,
+    )
+    normalized["graph"]["semantic_triples"]["enabled"] = _coerce_bool(
+        get_memory_policy_value(
+            merged,
+            "graph.semantic_triples.enabled",
+            base["graph"]["semantic_triples"]["enabled"],
+        ),
+        base["graph"]["semantic_triples"]["enabled"],
+    )
+    triple_mode = str(
+        get_memory_policy_value(
+            merged,
+            "graph.semantic_triples.mode",
+            base["graph"]["semantic_triples"]["mode"],
+        )
+        or ""
+    ).strip().lower()
+    normalized["graph"]["semantic_triples"]["mode"] = (
+        triple_mode if triple_mode in {"shadow", "boost", "inject"} else base["graph"]["semantic_triples"]["mode"]
+    )
+    normalized["graph"]["semantic_triples"]["min_confidence"] = _coerce_float(
+        get_memory_policy_value(
+            merged,
+            "graph.semantic_triples.min_confidence",
+            base["graph"]["semantic_triples"]["min_confidence"],
+        ),
+        base["graph"]["semantic_triples"]["min_confidence"],
+        min_value=0.0,
+        max_value=1.0,
+    )
+    normalized["graph"]["semantic_triples"]["max_candidates"] = _coerce_int(
+        get_memory_policy_value(
+            merged,
+            "graph.semantic_triples.max_candidates",
+            base["graph"]["semantic_triples"]["max_candidates"],
+        ),
+        base["graph"]["semantic_triples"]["max_candidates"],
+        min_value=1,
+        max_value=64,
+    )
+    normalized["graph"]["semantic_triples"]["boost_bonus_base"] = _coerce_float(
+        get_memory_policy_value(
+            merged,
+            "graph.semantic_triples.boost_bonus_base",
+            base["graph"]["semantic_triples"]["boost_bonus_base"],
+        ),
+        base["graph"]["semantic_triples"]["boost_bonus_base"],
+        min_value=0.0,
+        max_value=1.0,
+    )
+    normalized["graph"]["semantic_triples"]["boost_bonus_cap"] = _coerce_float(
+        get_memory_policy_value(
+            merged,
+            "graph.semantic_triples.boost_bonus_cap",
+            base["graph"]["semantic_triples"]["boost_bonus_cap"],
+        ),
+        base["graph"]["semantic_triples"]["boost_bonus_cap"],
+        min_value=0.0,
+        max_value=1.0,
+    )
+    normalized["graph"]["semantic_triples"]["max_relation_context_items"] = _coerce_int(
+        get_memory_policy_value(
+            merged,
+            "graph.semantic_triples.max_relation_context_items",
+            base["graph"]["semantic_triples"]["max_relation_context_items"],
+        ),
+        base["graph"]["semantic_triples"]["max_relation_context_items"],
+        min_value=0,
+        max_value=16,
+    )
+    normalized["graph"]["semantic_triples"].setdefault("tuning", {})
+    normalized["graph"]["semantic_triples"]["tuning"]["enabled"] = _coerce_bool(
+        get_memory_policy_value(
+            merged,
+            "graph.semantic_triples.tuning.enabled",
+            base["graph"]["semantic_triples"]["tuning"]["enabled"],
+        ),
+        base["graph"]["semantic_triples"]["tuning"]["enabled"],
+    )
+    normalized["graph"]["semantic_triples"]["tuning"]["auto_transition_enabled"] = _coerce_bool(
+        get_memory_policy_value(
+            merged,
+            "graph.semantic_triples.tuning.auto_transition_enabled",
+            base["graph"]["semantic_triples"]["tuning"]["auto_transition_enabled"],
+        ),
+        base["graph"]["semantic_triples"]["tuning"]["auto_transition_enabled"],
+    )
+    normalized["graph"]["semantic_triples"]["tuning"]["lookback_days"] = _coerce_int(
+        get_memory_policy_value(
+            merged,
+            "graph.semantic_triples.tuning.lookback_days",
+            base["graph"]["semantic_triples"]["tuning"]["lookback_days"],
+        ),
+        base["graph"]["semantic_triples"]["tuning"]["lookback_days"],
+        min_value=3,
+        max_value=180,
+    )
+    normalized["graph"]["semantic_triples"]["tuning"]["stability_window_days"] = _coerce_int(
+        get_memory_policy_value(
+            merged,
+            "graph.semantic_triples.tuning.stability_window_days",
+            base["graph"]["semantic_triples"]["tuning"]["stability_window_days"],
+        ),
+        base["graph"]["semantic_triples"]["tuning"]["stability_window_days"],
+        min_value=1,
+        max_value=60,
+    )
+    normalized["graph"]["semantic_triples"]["tuning"]["min_sources"] = _coerce_int(
+        get_memory_policy_value(
+            merged,
+            "graph.semantic_triples.tuning.min_sources",
+            base["graph"]["semantic_triples"]["tuning"]["min_sources"],
+        ),
+        base["graph"]["semantic_triples"]["tuning"]["min_sources"],
+        min_value=0,
+        max_value=10000,
+    )
+    normalized["graph"]["semantic_triples"]["tuning"]["min_accepted_triples"] = _coerce_int(
+        get_memory_policy_value(
+            merged,
+            "graph.semantic_triples.tuning.min_accepted_triples",
+            base["graph"]["semantic_triples"]["tuning"]["min_accepted_triples"],
+        ),
+        base["graph"]["semantic_triples"]["tuning"]["min_accepted_triples"],
+        min_value=0,
+        max_value=100000,
+    )
+    normalized["graph"]["semantic_triples"]["tuning"]["required_healthy_evaluations"] = _coerce_int(
+        get_memory_policy_value(
+            merged,
+            "graph.semantic_triples.tuning.required_healthy_evaluations",
+            base["graph"]["semantic_triples"]["tuning"]["required_healthy_evaluations"],
+        ),
+        base["graph"]["semantic_triples"]["tuning"]["required_healthy_evaluations"],
+        min_value=2,
+        max_value=30,
+    )
+    normalized["graph"]["semantic_triples"]["tuning"]["demote_unhealthy_evaluations"] = _coerce_int(
+        get_memory_policy_value(
+            merged,
+            "graph.semantic_triples.tuning.demote_unhealthy_evaluations",
+            base["graph"]["semantic_triples"]["tuning"]["demote_unhealthy_evaluations"],
+        ),
+        base["graph"]["semantic_triples"]["tuning"]["demote_unhealthy_evaluations"],
+        min_value=1,
+        max_value=30,
+    )
+    normalized["graph"]["semantic_triples"]["tuning"]["post_demote_cooldown_evaluations"] = _coerce_int(
+        get_memory_policy_value(
+            merged,
+            "graph.semantic_triples.tuning.post_demote_cooldown_evaluations",
+            base["graph"]["semantic_triples"]["tuning"]["post_demote_cooldown_evaluations"],
+        ),
+        base["graph"]["semantic_triples"]["tuning"]["post_demote_cooldown_evaluations"],
+        min_value=0,
+        max_value=30,
+    )
+    normalized["graph"]["semantic_triples"]["tuning"]["demote_on_version_change"] = _coerce_bool(
+        get_memory_policy_value(
+            merged,
+            "graph.semantic_triples.tuning.demote_on_version_change",
+            base["graph"]["semantic_triples"]["tuning"]["demote_on_version_change"],
+        ),
+        base["graph"]["semantic_triples"]["tuning"]["demote_on_version_change"],
     )
 
     normalized["compaction"]["enabled"] = _coerce_bool(
@@ -1998,6 +2363,177 @@ def memory_graph_inferred_edge_min_confidence(policy: dict[str, Any] | None, def
         default,
         min_value=0.0,
         max_value=1.0,
+    )
+
+
+def memory_graph_semantic_triples_enabled(policy: dict[str, Any] | None, default: bool = True) -> bool:
+    return _coerce_bool(get_memory_policy_value(policy, "graph.semantic_triples.enabled", default), default)
+
+
+def memory_graph_semantic_triples_mode(policy: dict[str, Any] | None, default: str = "shadow") -> str:
+    mode = str(get_memory_policy_value(policy, "graph.semantic_triples.mode", default) or "").strip().lower()
+    return mode if mode in {"shadow", "boost", "inject"} else default
+
+
+def memory_graph_semantic_triples_boost_enabled(policy: dict[str, Any] | None) -> bool:
+    if not memory_graph_semantic_triples_enabled(policy):
+        return False
+    return memory_graph_semantic_triples_mode(policy) in {"boost", "inject"}
+
+
+def memory_graph_semantic_triples_inject_enabled(policy: dict[str, Any] | None) -> bool:
+    if not memory_graph_semantic_triples_enabled(policy):
+        return False
+    return memory_graph_semantic_triples_mode(policy) == "inject"
+
+
+def memory_graph_semantic_triples_min_confidence(policy: dict[str, Any] | None, default: float = 0.75) -> float:
+    return _coerce_float(
+        get_memory_policy_value(policy, "graph.semantic_triples.min_confidence", default),
+        default,
+        min_value=0.0,
+        max_value=1.0,
+    )
+
+
+def memory_graph_semantic_triples_max_candidates(policy: dict[str, Any] | None, default: int = 8) -> int:
+    return _coerce_int(
+        get_memory_policy_value(policy, "graph.semantic_triples.max_candidates", default),
+        default,
+        min_value=1,
+        max_value=64,
+    )
+
+
+def memory_graph_semantic_triples_boost_bonus_base(policy: dict[str, Any] | None, default: float = 0.12) -> float:
+    return _coerce_float(
+        get_memory_policy_value(policy, "graph.semantic_triples.boost_bonus_base", default),
+        default,
+        min_value=0.0,
+        max_value=1.0,
+    )
+
+
+def memory_graph_semantic_triples_boost_bonus_cap(policy: dict[str, Any] | None, default: float = 0.18) -> float:
+    return _coerce_float(
+        get_memory_policy_value(policy, "graph.semantic_triples.boost_bonus_cap", default),
+        default,
+        min_value=0.0,
+        max_value=1.0,
+    )
+
+
+def memory_graph_semantic_triples_max_relation_context_items(
+    policy: dict[str, Any] | None,
+    default: int = 4,
+) -> int:
+    return _coerce_int(
+        get_memory_policy_value(policy, "graph.semantic_triples.max_relation_context_items", default),
+        default,
+        min_value=0,
+        max_value=16,
+    )
+
+
+def memory_graph_semantic_triples_tuning_enabled(policy: dict[str, Any] | None, default: bool = True) -> bool:
+    return _coerce_bool(get_memory_policy_value(policy, "graph.semantic_triples.tuning.enabled", default), default)
+
+
+def memory_graph_semantic_triples_tuning_auto_transition_enabled(
+    policy: dict[str, Any] | None,
+    default: bool = True,
+) -> bool:
+    return _coerce_bool(
+        get_memory_policy_value(policy, "graph.semantic_triples.tuning.auto_transition_enabled", default),
+        default,
+    )
+
+
+def memory_graph_semantic_triples_tuning_lookback_days(policy: dict[str, Any] | None, default: int = 30) -> int:
+    return _coerce_int(
+        get_memory_policy_value(policy, "graph.semantic_triples.tuning.lookback_days", default),
+        default,
+        min_value=3,
+        max_value=180,
+    )
+
+
+def memory_graph_semantic_triples_tuning_stability_window_days(
+    policy: dict[str, Any] | None,
+    default: int = 7,
+) -> int:
+    return _coerce_int(
+        get_memory_policy_value(policy, "graph.semantic_triples.tuning.stability_window_days", default),
+        default,
+        min_value=1,
+        max_value=60,
+    )
+
+
+def memory_graph_semantic_triples_tuning_min_sources(policy: dict[str, Any] | None, default: int = 0) -> int:
+    return _coerce_int(
+        get_memory_policy_value(policy, "graph.semantic_triples.tuning.min_sources", default),
+        default,
+        min_value=0,
+        max_value=10000,
+    )
+
+
+def memory_graph_semantic_triples_tuning_min_accepted_triples(
+    policy: dict[str, Any] | None,
+    default: int = 0,
+) -> int:
+    return _coerce_int(
+        get_memory_policy_value(policy, "graph.semantic_triples.tuning.min_accepted_triples", default),
+        default,
+        min_value=0,
+        max_value=100000,
+    )
+
+
+def memory_graph_semantic_triples_tuning_required_healthy_evaluations(
+    policy: dict[str, Any] | None,
+    default: int = 3,
+) -> int:
+    return _coerce_int(
+        get_memory_policy_value(policy, "graph.semantic_triples.tuning.required_healthy_evaluations", default),
+        default,
+        min_value=2,
+        max_value=30,
+    )
+
+
+def memory_graph_semantic_triples_tuning_demote_unhealthy_evaluations(
+    policy: dict[str, Any] | None,
+    default: int = 2,
+) -> int:
+    return _coerce_int(
+        get_memory_policy_value(policy, "graph.semantic_triples.tuning.demote_unhealthy_evaluations", default),
+        default,
+        min_value=1,
+        max_value=30,
+    )
+
+
+def memory_graph_semantic_triples_tuning_post_demote_cooldown_evaluations(
+    policy: dict[str, Any] | None,
+    default: int = 0,
+) -> int:
+    return _coerce_int(
+        get_memory_policy_value(policy, "graph.semantic_triples.tuning.post_demote_cooldown_evaluations", default),
+        default,
+        min_value=0,
+        max_value=30,
+    )
+
+
+def memory_graph_semantic_triples_tuning_demote_on_version_change(
+    policy: dict[str, Any] | None,
+    default: bool = True,
+) -> bool:
+    return _coerce_bool(
+        get_memory_policy_value(policy, "graph.semantic_triples.tuning.demote_on_version_change", default),
+        default,
     )
 
 

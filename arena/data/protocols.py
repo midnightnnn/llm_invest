@@ -63,6 +63,16 @@ class MemoryReader(Protocol):
 
     def memory_event_by_id(self, *, event_id: str, tenant_id: str | None = None) -> dict[str, Any] | None: ...
 
+    def candidate_memory_events(
+        self,
+        *,
+        agent_id: str,
+        exclude_tickers: list[str] | None = None,
+        limit: int = 12,
+        trading_mode: str = "paper",
+        tenant_id: str | None = None,
+    ) -> list[dict[str, Any]]: ...
+
     def find_buy_memories_for_ticker(
         self, agent_id: str, ticker: str, limit: int = 5, trading_mode: str = "paper", *, tenant_id: str | None = None
     ) -> list[dict[str, Any]]: ...
@@ -74,6 +84,34 @@ class MemoryReader(Protocol):
         trading_mode: str = "paper",
         min_confidence: float = 0.0,
         limit: int = 24,
+        tenant_id: str | None = None,
+    ) -> list[dict[str, Any]]: ...
+
+    def memory_relation_triples_for_source(
+        self, *, source_table: str, source_id: str, tenant_id: str | None = None
+    ) -> list[dict[str, Any]]: ...
+
+    def memory_relation_memory_candidates(
+        self,
+        *,
+        agent_id: str,
+        seed_node_ids: list[str],
+        trading_mode: str = "paper",
+        min_confidence: float = 0.75,
+        limit: int = 8,
+        tenant_id: str | None = None,
+    ) -> list[dict[str, Any]]: ...
+
+    def relation_extraction_pending_sources(
+        self,
+        *,
+        limit: int = 25,
+        source_table: str | None = None,
+        event_types: list[str] | None = None,
+        trading_mode: str = "paper",
+        extractor_version: str,
+        prompt_version: str,
+        ontology_version: str,
         tenant_id: str | None = None,
     ) -> list[dict[str, Any]]: ...
 
@@ -89,6 +127,14 @@ class MemoryWriter(Protocol):
     def update_memory_score(self, event_id: str, new_score: float, *, tenant_id: str | None = None) -> None: ...
 
     def append_memory_access_events(self, rows: list[dict[str, Any]], *, tenant_id: str | None = None) -> None: ...
+
+    def upsert_memory_relation_triples(self, rows: list[dict[str, Any]], *, tenant_id: str | None = None) -> None: ...
+
+    def upsert_memory_relation_triples_with_graph(self, rows: list[dict[str, Any]], *, tenant_id: str | None = None) -> None: ...
+
+    def append_memory_relation_extraction_runs(self, rows: list[dict[str, Any]], *, tenant_id: str | None = None) -> None: ...
+
+    def append_memory_relation_tuning_runs(self, rows: list[dict[str, Any]], *, tenant_id: str | None = None) -> None: ...
 
 
 # ---------------------------------------------------------------------------

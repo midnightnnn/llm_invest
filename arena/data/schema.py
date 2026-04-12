@@ -146,6 +146,94 @@ TABLE_DDLS: tuple[str, ...] = (
     CLUSTER BY tenant_id, edge_type, causal_chain_id
     """,
     """
+    CREATE TABLE IF NOT EXISTS `{project}.{dataset}.memory_relation_extraction_runs` (
+      tenant_id STRING NOT NULL,
+      run_id STRING NOT NULL,
+      started_at TIMESTAMP NOT NULL,
+      finished_at TIMESTAMP,
+      source_table STRING NOT NULL,
+      source_id STRING NOT NULL,
+      source_hash STRING NOT NULL,
+      source_created_at TIMESTAMP,
+      agent_id STRING,
+      trading_mode STRING NOT NULL,
+      cycle_id STRING,
+      extractor_version STRING NOT NULL,
+      prompt_version STRING NOT NULL,
+      ontology_version STRING NOT NULL,
+      provider STRING,
+      model STRING,
+      status STRING NOT NULL,
+      accepted_count INT64,
+      rejected_count INT64,
+      raw_output_json JSON,
+      error_message STRING,
+      detail_json JSON
+    )
+    PARTITION BY DATE(started_at)
+    CLUSTER BY tenant_id, status, source_table
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS `{project}.{dataset}.memory_relation_tuning_runs` (
+      tenant_id STRING NOT NULL,
+      run_id STRING NOT NULL,
+      evaluated_at TIMESTAMP NOT NULL,
+      trading_mode STRING NOT NULL,
+      configured_mode STRING NOT NULL,
+      effective_mode STRING NOT NULL,
+      recommended_mode STRING,
+      transition_action STRING,
+      reason STRING,
+      source_count INT64,
+      accepted_count INT64,
+      rejected_count INT64,
+      unsafe_reject_count INT64,
+      failed_run_count INT64,
+      invalid_output_count INT64,
+      accepted_rate FLOAT64,
+      unsafe_reject_rate FLOAT64,
+      strong_predicate_ratio FLOAT64,
+      conflict_ratio FLOAT64,
+      source_concentration FLOAT64,
+      ticker_concentration FLOAT64,
+      sample_ok BOOL,
+      health_ok BOOL,
+      stability_ok BOOL,
+      detail_json JSON
+    )
+    PARTITION BY DATE(evaluated_at)
+    CLUSTER BY tenant_id, effective_mode, transition_action
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS `{project}.{dataset}.memory_relation_triples` (
+      tenant_id STRING NOT NULL,
+      triple_id STRING NOT NULL,
+      created_at TIMESTAMP NOT NULL,
+      source_table STRING NOT NULL,
+      source_id STRING NOT NULL,
+      source_node_id STRING,
+      source_created_at TIMESTAMP,
+      agent_id STRING,
+      trading_mode STRING NOT NULL,
+      cycle_id STRING,
+      subject_node_id STRING NOT NULL,
+      subject_label STRING NOT NULL,
+      subject_type STRING NOT NULL,
+      predicate STRING NOT NULL,
+      object_node_id STRING NOT NULL,
+      object_label STRING NOT NULL,
+      object_type STRING NOT NULL,
+      confidence FLOAT64,
+      evidence_text STRING,
+      extraction_method STRING,
+      extraction_version STRING,
+      status STRING,
+      detail_json JSON
+    )
+    PARTITION BY DATE(created_at)
+    CLUSTER BY tenant_id, predicate, status, source_table
+    """,
+    """
     CREATE TABLE IF NOT EXISTS `{project}.{dataset}.board_posts` (
       tenant_id STRING NOT NULL,
       post_id STRING NOT NULL,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from arena.cli_commands.run_agent import (
+    _run_post_cycle_maintenance,
     _run_agent_cycle_once,
     _run_agent_cycle_once_guarded,
     cmd_run_agent_cycle,
@@ -15,6 +16,8 @@ from arena.cli_commands.run_pipeline import (
 )
 from arena.cli_commands.run_reconcile import (
     _run_memory_compaction,
+    _run_memory_relation_extraction_post_cycle,
+    _run_memory_relation_tuner_post_cycle,
     _run_memory_forgetting_tuner_post_cycle,
     _run_reconciliation_guard,
     _sync_broker_cash_ledger,

@@ -195,7 +195,7 @@ flowchart TB
         TQ["Quant\nScreening / Optimization / Forecasting / Technicals"]
         TS["Sentiment\nReddit / SEC / Earnings / F&G"]
         TM["Macro\nFRED / ECOS / Indices"]
-        TC["Memory\nVector Search / Peer Lessons"]
+        TC["Memory\nVector Search / Peer Lessons / Relation Graph"]
         TMCP["MCP\nCustom Servers"]
     end
 
@@ -242,7 +242,7 @@ flowchart TB
 ```
 arena/
   agents/          # ADK ReAct agents + research + memory compaction
-  memory/          # Long-term memory (storage, vectors, policies, queries, cleanup)
+  memory/          # Long-term memory (storage, vectors, policies, queries, cleanup, semantic relations)
   ui/              # Admin UI (FastAPI + Jinja2 + HTMX)
   tools/           # Tool registry (quant, sentiment, macro, context)
   data/            # BigQuery storage + schemas
@@ -371,7 +371,9 @@ graph TB
 
 ## Memory System
 
-Each cycle's experiences are connected as a causal graph. Research → board posts → orders → fills → memories form nodes and edges, and over time, less important memories naturally fade following a forgetting curve.
+Each cycle's experiences are connected as a **causal graph**. Research → board posts → orders → fills → memories form nodes and edges, and over time, less important memories naturally fade following a forgetting curve.
+
+On top of the causal graph, a **semantic relation graph** extracts concept-level relationships (e.g. `NVDA ──risk_to──▶ export_restriction`) from memory text, enabling cross-concept retrieval beyond simple keyword or vector similarity.
 
 ![Memory System](docs/memory.png)
 
@@ -407,6 +409,16 @@ graph LR
     M1 -->|REFERENCES| M3
     M2 -->|ABSTRACTED_TO| M3
 
+    %% ─── Semantic Relation Graph (concept layer) ───
+    SN1([entity:nvda])
+    SN2([entity:export_restriction])
+    SN3([entity:margin_pressure])
+
+    M1 -.->|MENTIONS| SN1
+    M1 -.->|EVIDENCES| SN2
+    SN1 -.->|risk_to| SN2
+    SN2 -.->|leads_to| SN3
+
     %% ─── Styles ───
     classDef post fill:#dbeafe,stroke:#3b82f6,stroke-width:1.5px,color:#1e40af
     classDef brief fill:#ecfdf5,stroke:#10b981,stroke-width:1.5px,color:#064e3b
@@ -415,6 +427,7 @@ graph LR
     classDef intent fill:#fff7ed,stroke:#f97316,stroke-width:1.5px,color:#9a3412
     classDef exec fill:#f0fdf4,stroke:#22c55e,stroke-width:1.5px,color:#14532d
     classDef thesis fill:#fce7f3,stroke:#ec4899,stroke-width:2px,color:#9d174d
+    classDef entity fill:#f0f9ff,stroke:#0ea5e9,stroke-width:2px,color:#0c4a6e,stroke-dasharray:5 5
 
     class B1,B2 post
     class R1 brief
@@ -423,12 +436,20 @@ graph LR
     class I1 intent
     class E1 exec
     class T1 thesis
+    class SN1,SN2,SN3 entity
 ```
 
+> **Causal Graph**
 > **Nodes** — Research briefings (`brief`), board posts (`post`), orders (`intent`), fills (`exec`), memories (`mem`), investment theses (`thesis`)
 > **Edges** — `INFORMED_BY` · `PRECEDES` · `EXECUTED_AS` · `RESULTED_IN` · `OPENED` · `SUPPORTS` · `REALIZED` · `ABSTRACTED_TO`
 > **Tiers** — working (hours) → episodic (days) → semantic (permanent). A compaction agent promotes episodes into strategic lessons.
 > **Theses** — `OPENED` on buy, `SUPPORTS` while rationale holds, `REALIZED` on target hit, `INVALIDATED` on thesis break. Closed thesis chains are compacted into semantic lessons.
+
+> **Semantic Relation Graph**
+> **Nodes** — `semantic_entity` (ticker, sector, risk_factor, macro_factor, theme, ...)
+> **Predicates** — `risk_to` · `supports` · `contradicts` · `invalidates` · `similar_setup` · `caused_by` · `leads_to` (closed ontology)
+> **Extraction** — Deterministic (structured fields → `mentions`/`contains`, immediate) + Semantic LLM (text → ontology-constrained triples, async background job). 14-step validator filters candidates before acceptance.
+> **Modes** — `shadow` (store only, no retrieval impact) → `inject` (relation context in prompt). Auto-tuned via Wilson interval quality gates with sample, safety, stability, and version checks.
 
 ---
 

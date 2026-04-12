@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 
 from arena.config import Settings
 from arena.data.bq import BigQueryRepository
+from arena.memory.policy import memory_graph_semantic_triples_enabled
 from arena.memory.tuning import run_memory_forgetting_tuner
 from arena.orchestrator import ArenaOrchestrator
 
@@ -182,6 +184,107 @@ def _run_memory_compaction(
         return
 
     logger.info("[cyan]Memory compaction[/cyan] tenant=%s cycle_id=%s reflections=%d", tenant, cycle_id, len(saved))
+
+
+def _run_memory_relation_extraction_post_cycle(
+    *,
+    settings: Settings,
+    repo: BigQueryRepository,
+    tenant: str,
+) -> None:
+    """Runs semantic relation extraction after cycle writes without blocking trading."""
+    cli = _cli()
+    if not cli._truthy_env("ARENA_MEMORY_RELATION_EXTRACTION_POST_CYCLE_ENABLED", True):
+        return
+    if not memory_graph_semantic_triples_enabled(getattr(settings, "memory_policy", None)):
+        return
+
+    limit = max(1, cli._int_env("ARENA_MEMORY_RELATION_EXTRACTION_POST_CYCLE_LIMIT", 12))
+    source_table = str(os.getenv("ARENA_MEMORY_RELATION_EXTRACTION_SOURCE_TABLE", "") or "").strip()
+    event_types = cli._csv_env("ARENA_MEMORY_RELATION_EXTRACTION_EVENT_TYPES")
+    min_confidence = max(0.0, min(cli._float_env("ARENA_MEMORY_RELATION_EXTRACTION_MIN_CONFIDENCE", 0.65), 1.0))
+    max_triples = max(1, min(cli._int_env("ARENA_MEMORY_RELATION_EXTRACTION_MAX_TRIPLES", 6), 12))
+
+    from arena.memory.semantic_extractor import SemanticRelationExtractor
+
+    try:
+        extractor = SemanticRelationExtractor(
+            settings=settings,
+            repo=repo,
+            min_confidence=min_confidence,
+            max_triples_per_source=max_triples,
+        )
+        rows = asyncio.run(
+            extractor.run_pending(
+                tenant_id=tenant,
+                limit=limit,
+                source_table=source_table or None,
+                event_types=event_types or None,
+                dry_run=False,
+            )
+        )
+    except Exception as exc:
+        logger.warning(
+            "[yellow]Memory relation extraction failed; continuing[/yellow] tenant=%s err=%s",
+            tenant,
+            str(exc),
+        )
+        return
+
+    accepted = sum(int(row.get("accepted_count") or 0) for row in rows)
+    rejected = sum(int(row.get("rejected_count") or 0) for row in rows)
+    logger.info(
+        "[cyan]Memory relation extraction[/cyan] tenant=%s sources=%d accepted=%d rejected=%d",
+        tenant,
+        len(rows),
+        accepted,
+        rejected,
+    )
+
+
+def _run_memory_relation_tuner_post_cycle(
+    *,
+    settings: Settings,
+    repo: BigQueryRepository,
+    tenant: str,
+) -> None:
+    """Evaluates semantic relation gates and auto-switches shadow/inject when justified."""
+    cli = _cli()
+    if not cli._truthy_env("ARENA_MEMORY_RELATION_TUNER_POST_CYCLE_ENABLED", True):
+        return
+
+    from arena.memory.semantic_tuning import run_memory_relation_tuner
+
+    try:
+        state = run_memory_relation_tuner(
+            repo,
+            settings,
+            tenant_id=tenant,
+            updated_by="post-cycle-relation-tuner",
+        )
+    except Exception as exc:
+        logger.warning(
+            "[yellow]Memory relation tuner failed; continuing[/yellow] tenant=%s err=%s",
+            tenant,
+            str(exc),
+        )
+        return
+
+    metrics = state.get("metrics") if isinstance(state.get("metrics"), dict) else {}
+    transition = state.get("transition") if isinstance(state.get("transition"), dict) else {}
+    logger.info(
+        "[cyan]Memory relation tuner[/cyan] tenant=%s mode=%s effective=%s recommended=%s sources=%s accepted=%s unsafe=%s health=%s stability=%s transition=%s",
+        tenant,
+        str(state.get("configured_mode") or "-"),
+        str(state.get("effective_mode") or "-"),
+        str(state.get("recommended_mode") or "-"),
+        int(metrics.get("source_count") or 0),
+        int(metrics.get("accepted_count") or 0),
+        int(metrics.get("unsafe_reject_count") or 0),
+        "true" if bool((state.get("gates") or {}).get("health_ok")) else "false",
+        "true" if bool((state.get("gates") or {}).get("stability_ok")) else "false",
+        str(transition.get("action") or "-"),
+    )
 
 
 def _run_memory_forgetting_tuner_post_cycle(

@@ -143,6 +143,47 @@ function stringifyTranscriptValue(value){
   try{return JSON.stringify(value,null,2);}
   catch(_e){return String(value);}
 }
+function transcriptValueHasContent(value){
+  if(value==null)return false;
+  if(typeof value==="string")return value.trim().length>0;
+  if(Array.isArray(value))return value.length>0;
+  if(typeof value==="object")return Object.keys(value).length>0;
+  return true;
+}
+function buildPromptContextSectionsText(item,bundle){
+  var sections=item&&item.context_sections&&typeof item.context_sections==="object"?item.context_sections:{};
+  var tools=Array.isArray(bundle.available_tools)?bundle.available_tools:[];
+  if(!Object.keys(sections).length&&!tools.length)return "";
+  var labels=[
+    ["portfolio_context","Portfolio Context"],
+    ["market_context","Market Context"],
+    ["board_context","Board Context"],
+    ["research_context","Research Context"],
+    ["relation_context","Relation Context"],
+    ["memory_context","Memory Context"]
+  ];
+  var lines=[];
+  labels.forEach(function(pair){
+    var key=pair[0],label=pair[1];
+    var value=sections[key];
+    lines.push("## "+label);
+    lines.push(transcriptValueHasContent(value)?stringifyTranscriptValue(value):"(empty)");
+    lines.push("");
+  });
+  lines.push("## Available Tools");
+  if(tools.length){
+    tools.forEach(function(tool){
+      if(!tool||typeof tool!=="object")return;
+      var id=String(tool.tool_id||tool.name||"tool");
+      var cat=tool.category?" ["+String(tool.category)+"]":"";
+      var desc=tool.description?": "+String(tool.description):"";
+      lines.push("- "+id+cat+desc);
+    });
+  }else{
+    lines.push("(empty)");
+  }
+  return lines.join("\n").trim();
+}
 function buildToolTranscriptText(ev,index){
   var lines=[];
   var tool=String((ev&&ev.tool)||"tool");
@@ -180,6 +221,12 @@ function buildModelVisibleTranscriptText(payload){
     if(!item||typeof item!=="object")return;
     var phaseToken=String(item.phase||"").toLowerCase();
     var prompt=String(item.prompt||"");
+    var contextDetails=buildPromptContextSectionsText(item,bundle);
+    if(contextDetails){
+      lines.push("===== CONTEXT DETAILS: "+promptPhaseLabel(phaseToken).toUpperCase()+" =====");
+      lines.push(contextDetails);
+      lines.push("");
+    }
     if(prompt){
       lines.push("===== USER PROMPT: "+promptPhaseLabel(phaseToken).toUpperCase()+" =====");
       var metaBits=[];

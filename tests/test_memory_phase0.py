@@ -5,6 +5,9 @@ from arena.memory.policy import (
     default_memory_policy,
     memory_forgetting_enabled,
     memory_graph_enabled,
+    memory_graph_semantic_triples_boost_enabled,
+    memory_graph_semantic_triples_inject_enabled,
+    memory_graph_semantic_triples_mode,
     memory_hierarchy_enabled,
     memory_tagging_enabled,
     normalize_memory_policy,
@@ -18,11 +21,21 @@ def test_schema_includes_phase0_memory_columns_and_tables() -> None:
     assert "proj.ds.memory_access_events" in ddls
     assert "proj.ds.memory_graph_nodes" in ddls
     assert "proj.ds.memory_graph_edges" in ddls
+    assert "proj.ds.memory_relation_extraction_runs" in ddls
+    assert "proj.ds.memory_relation_tuning_runs" in ddls
+    assert "proj.ds.memory_relation_triples" in ddls
     assert ("memory_tier", "STRING") in cols["agent_memory_events"]
     assert ("context_tags_json", "JSON") in cols["agent_memory_events"]
     assert ("access_count", "INT64") in cols["agent_memory_events"]
     assert ("effective_score", "FLOAT64") in cols["agent_memory_events"]
     assert ("causal_chain_id", "STRING") in cols["agent_memory_events"]
+    assert ("predicate", "STRING") in cols["memory_relation_triples"]
+    assert ("evidence_text", "STRING") in cols["memory_relation_triples"]
+    assert ("detail_json", "JSON") in cols["memory_relation_triples"]
+    assert ("source_hash", "STRING") in cols["memory_relation_extraction_runs"]
+    assert ("raw_output_json", "JSON") in cols["memory_relation_extraction_runs"]
+    assert ("recommended_mode", "STRING") in cols["memory_relation_tuning_runs"]
+    assert ("health_ok", "BOOL") in cols["memory_relation_tuning_runs"]
 
 
 def test_default_memory_policy_includes_phase0_defaults() -> None:
@@ -40,6 +53,13 @@ def test_default_memory_policy_includes_phase0_defaults() -> None:
     assert policy["retrieval"]["reranking"]["effective_score_bonus_scale"] == 0.08
     assert policy["retrieval"]["reranking"]["effective_score_bonus_cap"] == 0.08
     assert policy["graph"]["enabled"] is True
+    assert policy["graph"]["semantic_triples"]["enabled"] is True
+    assert policy["graph"]["semantic_triples"]["mode"] == "shadow"
+    assert policy["graph"]["semantic_triples"]["tuning"]["enabled"] is True
+    assert policy["graph"]["semantic_triples"]["tuning"]["auto_transition_enabled"] is True
+    assert policy["graph"]["semantic_triples"]["tuning"]["post_demote_cooldown_evaluations"] == 0
+    assert memory_graph_semantic_triples_boost_enabled(policy) is False
+    assert memory_graph_semantic_triples_inject_enabled(policy) is False
 
 
 def test_normalize_memory_policy_accepts_phase0_overrides() -> None:
@@ -63,7 +83,12 @@ def test_normalize_memory_policy_accepts_phase0_overrides() -> None:
                     "auto_demote_unhealthy_runs": 2,
                 },
             },
-            "graph": {"enabled": True, "max_expansion_hops": 2, "max_expanded_nodes": 24},
+            "graph": {
+                "enabled": True,
+                "max_expansion_hops": 2,
+                "max_expanded_nodes": 24,
+                "semantic_triples": {"mode": "inject", "max_candidates": 12, "max_relation_context_items": 3},
+            },
         }
     )
 
@@ -84,3 +109,18 @@ def test_normalize_memory_policy_accepts_phase0_overrides() -> None:
     assert policy["forgetting"]["tuning"]["auto_demote_unhealthy_runs"] == 2
     assert policy["graph"]["max_expansion_hops"] == 2
     assert policy["graph"]["max_expanded_nodes"] == 24
+    assert memory_graph_semantic_triples_mode(policy) == "inject"
+    assert memory_graph_semantic_triples_boost_enabled(policy) is True
+    assert memory_graph_semantic_triples_inject_enabled(policy) is True
+    assert policy["graph"]["semantic_triples"]["max_candidates"] == 12
+    assert policy["graph"]["semantic_triples"]["max_relation_context_items"] == 3
+
+
+def test_normalize_memory_policy_backfills_semantic_triples_for_old_defaults() -> None:
+    old_defaults = default_memory_policy()
+    old_defaults["graph"].pop("semantic_triples", None)
+
+    policy = normalize_memory_policy({}, defaults=old_defaults)
+
+    assert policy["graph"]["semantic_triples"]["mode"] == "shadow"
+    assert memory_graph_semantic_triples_boost_enabled(policy) is False

@@ -14,6 +14,12 @@ from arena.memory.graph import (
     build_research_briefing_graph_node,
     ensure_memory_event_graph_ids,
 )
+from arena.memory.relations import (
+    build_board_post_relation_triples,
+    build_memory_event_relation_triples,
+    build_research_briefing_relation_triples,
+    relation_triples_to_graph_projection,
+)
 from arena.memory.thesis import ACTIVE_THESIS_EVENT_TYPES, CLOSED_THESIS_EVENT_TYPES, THESIS_EVENT_TYPES
 from arena.models import BoardPost, MemoryEvent
 
@@ -78,6 +84,10 @@ class MemoryBQStore:
             },
         )
         self.upsert_memory_graph_nodes([build_board_post_graph_node(post)], tenant_id=tenant)
+        self._upsert_relation_triples_with_graph_safely(
+            build_board_post_relation_triples(post),
+            tenant_id=tenant,
+        )
 
     def recent_board_posts(
         self,
@@ -193,6 +203,10 @@ class MemoryBQStore:
         )
         self.upsert_memory_graph_nodes([build_memory_event_graph_node(event)], tenant_id=tenant)
         self.upsert_memory_graph_edges(build_memory_event_graph_edges(event), tenant_id=tenant)
+        self._upsert_relation_triples_with_graph_safely(
+            build_memory_event_relation_triples(event),
+            tenant_id=tenant,
+        )
 
     def recent_memory_events(
         self,
@@ -530,6 +544,58 @@ class MemoryBQStore:
         rows = self.session.fetch_rows(sql, {"tenant_id": tenant, "event_id": token})
         return rows[0] if rows else None
 
+    def candidate_memory_events(
+        self,
+        *,
+        agent_id: str,
+        exclude_tickers: list[str] | None = None,
+        limit: int = 12,
+        trading_mode: str = "paper",
+        tenant_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Returns recent non-held candidate memories for balanced context slots."""
+        tenant = self.session.resolve_tenant_id(tenant_id)
+        blocked = [str(token or "").strip().upper() for token in (exclude_tickers or []) if str(token or "").strip()]
+        sql = f"""
+        SELECT {_MEMORY_SELECT_COLUMNS}
+        FROM `{self.session.dataset_fqn}.agent_memory_events`
+        WHERE tenant_id = @tenant_id
+          AND agent_id = @agent_id
+          AND trading_mode = @trading_mode
+          AND event_type IN UNNEST(@event_types)
+          AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP())
+          AND (
+            ARRAY_LENGTH(@exclude_tickers) = 0
+            OR UPPER(COALESCE(JSON_VALUE(payload_json, '$.ticker'), '')) NOT IN UNNEST(@exclude_tickers)
+          )
+        ORDER BY
+          CASE event_type
+            WHEN 'candidate_thesis' THEN 0
+            WHEN 'candidate_watchlist' THEN 1
+            WHEN 'candidate_rejected' THEN 2
+            ELSE 3
+          END ASC,
+          COALESCE(effective_score, importance_score, score, 0.0) DESC,
+          created_at DESC
+        LIMIT @limit
+        """
+        return self.session.fetch_rows(
+            sql,
+            {
+                "tenant_id": tenant,
+                "agent_id": str(agent_id or "").strip(),
+                "trading_mode": str(trading_mode or "paper").strip().lower() or "paper",
+                "event_types": [
+                    "candidate_screen_hit",
+                    "candidate_watchlist",
+                    "candidate_rejected",
+                    "candidate_thesis",
+                ],
+                "exclude_tickers": blocked,
+                "limit": max(1, min(int(limit), 50)),
+            },
+        )
+
     def find_trade_execution_memory_event(
         self,
         *,
@@ -738,6 +804,518 @@ class MemoryBQStore:
         errors = self.session.client.insert_rows_json(table_id, payload_rows)
         if errors:
             raise RuntimeError(f"memory_access_events insert failed: {errors}")
+
+    # ------------------------------------------------------------------
+    # Memory relation triples
+    # ------------------------------------------------------------------
+
+    def _upsert_relation_triples_with_graph_safely(
+        self,
+        rows: list[dict[str, Any]],
+        *,
+        tenant_id: str | None = None,
+    ) -> None:
+        """Projects deterministic relation triples without blocking primary writes."""
+        if not rows:
+            return
+        try:
+            self.upsert_memory_relation_triples_with_graph(rows, tenant_id=tenant_id)
+        except Exception as exc:
+            logger.warning("[yellow]memory relation triple projection skipped[/yellow] err=%s", str(exc))
+
+    def upsert_memory_relation_triples_with_graph(
+        self,
+        rows: list[dict[str, Any]],
+        *,
+        tenant_id: str | None = None,
+    ) -> None:
+        """Merges relation triples and projects accepted triples into the graph."""
+        if not rows:
+            return
+        self.upsert_memory_relation_triples(rows, tenant_id=tenant_id)
+        graph_nodes, graph_edges = relation_triples_to_graph_projection(rows)
+        self.upsert_memory_graph_nodes(graph_nodes, tenant_id=tenant_id)
+        self.upsert_memory_graph_edges(graph_edges, tenant_id=tenant_id)
+
+    def upsert_memory_relation_triples(
+        self,
+        rows: list[dict[str, Any]],
+        *,
+        tenant_id: str | None = None,
+    ) -> None:
+        """Merges source-grounded relation triples by triple_id."""
+        tenant = self.session.resolve_tenant_id(tenant_id)
+        for row in rows:
+            triple_id = str(row.get("triple_id") or "").strip()
+            if not triple_id:
+                continue
+            sql = f"""
+            MERGE `{self.session.dataset_fqn}.memory_relation_triples` AS t
+            USING (
+              SELECT
+                @tenant_id AS tenant_id,
+                @triple_id AS triple_id,
+                @created_at AS created_at,
+                @source_table AS source_table,
+                @source_id AS source_id,
+                @source_node_id AS source_node_id,
+                @source_created_at AS source_created_at,
+                @agent_id AS agent_id,
+                @trading_mode AS trading_mode,
+                @cycle_id AS cycle_id,
+                @subject_node_id AS subject_node_id,
+                @subject_label AS subject_label,
+                @subject_type AS subject_type,
+                @predicate AS predicate,
+                @object_node_id AS object_node_id,
+                @object_label AS object_label,
+                @object_type AS object_type,
+                @confidence AS confidence,
+                @evidence_text AS evidence_text,
+                @extraction_method AS extraction_method,
+                @extraction_version AS extraction_version,
+                @status AS status,
+                @detail_json AS detail_json
+            ) AS s
+            ON t.tenant_id = s.tenant_id AND t.triple_id = s.triple_id
+            WHEN MATCHED THEN UPDATE SET
+              created_at = s.created_at,
+              source_table = s.source_table,
+              source_id = s.source_id,
+              source_node_id = s.source_node_id,
+              source_created_at = s.source_created_at,
+              agent_id = s.agent_id,
+              trading_mode = s.trading_mode,
+              cycle_id = s.cycle_id,
+              subject_node_id = s.subject_node_id,
+              subject_label = s.subject_label,
+              subject_type = s.subject_type,
+              predicate = s.predicate,
+              object_node_id = s.object_node_id,
+              object_label = s.object_label,
+              object_type = s.object_type,
+              confidence = s.confidence,
+              evidence_text = s.evidence_text,
+              extraction_method = s.extraction_method,
+              extraction_version = s.extraction_version,
+              status = s.status,
+              detail_json = s.detail_json
+            WHEN NOT MATCHED THEN INSERT
+              (tenant_id, triple_id, created_at, source_table, source_id, source_node_id, source_created_at, agent_id, trading_mode, cycle_id, subject_node_id, subject_label, subject_type, predicate, object_node_id, object_label, object_type, confidence, evidence_text, extraction_method, extraction_version, status, detail_json)
+              VALUES
+              (s.tenant_id, s.triple_id, s.created_at, s.source_table, s.source_id, s.source_node_id, s.source_created_at, s.agent_id, s.trading_mode, s.cycle_id, s.subject_node_id, s.subject_label, s.subject_type, s.predicate, s.object_node_id, s.object_label, s.object_type, s.confidence, s.evidence_text, s.extraction_method, s.extraction_version, s.status, s.detail_json)
+            """
+            self.session.execute(
+                sql,
+                {
+                    "tenant_id": tenant,
+                    "triple_id": triple_id,
+                    "created_at": row.get("created_at"),
+                    "source_table": str(row.get("source_table") or "").strip(),
+                    "source_id": str(row.get("source_id") or "").strip(),
+                    "source_node_id": str(row.get("source_node_id") or "").strip() or None,
+                    "source_created_at": ("TIMESTAMP", row.get("source_created_at")),
+                    "agent_id": str(row.get("agent_id") or "").strip() or None,
+                    "trading_mode": str(row.get("trading_mode") or "paper").strip().lower() or "paper",
+                    "cycle_id": str(row.get("cycle_id") or "").strip() or None,
+                    "subject_node_id": str(row.get("subject_node_id") or "").strip(),
+                    "subject_label": str(row.get("subject_label") or "").strip(),
+                    "subject_type": str(row.get("subject_type") or "").strip().lower(),
+                    "predicate": str(row.get("predicate") or "").strip().lower(),
+                    "object_node_id": str(row.get("object_node_id") or "").strip(),
+                    "object_label": str(row.get("object_label") or "").strip(),
+                    "object_type": str(row.get("object_type") or "").strip().lower(),
+                    "confidence": ("FLOAT64", row.get("confidence")),
+                    "evidence_text": str(row.get("evidence_text") or "").strip() or None,
+                    "extraction_method": str(row.get("extraction_method") or "").strip() or None,
+                    "extraction_version": str(row.get("extraction_version") or "").strip() or None,
+                    "status": str(row.get("status") or "accepted").strip().lower() or "accepted",
+                    "detail_json": (
+                        "JSON",
+                        json.dumps(_json_safe(row.get("detail_json")), ensure_ascii=False, separators=(",", ":"))
+                        if row.get("detail_json") is not None
+                        else None,
+                    ),
+                },
+            )
+
+    def append_memory_relation_extraction_runs(
+        self,
+        rows: list[dict[str, Any]],
+        *,
+        tenant_id: str | None = None,
+    ) -> None:
+        """Appends semantic relation extraction audit rows."""
+        if not rows:
+            return
+        tenant = self.session.resolve_tenant_id(tenant_id)
+        table_id = f"{self.session.dataset_fqn}.memory_relation_extraction_runs"
+        payload_rows: list[dict[str, Any]] = []
+        for row in rows:
+            payload_rows.append(
+                {
+                    "tenant_id": tenant,
+                    "run_id": str(row.get("run_id") or "").strip(),
+                    "started_at": _json_safe(row.get("started_at")),
+                    "finished_at": _json_safe(row.get("finished_at")),
+                    "source_table": str(row.get("source_table") or "").strip(),
+                    "source_id": str(row.get("source_id") or "").strip(),
+                    "source_hash": str(row.get("source_hash") or "").strip(),
+                    "source_created_at": _json_safe(row.get("source_created_at")),
+                    "agent_id": str(row.get("agent_id") or "").strip() or None,
+                    "trading_mode": str(row.get("trading_mode") or "paper").strip().lower() or "paper",
+                    "cycle_id": str(row.get("cycle_id") or "").strip() or None,
+                    "extractor_version": str(row.get("extractor_version") or "").strip(),
+                    "prompt_version": str(row.get("prompt_version") or "").strip(),
+                    "ontology_version": str(row.get("ontology_version") or "").strip(),
+                    "provider": str(row.get("provider") or "").strip() or None,
+                    "model": str(row.get("model") or "").strip() or None,
+                    "status": str(row.get("status") or "").strip().lower(),
+                    "accepted_count": int(row.get("accepted_count") or 0),
+                    "rejected_count": int(row.get("rejected_count") or 0),
+                    "raw_output_json": (
+                        json.dumps(_json_safe(row.get("raw_output_json")), ensure_ascii=False, separators=(",", ":"))
+                        if row.get("raw_output_json") is not None
+                        else None
+                    ),
+                    "error_message": str(row.get("error_message") or "").strip() or None,
+                    "detail_json": (
+                        json.dumps(_json_safe(row.get("detail_json")), ensure_ascii=False, separators=(",", ":"))
+                        if row.get("detail_json") is not None
+                        else None
+                    ),
+                }
+            )
+        errors = self.session.client.insert_rows_json(table_id, payload_rows)
+        if errors:
+            raise RuntimeError(f"memory_relation_extraction_runs insert failed: {errors}")
+
+    def append_memory_relation_tuning_runs(
+        self,
+        rows: list[dict[str, Any]],
+        *,
+        tenant_id: str | None = None,
+    ) -> None:
+        """Appends semantic relation tuning metric snapshots."""
+        if not rows:
+            return
+        tenant = self.session.resolve_tenant_id(tenant_id)
+        table_id = f"{self.session.dataset_fqn}.memory_relation_tuning_runs"
+        payload_rows: list[dict[str, Any]] = []
+        for row in rows:
+            payload_rows.append(
+                {
+                    "tenant_id": tenant,
+                    "run_id": str(row.get("run_id") or "").strip(),
+                    "evaluated_at": _json_safe(row.get("evaluated_at")),
+                    "trading_mode": str(row.get("trading_mode") or "paper").strip().lower() or "paper",
+                    "configured_mode": str(row.get("configured_mode") or "").strip().lower(),
+                    "effective_mode": str(row.get("effective_mode") or "").strip().lower(),
+                    "recommended_mode": str(row.get("recommended_mode") or "").strip().lower() or None,
+                    "transition_action": str(row.get("transition_action") or "").strip().lower() or None,
+                    "reason": str(row.get("reason") or "").strip() or None,
+                    "source_count": int(row.get("source_count") or 0),
+                    "accepted_count": int(row.get("accepted_count") or 0),
+                    "rejected_count": int(row.get("rejected_count") or 0),
+                    "unsafe_reject_count": int(row.get("unsafe_reject_count") or 0),
+                    "failed_run_count": int(row.get("failed_run_count") or 0),
+                    "invalid_output_count": int(row.get("invalid_output_count") or 0),
+                    "accepted_rate": (
+                        float(row.get("accepted_rate"))
+                        if row.get("accepted_rate") is not None
+                        else None
+                    ),
+                    "unsafe_reject_rate": (
+                        float(row.get("unsafe_reject_rate"))
+                        if row.get("unsafe_reject_rate") is not None
+                        else None
+                    ),
+                    "strong_predicate_ratio": (
+                        float(row.get("strong_predicate_ratio"))
+                        if row.get("strong_predicate_ratio") is not None
+                        else None
+                    ),
+                    "conflict_ratio": (
+                        float(row.get("conflict_ratio"))
+                        if row.get("conflict_ratio") is not None
+                        else None
+                    ),
+                    "source_concentration": (
+                        float(row.get("source_concentration"))
+                        if row.get("source_concentration") is not None
+                        else None
+                    ),
+                    "ticker_concentration": (
+                        float(row.get("ticker_concentration"))
+                        if row.get("ticker_concentration") is not None
+                        else None
+                    ),
+                    "sample_ok": bool(row.get("sample_ok")),
+                    "health_ok": bool(row.get("health_ok")),
+                    "stability_ok": bool(row.get("stability_ok")),
+                    "detail_json": (
+                        json.dumps(_json_safe(row.get("detail_json")), ensure_ascii=False, separators=(",", ":"))
+                        if row.get("detail_json") is not None
+                        else None
+                    ),
+                }
+            )
+        errors = self.session.client.insert_rows_json(table_id, payload_rows)
+        if errors:
+            raise RuntimeError(f"memory_relation_tuning_runs insert failed: {errors}")
+
+    def relation_extraction_pending_sources(
+        self,
+        *,
+        limit: int = 25,
+        source_table: str | None = None,
+        event_types: list[str] | None = None,
+        trading_mode: str = "paper",
+        extractor_version: str,
+        prompt_version: str,
+        ontology_version: str,
+        tenant_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Returns source passages that do not yet have a successful extraction run."""
+        tenant = self.session.resolve_tenant_id(tenant_id)
+        clean_source_table = str(source_table or "").strip()
+        clean_event_types = [
+            str(token or "").strip()
+            for token in (event_types or [])
+            if str(token or "").strip()
+        ]
+        sql = f"""
+        WITH memory_sources AS (
+          SELECT
+            tenant_id,
+            'agent_memory_events' AS source_table,
+            event_id AS source_id,
+            created_at AS source_created_at,
+            COALESCE(graph_node_id, CONCAT('mem:', event_id)) AS source_node_id,
+            agent_id,
+            trading_mode,
+            COALESCE(
+              JSON_VALUE(payload_json, '$.cycle_id'),
+              JSON_VALUE(payload_json, '$.intent.cycle_id'),
+              ''
+            ) AS cycle_id,
+            summary AS source_label,
+            TRIM(CONCAT(
+              COALESCE(summary, ''),
+              '\\n',
+              COALESCE(payload_json, '')
+            )) AS source_text
+          FROM `{self.session.dataset_fqn}.agent_memory_events`
+          WHERE tenant_id = @tenant_id
+            AND trading_mode = @trading_mode
+            AND (@source_table = '' OR @source_table = 'agent_memory_events')
+            AND (ARRAY_LENGTH(@event_types) = 0 OR event_type IN UNNEST(@event_types))
+        ),
+        board_sources AS (
+          SELECT
+            tenant_id,
+            'board_posts' AS source_table,
+            post_id AS source_id,
+            created_at AS source_created_at,
+            CONCAT('post:', post_id) AS source_node_id,
+            agent_id,
+            trading_mode,
+            COALESCE(cycle_id, '') AS cycle_id,
+            title AS source_label,
+            TRIM(CONCAT(
+              COALESCE(title, ''),
+              '\\n',
+              COALESCE(draft_summary, ''),
+              '\\n',
+              COALESCE(body, ''),
+              '\\n',
+              ARRAY_TO_STRING(COALESCE(tickers, []), ',')
+            )) AS source_text
+          FROM `{self.session.dataset_fqn}.board_posts`
+          WHERE tenant_id = @tenant_id
+            AND trading_mode = @trading_mode
+            AND (@source_table = '' OR @source_table = 'board_posts')
+        ),
+        research_sources AS (
+          SELECT
+            tenant_id,
+            'research_briefings' AS source_table,
+            briefing_id AS source_id,
+            created_at AS source_created_at,
+            CONCAT('brief:', briefing_id) AS source_node_id,
+            CAST(NULL AS STRING) AS agent_id,
+            trading_mode,
+            CAST(NULL AS STRING) AS cycle_id,
+            headline AS source_label,
+            TRIM(CONCAT(
+              COALESCE(ticker, ''),
+              ' ',
+              COALESCE(category, ''),
+              '\\n',
+              COALESCE(headline, ''),
+              '\\n',
+              COALESCE(summary, ''),
+              '\\n',
+              COALESCE(CAST(sources AS STRING), '')
+            )) AS source_text
+          FROM `{self.session.dataset_fqn}.research_briefings`
+          WHERE tenant_id = @tenant_id
+            AND trading_mode = @trading_mode
+            AND (@source_table = '' OR @source_table = 'research_briefings')
+        ),
+        candidates AS (
+          SELECT * FROM memory_sources
+          UNION ALL
+          SELECT * FROM board_sources
+          UNION ALL
+          SELECT * FROM research_sources
+        ),
+        hashed AS (
+          SELECT
+            *,
+            TO_HEX(SHA256(source_text)) AS source_hash
+          FROM candidates
+          WHERE LENGTH(TRIM(source_text)) >= 24
+        )
+        SELECT
+          tenant_id, source_table, source_id, source_created_at, source_node_id,
+          agent_id, trading_mode, cycle_id, source_label, source_text, source_hash
+        FROM hashed AS src
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM `{self.session.dataset_fqn}.memory_relation_extraction_runs` AS run
+          WHERE run.tenant_id = @tenant_id
+            AND run.source_table = src.source_table
+            AND run.source_id = src.source_id
+            AND run.source_hash = src.source_hash
+            AND run.extractor_version = @extractor_version
+            AND run.prompt_version = @prompt_version
+            AND run.ontology_version = @ontology_version
+            AND run.status = 'success'
+        )
+        ORDER BY source_created_at DESC
+        LIMIT @limit
+        """
+        return self.session.fetch_rows(
+            sql,
+            {
+                "tenant_id": tenant,
+                "trading_mode": str(trading_mode or "paper").strip().lower() or "paper",
+                "source_table": clean_source_table,
+                "event_types": clean_event_types,
+                "extractor_version": str(extractor_version or "").strip(),
+                "prompt_version": str(prompt_version or "").strip(),
+                "ontology_version": str(ontology_version or "").strip(),
+                "limit": max(1, int(limit)),
+            },
+        )
+
+    def memory_relation_triples_for_source(
+        self,
+        *,
+        source_table: str,
+        source_id: str,
+        tenant_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Returns relation triples extracted from a specific source passage/event."""
+        tenant = self.session.resolve_tenant_id(tenant_id)
+        sql = f"""
+        SELECT
+          triple_id, created_at, source_table, source_id, source_node_id, source_created_at,
+          agent_id, trading_mode, cycle_id, subject_node_id, subject_label, subject_type,
+          predicate, object_node_id, object_label, object_type, confidence, evidence_text,
+          extraction_method, extraction_version, status, detail_json
+        FROM `{self.session.dataset_fqn}.memory_relation_triples`
+        WHERE tenant_id = @tenant_id
+          AND source_table = @source_table
+          AND source_id = @source_id
+        ORDER BY confidence DESC, created_at DESC
+        """
+        return self.session.fetch_rows(
+            sql,
+            {
+                "tenant_id": tenant,
+                "source_table": str(source_table or "").strip(),
+                "source_id": str(source_id or "").strip(),
+            },
+        )
+
+    def memory_relation_memory_candidates(
+        self,
+        *,
+        agent_id: str,
+        seed_node_ids: list[str],
+        trading_mode: str = "paper",
+        min_confidence: float = 0.75,
+        limit: int = 8,
+        tenant_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Returns memory events linked to semantic relation seed nodes."""
+        tenant = self.session.resolve_tenant_id(tenant_id)
+        clean_ids = [str(node_id or "").strip() for node_id in seed_node_ids if str(node_id or "").strip()]
+        if not clean_ids:
+            return []
+        sql = f"""
+        WITH seed AS (
+          SELECT DISTINCT seed_node_id
+          FROM UNNEST(@seed_node_ids) AS seed_node_id
+        ),
+        matched AS (
+          SELECT
+            rel.*,
+            seed.seed_node_id AS relation_seed_node_id
+          FROM seed
+          JOIN `{self.session.dataset_fqn}.memory_relation_triples` AS rel
+            ON rel.tenant_id = @tenant_id
+           AND rel.trading_mode = @trading_mode
+           AND rel.status = 'accepted'
+           AND rel.source_table = 'agent_memory_events'
+           AND COALESCE(rel.confidence, 0.0) >= @min_confidence
+           AND (rel.subject_node_id = seed.seed_node_id OR rel.object_node_id = seed.seed_node_id)
+        )
+        SELECT * EXCEPT(rn)
+        FROM (
+          SELECT
+            mem.*,
+            matched.triple_id AS relation_triple_id,
+            matched.relation_seed_node_id,
+            matched.subject_node_id AS relation_subject_node_id,
+            matched.subject_label AS relation_subject_label,
+            matched.subject_type AS relation_subject_type,
+            matched.predicate AS relation_predicate,
+            matched.object_node_id AS relation_object_node_id,
+            matched.object_label AS relation_object_label,
+            matched.object_type AS relation_object_type,
+            matched.confidence AS relation_confidence,
+            matched.evidence_text AS relation_evidence_text,
+            matched.extraction_method AS relation_extraction_method,
+            matched.extraction_version AS relation_extraction_version,
+            ROW_NUMBER() OVER (
+              PARTITION BY mem.event_id
+              ORDER BY COALESCE(matched.confidence, 0.0) DESC, matched.created_at DESC
+            ) AS rn
+          FROM matched
+          JOIN `{self.session.dataset_fqn}.agent_memory_events` AS mem
+            ON mem.tenant_id = @tenant_id
+           AND mem.event_id = matched.source_id
+           AND mem.agent_id = @agent_id
+           AND mem.trading_mode = @trading_mode
+        )
+        WHERE rn = 1
+        ORDER BY COALESCE(relation_confidence, 0.0) DESC, created_at DESC
+        LIMIT @limit
+        """
+        return self.session.fetch_rows(
+            sql,
+            {
+                "tenant_id": tenant,
+                "agent_id": str(agent_id or "").strip(),
+                "seed_node_ids": clean_ids,
+                "trading_mode": str(trading_mode or "paper").strip().lower() or "paper",
+                "min_confidence": max(0.0, min(float(min_confidence), 1.0)),
+                "limit": max(1, int(limit)),
+            },
+        )
 
     # ------------------------------------------------------------------
     # Memory graph nodes
@@ -1036,6 +1614,7 @@ class MemoryBQStore:
            AND e.trading_mode = @trading_mode
            AND (e.from_node_id = seed.seed_node_id OR e.to_node_id = seed.seed_node_id)
           WHERE COALESCE(e.confidence, 1.0) >= @min_confidence
+            AND COALESCE(JSON_VALUE(e.detail_json, '$.triple_id'), '') = ''
         ),
         deduped AS (
           SELECT * EXCEPT(rn)
@@ -1147,6 +1726,10 @@ class MemoryBQStore:
             return
         graph_nodes = [build_research_briefing_graph_node(row) for row in graph_rows]
         self.upsert_memory_graph_nodes(graph_nodes, tenant_id=tenant)
+        triples: list[dict[str, Any]] = []
+        for row in graph_rows:
+            triples.extend(build_research_briefing_relation_triples(row))
+        self._upsert_relation_triples_with_graph_safely(triples, tenant_id=tenant)
 
     def get_research_briefings(
         self,

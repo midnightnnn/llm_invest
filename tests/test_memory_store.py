@@ -172,6 +172,43 @@ def test_record_execution_indexes_only_filled_or_simulated() -> None:
     assert [row["event_type"] for row in vector_store.saved] == ["trade_execution"]
 
 
+def test_record_candidate_memories_persists_bounded_nonheld_screen_hits() -> None:
+    repo = _FakeRepo()
+    vector_store = _FakeVectorStore()
+    store = MemoryStore(
+        repo=repo,
+        vector_store=vector_store,
+        trading_mode="paper",
+        memory_policy=normalize_memory_policy({}),
+    )
+
+    written = store.record_candidate_memories(
+        agent_id="gpt",
+        candidate_ledger={
+            "AAPL": {"source_tools": {"screen_market:momentum"}, "discovery_count": 1},
+            "MSFT": {
+                "source_tools": {"screen_market:value"},
+                "discovery_count": 1,
+                "last_seen_rank": 2,
+                "discovery_evidence": {"reason_for": "Valuation support", "score": 1.2},
+            },
+        },
+        held_tickers={"AAPL"},
+        cycle_id="cycle_candidate",
+        phase="execution",
+    )
+
+    assert written == 1
+    assert len(repo.events) == 1
+    event = repo.events[0]
+    assert event.event_type == "candidate_screen_hit"
+    assert event.payload["ticker"] == "MSFT"
+    assert event.payload["cycle_id"] == "cycle_candidate"
+    assert event.semantic_key.startswith("candidate:gpt:paper:MSFT:")
+    assert event.expires_at is not None
+    assert vector_store.saved[0]["event_type"] == "candidate_screen_hit"
+
+
 def test_record_execution_updates_existing_order_memory() -> None:
     repo = _FakeRepo()
     repo.trade_memory_by_order_id["ord_keep"] = {

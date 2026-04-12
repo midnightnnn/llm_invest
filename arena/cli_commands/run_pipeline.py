@@ -74,7 +74,13 @@ def _batch_tenant_work(
         logger.info("[cyan]Research phase[/cyan] tenant=%s briefings=%d held=%s", tenant, len(briefings), held_tickers)
 
         reports = orchestrator.run_cycle(snapshot=snapshot)
-        cli._run_memory_compaction(settings=settings, repo=repo, orchestrator=orchestrator, tenant=tenant)
+        cli._run_post_cycle_maintenance(
+            cli,
+            settings=settings,
+            repo=repo,
+            orchestrator=orchestrator,
+            tenant=tenant,
+        )
         executed = sum(1 for report in reports if report.status.value in {"SIMULATED", "FILLED"})
         submitted = sum(1 for report in reports if report.status.value == "SUBMITTED")
         logger.info(

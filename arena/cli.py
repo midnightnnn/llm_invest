@@ -40,6 +40,7 @@ from arena.cli_commands.admin import (
     cmd_run_memory_forgetting_tuner,
     cmd_set_tenant_simulated,
 )
+from arena.cli_commands.memory_relations import cmd_extract_memory_relations
 from arena.cli_commands.run import (
     _apply_market_override,
     _batch_market_sync,
@@ -62,8 +63,11 @@ from arena.cli_commands.run import (
     _run_batch_once,
     _run_memory_cleanup,
     _run_memory_compaction,
+    _run_memory_relation_extraction_post_cycle,
+    _run_memory_relation_tuner_post_cycle,
     _run_memory_forgetting_tuner_post_cycle,
     _run_mtm_score_update,
+    _run_post_cycle_maintenance,
     _run_reconciliation_guard,
     _sync_broker_cash_ledger,
     _sync_broker_trade_ledger,
@@ -213,6 +217,25 @@ def build_parser() -> argparse.ArgumentParser:
     run_memory_tuner.add_argument("--tenant", action="append", default=[], help="Optional tenant id (repeatable). Defaults to all runtime tenants")
     run_memory_tuner.add_argument("--updated-by", default="cli-memory-tuner", help="Actor id/email recorded in audit log")
 
+    extract_rel = sub.add_parser(
+        "extract-memory-relations",
+        help="Extract semantic relation triples from stored memory sources",
+    )
+    extract_rel.add_argument("--tenant", action="append", default=[], help="Optional tenant id (repeatable or comma-separated)")
+    extract_rel.add_argument("--limit", type=int, default=25, help="Maximum pending sources per tenant")
+    extract_rel.add_argument(
+        "--source-table",
+        default="",
+        help="Optional source table: agent_memory_events, board_posts, research_briefings",
+    )
+    extract_rel.add_argument("--event-type", action="append", default=[], help="Memory event type filter (repeatable)")
+    extract_rel.add_argument("--dry-run", action="store_true", help="Preview extraction without writing triples or run rows")
+    extract_rel.add_argument("--timeout", type=int, default=0, help="Optional LLM timeout override in seconds")
+    extract_rel.add_argument("--provider", default="", help="Optional helper provider override")
+    extract_rel.add_argument("--model", default="", help="Optional helper model override")
+    extract_rel.add_argument("--min-confidence", type=float, default=0.65, help="Minimum accepted relation confidence")
+    extract_rel.add_argument("--max-triples", type=int, default=6, help="Maximum triples to request per source")
+
     sub.add_parser("serve-strategy-mcp", help="Run MCP strategy reference server")
     sub.add_parser("serve-ui", help="Serve read-only UI for board/memory/NAV")
     return parser
@@ -290,6 +313,18 @@ def _dispatch_command(args: argparse.Namespace, parser: argparse.ArgumentParser)
         "run-memory-forgetting-tuner": lambda ns: cmd_run_memory_forgetting_tuner(
             tenant_ids=list(getattr(ns, "tenant", []) or []),
             updated_by=str(getattr(ns, "updated_by", "") or "cli-memory-tuner"),
+        ),
+        "extract-memory-relations": lambda ns: cmd_extract_memory_relations(
+            tenant_ids=list(getattr(ns, "tenant", []) or []),
+            limit=int(getattr(ns, "limit", 25) or 25),
+            source_table=str(getattr(ns, "source_table", "") or ""),
+            event_types=list(getattr(ns, "event_type", []) or []),
+            dry_run=bool(getattr(ns, "dry_run", False)),
+            timeout_seconds=int(getattr(ns, "timeout", 0) or 0),
+            provider=str(getattr(ns, "provider", "") or ""),
+            model=str(getattr(ns, "model", "") or ""),
+            min_confidence=float(getattr(ns, "min_confidence", 0.65) or 0.65),
+            max_triples_per_source=int(getattr(ns, "max_triples", 6) or 6),
         ),
         "serve-strategy-mcp": lambda ns: cmd_serve_strategy_mcp(),
         "serve-ui": lambda ns: cmd_serve_ui(),

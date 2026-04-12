@@ -22,6 +22,9 @@ class FakeRepo:
         self.research_briefings: list[dict] = []
         self.memory_access_rows: list[dict] = []
         self.graph_neighbors_rows: list[dict] = []
+        self.relation_candidate_rows: list[dict] = []
+        self.relation_candidate_calls: list[dict] = []
+        self.candidate_memory_rows: list[dict] = []
         self.active_thesis_rows: dict[str, dict] = {}
 
     def resolve_tenant_id(self, tenant_id=None):
@@ -87,6 +90,53 @@ class FakeRepo:
     ):
         _ = (seed_node_ids, trading_mode, min_confidence, limit, tenant_id)
         return list(self.graph_neighbors_rows[:limit])
+
+    def memory_relation_memory_candidates(
+        self,
+        *,
+        agent_id,
+        seed_node_ids,
+        trading_mode="paper",
+        min_confidence=0.75,
+        limit=8,
+        tenant_id=None,
+    ):
+        self.relation_candidate_calls.append(
+            {
+                "agent_id": agent_id,
+                "seed_node_ids": list(seed_node_ids),
+                "trading_mode": trading_mode,
+                "min_confidence": min_confidence,
+                "limit": limit,
+                "tenant_id": tenant_id,
+            }
+        )
+        return list(self.relation_candidate_rows[:limit])
+
+    def candidate_memory_events(
+        self,
+        *,
+        agent_id,
+        exclude_tickers=None,
+        limit=12,
+        trading_mode="paper",
+        tenant_id=None,
+    ):
+        _ = (agent_id, trading_mode, tenant_id)
+        blocked = {str(t).strip().upper() for t in (exclude_tickers or []) if str(t).strip()}
+        rows = []
+        for row in self.candidate_memory_rows:
+            payload = row.get("payload_json")
+            ticker = ""
+            if isinstance(payload, str) and payload.strip():
+                try:
+                    ticker = str(json.loads(payload).get("ticker") or "").strip().upper()
+                except Exception:
+                    ticker = ""
+            if ticker and ticker in blocked:
+                continue
+            rows.append(row)
+        return rows[:limit]
 
 
 class FakeMemory:
@@ -490,9 +540,112 @@ def test_context_builder_compresses_memories_into_typed_sections() -> None:
 
     context = builder.build(agent_id="gpt", snapshot=snapshot)
 
-    assert "Past Lessons:" in context["memory_context"]
-    assert "Similar Trades:" in context["memory_context"]
-    assert "Useful Observations:" in context["memory_context"]
+    assert "Neutral Lessons:" in context["memory_context"]
+    assert "Momentum chase" in context["memory_context"]
+    assert "AAPL BUY" in context["memory_context"]
+    assert "AAPL held support" in context["memory_context"]
+
+
+def test_context_builder_reserves_candidate_memory_track() -> None:
+    repo = FakeRepo()
+    snapshot = AccountSnapshot(
+        cash_krw=500_000,
+        total_equity_krw=1_200_000,
+        positions={
+            "AAPL": Position(
+                ticker="AAPL",
+                quantity=1,
+                avg_price_krw=100_000,
+                market_price_krw=120_000,
+            )
+        },
+    )
+    settings = _settings()
+    seed_builder = ContextBuilder(repo=repo, memory=FakeMemory(), board=FakeBoard(), settings=settings)
+    market_rows = repo.latest_market_features(["AAPL"], limit=settings.context_max_market_rows)
+    if not market_rows:
+        market_rows = repo.latest_market_features(["AAPL", "MSFT"], limit=settings.context_max_market_rows)
+    queries = seed_builder._build_memory_search_queries("gpt", snapshot, market_rows)
+    opportunity_query = seed_builder._build_opportunity_memory_query(snapshot)
+    assert opportunity_query is not None
+    memory = FakeMemory(
+        recent_rows=[],
+        vector_store=FakeVectorStore(
+            results_by_query={
+                queries[0]: [
+                    {"event_id": "evt_aapl_trade", "summary": "AAPL BUY", "score": 0.7, "created_at": "2026-02-22T00:00:00Z"},
+                    {"event_id": "evt_aapl_note", "summary": "AAPL risk", "score": 0.6, "created_at": "2026-02-23T00:00:00Z"},
+                    {"event_id": "evt_aapl_extra", "summary": "AAPL extra", "score": 0.5, "created_at": "2026-02-24T00:00:00Z"},
+                ],
+                opportunity_query: [
+                    {"event_id": "evt_neutral", "summary": "avoid one-day breakouts", "score": 0.6, "created_at": "2026-02-21T00:00:00Z"},
+                ],
+            }
+        ),
+    )
+    repo.memory_by_id = {
+        "evt_aapl_trade": {
+            "event_id": "evt_aapl_trade",
+            "created_at": "2026-02-22T00:00:00Z",
+            "agent_id": "gpt",
+            "event_type": "trade_execution",
+            "summary": "AAPL BUY qty=2 status=FILLED policy=ok broker=filled",
+            "importance_score": 0.7,
+            "score": 0.7,
+            "payload_json": '{"intent":{"ticker":"AAPL","side":"BUY"}}',
+        },
+        "evt_aapl_note": {
+            "event_id": "evt_aapl_note",
+            "created_at": "2026-02-23T00:00:00Z",
+            "agent_id": "gpt",
+            "event_type": "manual_note",
+            "summary": "AAPL valuation risk note.",
+            "importance_score": 0.6,
+            "score": 0.6,
+            "payload_json": '{"ticker":"AAPL"}',
+        },
+        "evt_aapl_extra": {
+            "event_id": "evt_aapl_extra",
+            "created_at": "2026-02-24T00:00:00Z",
+            "agent_id": "gpt",
+            "event_type": "manual_note",
+            "summary": "AAPL duplicate exposure note.",
+            "importance_score": 0.5,
+            "score": 0.5,
+            "payload_json": '{"ticker":"AAPL"}',
+        },
+        "evt_neutral": {
+            "event_id": "evt_neutral",
+            "created_at": "2026-02-21T00:00:00Z",
+            "agent_id": "gpt",
+            "event_type": "strategy_reflection",
+            "summary": "Avoid treating one-day breakouts as confirmation.",
+            "importance_score": 0.6,
+            "score": 0.6,
+            "payload_json": "{}",
+        },
+    }
+    repo.candidate_memory_rows = [
+        {
+            "event_id": "cand_msft",
+            "created_at": "2026-02-24T00:00:00Z",
+            "agent_id": "gpt",
+            "event_type": "candidate_screen_hit",
+            "summary": "MSFT candidate_screen_hit: surfaced by screen_market:value; evidence is screen-only.",
+            "importance_score": 0.25,
+            "score": 0.25,
+            "payload_json": '{"source":"candidate_discovery","ticker":"MSFT","evidence_level":"screened_only"}',
+        }
+    ]
+    builder = ContextBuilder(repo=repo, memory=memory, board=FakeBoard(), settings=settings)
+
+    context = builder.build(agent_id="gpt", snapshot=snapshot)
+
+    assert "Portfolio Memory:" in context["memory_context"]
+    assert "Candidate Memory:" in context["memory_context"]
+    assert "Neutral Lessons:" in context["memory_context"]
+    assert any(row["event_id"] == "cand_msft" and row["memory_track"] == "candidate" for row in context["memory_events"])
+    assert sum(1 for row in context["memory_events"] if "AAPL" in row.get("tickers", [])) <= 2
 
 
 def test_context_builder_appends_graph_decision_paths_when_enabled() -> None:
@@ -712,8 +865,9 @@ def test_context_builder_uses_temporal_tiers_when_hierarchy_enabled() -> None:
     context = builder.build(agent_id="gpt", snapshot=snapshot)
 
     assert [row["event_id"] for row in context["memory_events"]] == ["evt_reflect", "evt_trade"]
-    assert "Semantic Lessons:" in context["memory_context"]
-    assert "Recent Episodes:" in context["memory_context"]
+    assert "Neutral Lessons:" in context["memory_context"]
+    assert "Avoid chasing weak breadth" in context["memory_context"]
+    assert "AAPL BUY" in context["memory_context"]
     assert "Past Lessons:" not in context["memory_context"]
     assert "Technical signals and screen_market" not in context["memory_context"]
 
@@ -1082,7 +1236,7 @@ def test_context_builder_falls_back_to_raw_vector_rows_when_bq_hydration_fails()
     assert context["memory_events"][0]["canonical_side"] == ""
     assert context["memory_events"][0]["derived_side"] == "BUY"
     assert context["memory_events"][0]["side_source"] == "summary_keyword"
-    assert "Similar Trades:" in context["memory_context"]
+    assert "Portfolio Memory:" in context["memory_context"]
     assert "~AAPL" in context["memory_context"]
     assert "~BUY" in context["memory_context"]
 
@@ -1148,6 +1302,121 @@ def test_context_builder_returns_empty_memory_when_state_query_has_no_vector_hit
     context = builder.build(agent_id="gpt", snapshot=snapshot)
     assert context["memory_events"] == []
     assert context["memory_context"] == ""
+
+
+def test_relation_triples_shadow_mode_does_not_affect_retrieval() -> None:
+    repo = FakeRepo()
+    repo.relation_candidate_rows = [
+        {
+            "event_id": "evt_relation",
+            "created_at": "2026-02-20T00:00:00Z",
+            "agent_id": "gpt",
+            "event_type": "strategy_reflection",
+            "summary": "AAPL relation candidate should stay shadowed.",
+            "score": 0.9,
+            "importance_score": 0.9,
+            "payload_json": "{}",
+            "relation_predicate": "contains",
+            "relation_object_type": "ticker",
+            "relation_object_label": "AAPL",
+            "relation_confidence": 0.95,
+            "relation_evidence_text": "AAPL relation candidate should stay shadowed.",
+        }
+    ]
+    snapshot = AccountSnapshot(
+        cash_krw=1_000_000,
+        total_equity_krw=1_200_000,
+        positions={
+            "AAPL": Position(ticker="AAPL", quantity=1, avg_price_krw=100_000, market_price_krw=120_000)
+        },
+    )
+    builder = ContextBuilder(repo=repo, memory=FakeMemory(vector_store=FakeVectorStore()), board=FakeBoard(), settings=_settings())
+
+    context = builder.build(agent_id="gpt", snapshot=snapshot)
+
+    assert repo.relation_candidate_calls == []
+    assert context["memory_events"] == []
+    assert context["relation_context"] == ""
+
+
+def test_relation_triples_boost_mode_adds_relation_candidates() -> None:
+    repo = FakeRepo()
+    repo.relation_candidate_rows = [
+        {
+            "event_id": "evt_relation",
+            "created_at": "2026-02-20T00:00:00Z",
+            "agent_id": "gpt",
+            "event_type": "strategy_reflection",
+            "summary": "AAPL relation candidate captures a prior risk lesson.",
+            "score": 0.5,
+            "importance_score": 0.5,
+            "payload_json": "{}",
+            "relation_predicate": "contains",
+            "relation_object_type": "ticker",
+            "relation_object_label": "AAPL",
+            "relation_confidence": 0.9,
+            "relation_evidence_text": "AAPL relation candidate captures a prior risk lesson.",
+        }
+    ]
+    settings = _settings()
+    settings.memory_policy = normalize_memory_policy(
+        {"graph": {"semantic_triples": {"mode": "boost", "min_confidence": 0.8, "boost_bonus_base": 0.2}}}
+    )
+    snapshot = AccountSnapshot(
+        cash_krw=1_000_000,
+        total_equity_krw=1_200_000,
+        positions={
+            "AAPL": Position(ticker="AAPL", quantity=1, avg_price_krw=100_000, market_price_krw=120_000)
+        },
+    )
+    builder = ContextBuilder(repo=repo, memory=FakeMemory(vector_store=FakeVectorStore()), board=FakeBoard(), settings=settings)
+
+    context = builder.build(agent_id="gpt", snapshot=snapshot)
+
+    assert repo.relation_candidate_calls
+    assert "ticker:AAPL" in repo.relation_candidate_calls[0]["seed_node_ids"]
+    assert [row["event_id"] for row in context["memory_events"]] == ["evt_relation"]
+    assert context["memory_events"][0]["relation_boost"] == pytest.approx(0.18)
+    assert context["relation_context"] == ""
+
+
+def test_relation_triples_inject_mode_adds_relation_context() -> None:
+    repo = FakeRepo()
+    repo.relation_candidate_rows = [
+        {
+            "event_id": "evt_relation",
+            "created_at": "2026-02-20T00:00:00Z",
+            "agent_id": "gpt",
+            "event_type": "strategy_reflection",
+            "summary": "AAPL relation candidate captures a prior risk lesson.",
+            "score": 0.5,
+            "importance_score": 0.5,
+            "payload_json": "{}",
+            "relation_predicate": "contains",
+            "relation_object_type": "ticker",
+            "relation_object_label": "AAPL",
+            "relation_confidence": 0.9,
+            "relation_evidence_text": "AAPL relation candidate captures a prior risk lesson.",
+        }
+    ]
+    settings = _settings()
+    settings.memory_policy = normalize_memory_policy(
+        {"graph": {"semantic_triples": {"mode": "inject", "max_relation_context_items": 2}}}
+    )
+    snapshot = AccountSnapshot(
+        cash_krw=1_000_000,
+        total_equity_krw=1_200_000,
+        positions={
+            "AAPL": Position(ticker="AAPL", quantity=1, avg_price_krw=100_000, market_price_krw=120_000)
+        },
+    )
+    builder = ContextBuilder(repo=repo, memory=FakeMemory(vector_store=FakeVectorStore()), board=FakeBoard(), settings=settings)
+
+    context = builder.build(agent_id="gpt", snapshot=snapshot)
+
+    assert context["memory_events"][0]["event_id"] == "evt_relation"
+    assert context["relation_context"].startswith("Relation Hints:")
+    assert "contains ticker AAPL" in context["relation_context"]
 def test_context_builder_live_mode_raises_when_risk_metrics_unavailable() -> None:
     class FailingRiskRepo(FakeRepo):
         def recent_intent_count(self, day, agent_id=None, include_simulated=True, trading_mode=None):

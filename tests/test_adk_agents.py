@@ -268,6 +268,9 @@ def test_user_prompt_omits_sleeve_state_payload() -> None:
             "active_theses": [{"ticker": "AAPL", "payload_json": '{"raw": "large"}'}],
             "opportunity_working_set": [{"ticker": "TSLA", "status": "pending"}],
             "decision_frame": "Compare self-discovered opportunities against cash first.",
+            "market_context": [{"ticker": "AAPL", "close": 123.45}],
+            "research_context": "- [AAPL] New product cycle - Demand watchlist.",
+            "relation_context": "Relation Hints:\n- contains ticker AAPL: prior risk lesson.",
         },
         default_universe=[],
         max_tool_calls=5,
@@ -283,7 +286,30 @@ def test_user_prompt_omits_sleeve_state_payload() -> None:
     assert "opportunity_working_set" not in payload
     assert payload["candidate_cases"] == []
     assert payload["decision_frame"] == "Compare self-discovered opportunities against cash first."
+    assert payload["market_context"] == [{"ticker": "AAPL", "close": 123.45}]
+    assert payload["research_context"] == "- [AAPL] New product cycle - Demand watchlist."
+    assert payload["relation_context"] == "Relation Hints:\n- contains ticker AAPL: prior risk lesson."
     assert payload["tool_budget"]["max_tool_calls"] == 5
+
+
+def test_prompt_context_sections_collects_prompt_details() -> None:
+    sections = _ADKDecisionRunner._prompt_context_sections(
+        {
+            "portfolio": {"cash_krw": 1000},
+            "market_features": [{"ticker": "AAPL", "close": 123.45}],
+            "board_posts": [{"post_id": "board_1", "summary": "Hold watchlist"}],
+            "research_context": "- [AAPL] New product cycle - Demand watchlist.",
+            "relation_context": "Relation Hints:\n- contains ticker AAPL: prior risk lesson.",
+            "memory_context": "Memory:\n- Prefer staged entries.",
+        }
+    )
+
+    assert sections["portfolio_context"] == {"cash_krw": 1000}
+    assert sections["market_context"] == [{"ticker": "AAPL", "close": 123.45}]
+    assert sections["board_context"] == [{"post_id": "board_1", "summary": "Hold watchlist"}]
+    assert sections["research_context"] == "- [AAPL] New product cycle - Demand watchlist."
+    assert sections["relation_context"] == "Relation Hints:\n- contains ticker AAPL: prior risk lesson."
+    assert sections["memory_context"] == "Memory:\n- Prefer staged entries."
 
 
 def test_fetch_market_row_from_bq_uses_live_kospi_sources() -> None:
@@ -1710,6 +1736,15 @@ class _MemoryStoreForToolSummary:
         self.calls.append(kwargs)
 
 
+class _MemoryStoreForCandidateMemory:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    def record_candidate_memories(self, **kwargs) -> int:
+        self.calls.append(kwargs)
+        return 1
+
+
 class _MemoryStoreForManualNote:
     def __init__(self) -> None:
         self.calls: list[dict] = []
@@ -1803,6 +1838,32 @@ def test_persist_tool_summary_memory_prefers_memory_store() -> None:
     assert call["score"] == pytest.approx(0.6)
     assert call["payload"]["token_usage"]["total_tokens"] == 1380
     assert runner.repo.events == []
+
+
+def test_persist_candidate_memories_uses_candidate_ledger() -> None:
+    runner = _ADKDecisionRunner.__new__(_ADKDecisionRunner)
+    runner.agent_id = "gpt"
+    runner._memory_store = _MemoryStoreForCandidateMemory()
+    runner._candidate_ledger = {
+        "MSFT": {
+            "source_tools": {"screen_market:value"},
+            "discovery_count": 1,
+            "last_seen_rank": 2,
+            "discovery_evidence": {"reason_for": "Valuation support"},
+        }
+    }
+    runner._held_tickers_cache = {"AAPL"}
+    runner._current_phase = "execution"
+
+    written = runner._persist_candidate_memories(cycle_id="cycle_candidate")
+
+    assert written == 1
+    call = runner._memory_store.calls[0]
+    assert call["agent_id"] == "gpt"
+    assert call["held_tickers"] == {"AAPL"}
+    assert call["cycle_id"] == "cycle_candidate"
+    assert call["phase"] == "execution"
+    assert "MSFT" in call["candidate_ledger"]
 
 
 def test_decide_orders_keeps_tool_events_reference_for_wrapped_tools(monkeypatch) -> None:
