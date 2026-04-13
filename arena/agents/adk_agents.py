@@ -355,6 +355,7 @@ class _ADKDecisionRunner:
                 "board_context": context.get("board_context") or context.get("board_posts", []),
                 "research_context": context.get("research_context", ""),
                 "relation_context": context.get("relation_context", ""),
+                "graph_context": context.get("graph_context", ""),
                 "memory_context": context.get("memory_context", ""),
             }
         )

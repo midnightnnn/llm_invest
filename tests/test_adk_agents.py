@@ -271,6 +271,9 @@ def test_user_prompt_omits_sleeve_state_payload() -> None:
             "market_context": [{"ticker": "AAPL", "close": 123.45}],
             "research_context": "- [AAPL] New product cycle - Demand watchlist.",
             "relation_context": "Relation Hints:\n- contains ticker AAPL: prior risk lesson.",
+            "graph_context": "Decision Paths:\n- AAPL prior entry connects to a later win.",
+            "memory_context": "Portfolio Memory:\n- [AAPL | BUY] Keep this compressed lesson.",
+            "memory_events": [{"summary": "Do not duplicate this raw memory summary."}],
         },
         default_universe=[],
         max_tool_calls=5,
@@ -289,6 +292,10 @@ def test_user_prompt_omits_sleeve_state_payload() -> None:
     assert payload["market_context"] == [{"ticker": "AAPL", "close": 123.45}]
     assert payload["research_context"] == "- [AAPL] New product cycle - Demand watchlist."
     assert payload["relation_context"] == "Relation Hints:\n- contains ticker AAPL: prior risk lesson."
+    assert payload["graph_context"] == "Decision Paths:\n- AAPL prior entry connects to a later win."
+    assert payload["memory_context"] == "Portfolio Memory:\n- [AAPL | BUY] Keep this compressed lesson."
+    assert "memory_events" not in payload
+    assert "recent_memory_summaries" not in payload
     assert payload["tool_budget"]["max_tool_calls"] == 5
 
 
@@ -300,6 +307,7 @@ def test_prompt_context_sections_collects_prompt_details() -> None:
             "board_posts": [{"post_id": "board_1", "summary": "Hold watchlist"}],
             "research_context": "- [AAPL] New product cycle - Demand watchlist.",
             "relation_context": "Relation Hints:\n- contains ticker AAPL: prior risk lesson.",
+            "graph_context": "Decision Paths:\n- AAPL prior entry connects to a later win.",
             "memory_context": "Memory:\n- Prefer staged entries.",
         }
     )
@@ -309,6 +317,7 @@ def test_prompt_context_sections_collects_prompt_details() -> None:
     assert sections["board_context"] == [{"post_id": "board_1", "summary": "Hold watchlist"}]
     assert sections["research_context"] == "- [AAPL] New product cycle - Demand watchlist."
     assert sections["relation_context"] == "Relation Hints:\n- contains ticker AAPL: prior risk lesson."
+    assert sections["graph_context"] == "Decision Paths:\n- AAPL prior entry connects to a later win."
     assert sections["memory_context"] == "Memory:\n- Prefer staged entries."
 
 

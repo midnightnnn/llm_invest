@@ -143,45 +143,18 @@ function stringifyTranscriptValue(value){
   try{return JSON.stringify(value,null,2);}
   catch(_e){return String(value);}
 }
-function transcriptValueHasContent(value){
-  if(value==null)return false;
-  if(typeof value==="string")return value.trim().length>0;
-  if(Array.isArray(value))return value.length>0;
-  if(typeof value==="object")return Object.keys(value).length>0;
-  return true;
-}
-function buildPromptContextSectionsText(item,bundle){
-  var sections=item&&item.context_sections&&typeof item.context_sections==="object"?item.context_sections:{};
+function buildAvailableToolsTranscriptText(bundle){
   var tools=Array.isArray(bundle.available_tools)?bundle.available_tools:[];
-  if(!Object.keys(sections).length&&!tools.length)return "";
-  var labels=[
-    ["portfolio_context","Portfolio Context"],
-    ["market_context","Market Context"],
-    ["board_context","Board Context"],
-    ["research_context","Research Context"],
-    ["relation_context","Relation Context"],
-    ["memory_context","Memory Context"]
-  ];
+  if(!tools.length)return "";
   var lines=[];
-  labels.forEach(function(pair){
-    var key=pair[0],label=pair[1];
-    var value=sections[key];
-    lines.push("## "+label);
-    lines.push(transcriptValueHasContent(value)?stringifyTranscriptValue(value):"(empty)");
-    lines.push("");
+  lines.push("===== AVAILABLE TOOLS =====");
+  tools.forEach(function(tool){
+    if(!tool||typeof tool!=="object")return;
+    var id=String(tool.tool_id||tool.name||"tool");
+    var cat=tool.category?" ["+String(tool.category)+"]":"";
+    var desc=tool.description?": "+String(tool.description):"";
+    lines.push("- "+id+cat+desc);
   });
-  lines.push("## Available Tools");
-  if(tools.length){
-    tools.forEach(function(tool){
-      if(!tool||typeof tool!=="object")return;
-      var id=String(tool.tool_id||tool.name||"tool");
-      var cat=tool.category?" ["+String(tool.category)+"]":"";
-      var desc=tool.description?": "+String(tool.description):"";
-      lines.push("- "+id+cat+desc);
-    });
-  }else{
-    lines.push("(empty)");
-  }
   return lines.join("\n").trim();
 }
 function buildToolTranscriptText(ev,index){
@@ -217,22 +190,17 @@ function buildModelVisibleTranscriptText(payload){
     lines.push(String(bundle.system_prompt));
     lines.push("");
   }
+  var toolsText=buildAvailableToolsTranscriptText(bundle);
+  if(toolsText){
+    lines.push(toolsText);
+    lines.push("");
+  }
   phases.forEach(function(item){
     if(!item||typeof item!=="object")return;
     var phaseToken=String(item.phase||"").toLowerCase();
     var prompt=String(item.prompt||"");
-    var contextDetails=buildPromptContextSectionsText(item,bundle);
-    if(contextDetails){
-      lines.push("===== CONTEXT DETAILS: "+promptPhaseLabel(phaseToken).toUpperCase()+" =====");
-      lines.push(contextDetails);
-      lines.push("");
-    }
     if(prompt){
       lines.push("===== USER PROMPT: "+promptPhaseLabel(phaseToken).toUpperCase()+" =====");
-      var metaBits=[];
-      if(item.session_id)metaBits.push("session "+String(item.session_id));
-      if(item.resume_session)metaBits.push("resumed");
-      if(metaBits.length)lines.push("# "+metaBits.join(" | "));
       lines.push(prompt);
       lines.push("");
     }
@@ -263,7 +231,8 @@ function buildPromptBundleHTML(data){
   var h='<div class="space-y-3">';
   h+='<p class="text-xs font-bold uppercase tracking-widest text-ink-900">Prompt Details</p>';
   h+='<div class="rounded-[18px] border border-ink-200/60 bg-white/75 p-4 shadow-sm">';
-  h+='<p class="text-[10px] font-bold uppercase tracking-widest text-ink-900">Model-Visible Transcript</p>';
+  h+='<p class="text-[10px] font-bold uppercase tracking-widest text-ink-900">Captured Model I/O</p>';
+  h+='<p class="mt-1 text-[11px] leading-relaxed text-ink-500">System instruction, tool declarations, actual per-phase user prompts, and captured tool results. UI-only context snapshots are not replayed here.</p>';
   h+='<pre class="mt-2 max-h-[42rem] overflow-auto whitespace-pre-wrap break-words rounded-[14px] border border-ink-100 bg-ink-50 px-3 py-3 font-mono text-[11px] leading-relaxed text-ink-900">'+escapeHtml(transcript)+'</pre>';
   h+='</div>';
   h+='</div>';

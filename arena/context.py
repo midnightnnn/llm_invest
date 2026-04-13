@@ -90,6 +90,11 @@ _MEMORY_TICKER_STOPWORDS = {
     "QOQ",
 }
 _CANDIDATE_MEMORY_EVENT_TYPES = set(CANDIDATE_MEMORY_EVENT_TYPES)
+_MEMORY_EXECUTION_NOISE_RE = re.compile(
+    r"\b(?:qty|status|policy|broker|order_id|filled|avg|message)=\S+",
+    re.IGNORECASE,
+)
+_MEMORY_WHITESPACE_RE = re.compile(r"\s+")
 
 
 def _safe_json(value: Any) -> Any:
@@ -988,8 +993,61 @@ class ContextBuilder:
         )
         return ranked[:limit]
 
-    def _format_memory_line(self, row: dict[str, Any]) -> str:
-        """Formats one compact memory line for prompt injection."""
+    def _memory_prompt_label(self, row: dict[str, Any]) -> str:
+        """Returns the role a memory should play in the prompt."""
+        event_type = str(row.get("event_type") or "").strip().lower()
+        side = str(row.get("canonical_side") or row.get("derived_side") or row.get("side") or "").strip().upper()
+        if event_type == "trade_execution":
+            if side == "BUY":
+                return "prior entry"
+            if side == "SELL":
+                return "prior trim"
+            if side == "HOLD":
+                return "prior hold"
+            return "prior trade"
+        if event_type == "strategy_reflection":
+            return "lesson"
+        if event_type == "manual_note":
+            return "manual note"
+        if event_type == "thesis_invalidated":
+            return "invalidated thesis"
+        if event_type == "thesis_realized":
+            return "realized thesis"
+        if event_type == "thesis_update":
+            return "thesis update"
+        if event_type == "thesis_open":
+            return "thesis open"
+        if event_type == "candidate_thesis":
+            return "candidate thesis"
+        if event_type == "candidate_rejected":
+            return "rejected candidate"
+        if event_type == "candidate_watchlist":
+            return "watchlist candidate"
+        if event_type == "candidate_screen_hit":
+            return "screened candidate"
+        if event_type == "react_tools_summary":
+            return "prior tool context"
+        return event_type.replace("_", " ") if event_type else "memory"
+
+    @staticmethod
+    def _strip_memory_execution_noise(summary: str) -> str:
+        """Removes broker/order plumbing while preserving the decision rationale."""
+        text = _MEMORY_EXECUTION_NOISE_RE.sub("", str(summary or ""))
+        text = text.replace("rationale=", "rationale: ")
+        text = re.sub(r"\s+([,.;:])", r"\1", text)
+        text = re.sub(r"([,;:]){2,}", r"\1", text)
+        text = _MEMORY_WHITESPACE_RE.sub(" ", text).strip(" -;,.")
+        return text
+
+    def _memory_prompt_text(self, row: dict[str, Any]) -> str:
+        """Returns the prompt-facing summary without changing stored memory data."""
+        event_type = str(row.get("event_type") or "").strip().lower()
+        summary = self._trim_text(row.get("summary"), max_len=220)
+        if event_type == "trade_execution":
+            summary = self._strip_memory_execution_noise(summary)
+        return self._trim_text(summary, max_len=150)
+
+    def _memory_prompt_meta_bits(self, row: dict[str, Any]) -> list[str]:
         bits: list[str] = []
         canonical_tickers = [str(t).strip().upper() for t in (row.get("canonical_tickers") or []) if str(t).strip()]
         derived_tickers = [str(t).strip().upper() for t in (row.get("derived_tickers") or []) if str(t).strip()]
@@ -997,11 +1055,12 @@ class ContextBuilder:
             bits.append("/".join(canonical_tickers[:2]))
         elif derived_tickers:
             bits.append(f"~{'/'.join(derived_tickers[:2])}")
+        label = self._memory_prompt_label(row)
+        if label:
+            bits.append(label)
         canonical_side = str(row.get("canonical_side") or "").strip().upper()
         derived_side = str(row.get("derived_side") or "").strip().upper()
-        if canonical_side:
-            bits.append(canonical_side)
-        elif derived_side:
+        if derived_side and not canonical_side:
             bits.append(f"~{derived_side}")
         created_date = str(row.get("created_date") or "").strip()
         if created_date:
@@ -1013,8 +1072,13 @@ class ContextBuilder:
         outcome_label = str(row.get("outcome_label") or "").strip()
         if outcome_label and outcome_label != "neutral":
             bits.append(outcome_label)
+        return bits
+
+    def _format_memory_line(self, row: dict[str, Any]) -> str:
+        """Formats one deterministic, prompt-facing memory line."""
+        bits = self._memory_prompt_meta_bits(row)
         meta = f"[{' | '.join(bits)}] " if bits else ""
-        return f"- {meta}{self._trim_text(row.get('summary'), max_len=170)}"
+        return f"- {meta}{self._memory_prompt_text(row)}"
 
     def _compress_memory_context(self, rows: list[dict[str, Any]]) -> str:
         """Builds a sectioned memory summary instead of a flat log dump."""
@@ -1233,7 +1297,7 @@ class ContextBuilder:
     def _graph_neighbor_descriptor(self, row: dict[str, Any]) -> str:
         relation = self._graph_relation_label(row)
         node_kind = str(row.get("node_kind") or "").strip().lower().replace("_", " ")
-        summary = self._trim_text(row.get("summary"), max_len=120)
+        summary = self._trim_text(self._strip_memory_execution_noise(str(row.get("summary") or "")), max_len=120)
         ticker = str(row.get("ticker") or "").strip().upper()
         prefix = f"{relation} {node_kind}".strip()
         if ticker:
@@ -1282,7 +1346,7 @@ class ContextBuilder:
             if not descriptors:
                 continue
             lines.append(
-                f"- {self._trim_text(seed.get('summary'), max_len=110)} || " + " ; ".join(descriptors)
+                f"- {self._memory_prompt_text(seed)} || " + " ; ".join(descriptors)
             )
             added += 1
             if added >= 3:
@@ -2498,8 +2562,6 @@ class ContextBuilder:
         graph_rows = self._fetch_graph_neighbors(prompt_memory_rows)
         memory_context = self._compress_memory_context(prompt_memory_rows)
         graph_context = self._compress_graph_context(prompt_memory_rows, graph_rows)
-        if graph_context:
-            memory_context = f"{memory_context}\n{graph_context}".strip() if memory_context else graph_context
         relation_context = self._compress_relation_context(prompt_memory_rows)
         memory_event_counts: dict[str, int] = {}
         for row in prompt_memory_rows[:12]:

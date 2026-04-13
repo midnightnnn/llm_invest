@@ -543,6 +543,8 @@ def test_context_builder_compresses_memories_into_typed_sections() -> None:
     assert "Neutral Lessons:" in context["memory_context"]
     assert "Momentum chase" in context["memory_context"]
     assert "AAPL BUY" in context["memory_context"]
+    assert "status=FILLED" not in context["memory_context"]
+    assert "broker=filled" not in context["memory_context"]
     assert "AAPL held support" in context["memory_context"]
 
 
@@ -720,10 +722,14 @@ def test_context_builder_appends_graph_decision_paths_when_enabled() -> None:
 
     context = builder.build(agent_id="gpt", snapshot=snapshot)
 
-    assert "Decision Paths:" in context["memory_context"]
-    assert "preceded by order intent AAPL" in context["memory_context"]
-    assert "resulted from execution report AAPL" in context["memory_context"]
+    assert "Decision Paths:" not in context["memory_context"]
+    assert "preceded by order intent AAPL" not in context["memory_context"]
+    assert "resulted from execution report AAPL" not in context["memory_context"]
     assert context["graph_context"].startswith("Decision Paths:")
+    assert "preceded by order intent AAPL" in context["graph_context"]
+    assert "resulted from execution report AAPL" in context["graph_context"]
+    assert "qty=2" not in context["graph_context"]
+    assert "filled=2.0000" not in context["graph_context"]
     assert context["graph_events"]
     assert "2026-02-22" in context["memory_context"]
 
@@ -801,6 +807,9 @@ def test_context_builder_keeps_summary_fallback_derived_but_out_of_ticker_bonus(
     assert builder._memory_ticker_bonus(canonical, {"AAPL"}) > 0.0
     assert "~AAPL" in builder._format_memory_line(derived)
     assert "~BUY" not in builder._format_memory_line(derived)
+    canonical_line = builder._format_memory_line(canonical)
+    assert "prior entry" in canonical_line
+    assert "status=FILLED" not in canonical_line
 
 
 def test_context_builder_uses_temporal_tiers_when_hierarchy_enabled() -> None:
@@ -868,6 +877,7 @@ def test_context_builder_uses_temporal_tiers_when_hierarchy_enabled() -> None:
     assert "Neutral Lessons:" in context["memory_context"]
     assert "Avoid chasing weak breadth" in context["memory_context"]
     assert "AAPL BUY" in context["memory_context"]
+    assert "status=FILLED" not in context["memory_context"]
     assert "Past Lessons:" not in context["memory_context"]
     assert "Technical signals and screen_market" not in context["memory_context"]
 
@@ -1239,6 +1249,8 @@ def test_context_builder_falls_back_to_raw_vector_rows_when_bq_hydration_fails()
     assert "Portfolio Memory:" in context["memory_context"]
     assert "~AAPL" in context["memory_context"]
     assert "~BUY" in context["memory_context"]
+    assert "prior entry" in context["memory_context"]
+    assert "qty=3" not in context["memory_context"]
 
 
 def test_context_builder_returns_empty_memory_when_state_query_has_no_vector_hits() -> None:

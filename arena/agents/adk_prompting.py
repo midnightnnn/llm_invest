@@ -183,11 +183,6 @@ def _user_prompt(context: dict[str, Any], default_universe: list[str], *, max_to
         "candidate_cases": context.get("candidate_cases", []),
         "decision_frame": context.get("decision_frame", ""),
         "investment_style_context": context.get("investment_style_context", ""),
-        "recent_memory_summaries": [
-            str(row.get("summary"))
-            for row in (context.get("memory_events") or [])[:6]
-            if isinstance(row, dict) and row.get("summary")
-        ],
         "tool_budget": {
             "max_tool_calls": max_tool_calls,
             "note": f"You have up to {max_tool_calls} tool calls. Plan accordingly and always output final JSON before exhausting your budget.",
@@ -196,6 +191,9 @@ def _user_prompt(context: dict[str, Any], default_universe: list[str], *, max_to
     relation_context = str(context.get("relation_context") or "").strip()
     if relation_context:
         payload["relation_context"] = relation_context
+    graph_context = str(context.get("graph_context") or "").strip()
+    if graph_context:
+        payload["graph_context"] = graph_context
     return (
         phase_format
         + "\n\nContext payload JSON (output JSON only):\n"
