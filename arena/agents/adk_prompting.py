@@ -181,7 +181,6 @@ def _user_prompt(context: dict[str, Any], default_universe: list[str], *, max_to
         "order_budget": context.get("order_budget", {}),
         "analysis_funnel": analysis_funnel,
         "candidate_cases": context.get("candidate_cases", []),
-        "evidence_index": context.get("evidence_index", {"cycle_evidence": [], "security_cases": []}),
         "decision_frame": context.get("decision_frame", ""),
         "investment_style_context": context.get("investment_style_context", ""),
         "tool_budget": {

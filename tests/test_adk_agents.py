@@ -679,7 +679,6 @@ def test_build_order_intents_live_sell_rounds_up_small_position() -> None:
 def test_candidate_ledger_tracks_discovery_and_analysis_from_result_tickers() -> None:
     runner = _ADKDecisionRunner.__new__(_ADKDecisionRunner)
     runner._candidate_ledger = {}
-    runner._evidence_log = []
     runner._held_tickers_cache = {"AAPL"}
     runner._current_phase = "draft"
     runner._current_context = {}
@@ -735,7 +734,6 @@ def test_candidate_ledger_tracks_discovery_and_analysis_from_result_tickers() ->
 def test_candidate_ledger_records_screen_market_momentum_bucket_source() -> None:
     runner = _ADKDecisionRunner.__new__(_ADKDecisionRunner)
     runner._candidate_ledger = {}
-    runner._evidence_log = []
     runner._held_tickers_cache = set()
     runner._current_phase = "draft"
     runner._current_context = {}
@@ -759,7 +757,6 @@ def test_funnel_metrics_counts_held_analysis_from_result_tickers() -> None:
         "MSFT": {"analyzed_by": {"forecast_returns"}},
         "TSLA": {"analyzed_by": set()},
     }
-    runner._evidence_log = []
     runner._held_tickers_cache = {"AAPL"}
     runner._tool_events = [
         {
@@ -795,7 +792,6 @@ def test_candidate_ledger_tracks_order_and_execution_funnel() -> None:
         "MSFT": {"analyzed_by": {"forecast_returns"}},
         "TSLA": {"analyzed_by": set()},
     }
-    runner._evidence_log = []
     runner._held_tickers_cache = {"AAPL"}
     runner._current_phase = "execution"
     runner._current_context = {}
@@ -847,7 +843,6 @@ def test_candidate_ledger_tracks_order_and_execution_funnel() -> None:
 def test_sync_pipeline_context_adds_decision_frame_when_opportunities_have_budget() -> None:
     runner = _ADKDecisionRunner.__new__(_ADKDecisionRunner)
     runner._candidate_ledger = {"MSFT": {"source_tools": {"screen_market"}, "analyzed_by": set()}}
-    runner._evidence_log = []
     runner._held_tickers_cache = {"AAPL"}
     runner._current_phase = "execution"
     runner._tool_events = []
@@ -1947,7 +1942,6 @@ def test_decide_orders_keeps_tool_events_reference_for_wrapped_tools(monkeypatch
     runner._tool_events = shared_tool_events
     runner._seen_memory_ids = set()
     runner._candidate_ledger = {}
-    runner._evidence_log = []
     runner._current_phase = "unknown"
     runner._current_context = None
     runner._held_tickers_cache = set()
