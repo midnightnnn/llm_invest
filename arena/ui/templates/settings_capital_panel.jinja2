@@ -178,7 +178,8 @@
       '<div class="mt-2 flex flex-wrap items-center gap-3">' +
       '<input id="capitalAgentInput" type="number" min="0" step="10000" value="' + esc(String(current)) + '" class="w-[200px] rounded-xl border border-ink-200/50 bg-white/80 px-4 py-2.5 text-right text-sm font-mono text-ink-900 shadow-[0_2px_8px_rgba(15,23,42,0.03)] outline-none transition-all duration-200 focus:border-transparent focus:ring-2 focus:ring-offset-1 focus:shadow-[0_4px_16px_rgba(15,23,42,0.06)]" style="--tw-ring-color:' + rgba(agentTheme.accent, 0.35) + ';" />' +
       '<span class="text-xs text-ink-400/70">원</span>' +
-      '<button type="button" id="capitalSaveBtn" class="rounded-xl px-5 py-2.5 text-xs font-semibold text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:translate-y-0" style="background:linear-gradient(135deg,' + agentTheme.accent + ',' + agentTheme.accentDeep + '); box-shadow:0 6px 20px ' + rgba(agentTheme.accent, 0.2) + ';">저장</button>' +
+      '<button type="button" id="capitalSaveBtn" class="inline-flex items-center gap-2 rounded-xl px-5 py-2.5 text-xs font-semibold text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:translate-y-0" style="background:linear-gradient(135deg,' + agentTheme.accent + ',' + agentTheme.accentDeep + '); box-shadow:0 6px 20px ' + rgba(agentTheme.accent, 0.2) + ';"><span class="capital-save-label">저장</span><span class="capital-save-spinner hidden h-3 w-3 rounded-full border-2 border-white/50 border-t-white animate-spin"></span></button>' +
+      '<span id="capitalSaveStatus" role="status" aria-live="polite" class="hidden text-[11px] font-medium text-ink-500/70">Target Capital 저장 중...</span>' +
       '</div>' +
       '<p class="mt-2 text-[11px] text-ink-500/60">저장 시 이 에이전트의 target capital이 capital event로 반영됩니다.</p>' +
       '</div>' +
@@ -417,6 +418,27 @@
     );
   }
 
+  function setCapitalSaving(isSaving) {
+    const input = document.getElementById("capitalAgentInput");
+    const btn = document.getElementById("capitalSaveBtn");
+    const label = btn ? btn.querySelector(".capital-save-label") : null;
+    const spinner = btn ? btn.querySelector(".capital-save-spinner") : null;
+    const status = document.getElementById("capitalSaveStatus");
+    if (input) input.disabled = !!isSaving;
+    if (btn) {
+      btn.disabled = !!isSaving;
+      btn.classList.toggle("opacity-70", !!isSaving);
+      btn.classList.toggle("cursor-not-allowed", !!isSaving);
+      btn.classList.toggle("hover:-translate-y-0.5", !isSaving);
+    }
+    if (label) label.textContent = isSaving ? "저장 중..." : "저장";
+    if (spinner) spinner.classList.toggle("hidden", !isSaving);
+    if (status) {
+      status.textContent = isSaving ? "Target Capital 저장 중..." : "";
+      status.classList.toggle("hidden", !isSaving);
+    }
+  }
+
   function submitCapitalState() {
     const payload = {};
     let maxCap = 0;
@@ -432,7 +454,22 @@
     const form = document.getElementById("capitalDefaultForm");
     if (defaultHidden) defaultHidden.value = String(maxCap || 0);
     if (agentsHidden) agentsHidden.value = JSON.stringify(payload);
-    if (form) form.submit();
+    if (!form) return;
+    setCapitalSaving(true);
+    try {
+      if (typeof form.requestSubmit === "function") {
+        form.requestSubmit();
+        return;
+      }
+    } catch (err) {
+      console.warn("[capital] requestSubmit failed; falling back to submit event", err);
+    }
+    const fallbackSubmitter = document.createElement("button");
+    fallbackSubmitter.type = "submit";
+    fallbackSubmitter.hidden = true;
+    form.appendChild(fallbackSubmitter);
+    fallbackSubmitter.click();
+    fallbackSubmitter.remove();
   }
 
   var holdingsChart = null;

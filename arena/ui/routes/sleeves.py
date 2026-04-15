@@ -329,7 +329,7 @@ def register_sleeve_routes(app: FastAPI, *, deps: SleeveRouteDeps) -> None:
                     "sync": sync_summary,
                 },
             )
-            return deps.settings_redirect(tenant, ok=True, msg="sleeve_capital_krw saved", tab="capital")
+            return deps.settings_redirect(tenant, ok=True, msg="Target Capital 저장 완료", tab="capital")
         except Exception as exc:
             deps.repo.append_runtime_audit_log(
                 action="admin_sleeve_save",

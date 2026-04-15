@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import os
@@ -8,6 +9,7 @@ from typing import Any
 
 from arena.config import Settings, research_generation_status
 from arena.data.bq import BigQueryRepository
+from arena.market_feature_normalization import daily_history_sources
 from arena.market_sources import live_market_sources_for_markets
 from arena.memory.policy import (
     memory_embed_cache_max,
@@ -89,6 +91,184 @@ class _ContextTools:
                 continue
             return start_dt.date(), ret, metric
         return None, None, ""
+
+    def _benchmark_period_bases(self, perf: dict[str, Any]) -> dict[str, tuple[date, float, str]]:
+        bases: dict[str, tuple[date, float, str]] = {}
+        current_start = self._coerce_datetime(perf.get("current_sleeve_initialized_at"))
+        current_ret = self._float_or_none(perf.get("current_sleeve_pnl_ratio"))
+        if current_start is not None and current_ret is not None:
+            bases["current_sleeve"] = (current_start.date(), current_ret, "current_sleeve_pnl_ratio")
+
+        cumulative_start = self._coerce_datetime(perf.get("initialized_at"))
+        cumulative_ret = self._float_or_none(perf.get("cumulative_pnl_ratio"))
+        if cumulative_start is not None and cumulative_ret is not None:
+            bases["cumulative"] = (cumulative_start.date(), cumulative_ret, "cumulative_pnl_ratio")
+
+        if not bases:
+            fallback_start = self._coerce_datetime(perf.get("current_sleeve_initialized_at") or perf.get("initialized_at"))
+            fallback_ret = self._float_or_none(perf.get("pnl_ratio"))
+            if fallback_start is not None and fallback_ret is not None:
+                bases["portfolio"] = (fallback_start.date(), fallback_ret, "pnl_ratio")
+        return bases
+
+    @staticmethod
+    def _series_return(series: Any) -> tuple[float | None, int, str | None, str | None]:
+        if series is None:
+            return None, 0, None, None
+        try:
+            clean = series.dropna()
+        except AttributeError:
+            clean = [value for value in series if value is not None]
+        if len(clean) < 2:
+            return None, int(len(clean)), None, None
+        try:
+            start_px = float(clean.iloc[0])
+            end_px = float(clean.iloc[-1])
+            start_date = clean.index[0].date().isoformat()
+            end_date = clean.index[-1].date().isoformat()
+        except AttributeError:
+            start_px = float(clean[0])
+            end_px = float(clean[-1])
+            start_date = None
+            end_date = None
+        if start_px <= 0:
+            return None, int(len(clean)), start_date, end_date
+        return (end_px / start_px) - 1.0, int(len(clean)), start_date, end_date
+
+    @staticmethod
+    def _frame_loader_accepts_price_field(frame_loader: Any) -> bool:
+        try:
+            return "price_field" in inspect.signature(frame_loader).parameters
+        except (TypeError, ValueError):
+            return False
+
+    def _benchmark_entry(
+        self,
+        *,
+        scope: str,
+        bench: str,
+        period_start: date,
+        agent_ret: float,
+        agent_metric: str,
+        today: date,
+    ) -> dict[str, object] | None:
+        lb = 120
+        portfolio_start_date = period_start.isoformat()
+        bench_ret: float | None = None
+        bench_native_ret: float | None = None
+        series_len = 0
+        benchmark_start_date: str | None = None
+        benchmark_end_date: str | None = None
+        exact_period_match = False
+        benchmark_sources = self._sources()
+
+        frame_loader = getattr(self.repo, "get_daily_close_frame", None)
+        if callable(frame_loader):
+            frame = frame_loader(
+                tickers=[bench],
+                start=period_start,
+                end=today,
+                sources=benchmark_sources,
+            )
+            if frame is not None and not frame.empty and bench in frame.columns:
+                (
+                    bench_ret,
+                    series_len,
+                    benchmark_start_date,
+                    benchmark_end_date,
+                ) = self._series_return(frame[bench])
+                exact_period_match = bench_ret is not None
+            if self._frame_loader_accepts_price_field(frame_loader):
+                native_frame = frame_loader(
+                    tickers=[bench],
+                    start=period_start,
+                    end=today,
+                    sources=benchmark_sources,
+                    price_field="close_price_native",
+                )
+                if native_frame is not None and not native_frame.empty and bench in native_frame.columns:
+                    bench_native_ret, _, _, _ = self._series_return(native_frame[bench])
+
+        if bench_ret is None:
+            lb = max(30, min(400, (today - period_start).days + 5))
+            bench_closes = self.repo.get_daily_closes(
+                tickers=[bench],
+                lookback_days=lb,
+                sources=benchmark_sources,
+            )
+            series = bench_closes.get(bench, [])
+            if series and len(series) >= 2:
+                start_px = float(series[0])
+                end_px = float(series[-1])
+                if start_px > 0:
+                    bench_ret = (end_px / start_px) - 1.0
+                    series_len = len(series)
+
+        if bench_ret is None:
+            return None
+
+        source_basis = (
+            "quote_aware"
+            if any(str(source).endswith("_quote") for source in (benchmark_sources or []))
+            else "daily_only"
+        )
+        native_currency = (
+            "USD"
+            if str(self.settings.kis_target_market or "").strip().lower() in {"us", "nasdaq", "nyse", "amex"}
+            else "KRW"
+        )
+        bench_info: dict[str, object] = {
+            "ticker": bench,
+            "scope": scope,
+            "comparison_scope": scope,
+            "return": round(bench_ret, 6),
+            "return_krw": round(bench_ret, 6),
+            "trading_days_in_series": int(series_len),
+            "period_alignment": "exact" if exact_period_match else "approximate",
+            "currency_basis": "KRW",
+            "price_basis": "close_price_krw",
+            "source_basis": source_basis,
+            "portfolio_start_date": portfolio_start_date,
+            "agent_return_metric": agent_metric or "pnl_ratio",
+            "agent_return": round(agent_ret, 6),
+            "excess_return_vs_benchmark": round(agent_ret - bench_ret, 6),
+            "alpha_definition": "simple excess return: agent_return - benchmark return_krw; not risk-adjusted alpha",
+        }
+        if bench_native_ret is not None:
+            bench_info["return_native"] = round(bench_native_ret, 6)
+            bench_info["native_currency"] = native_currency
+        if benchmark_start_date:
+            bench_info["benchmark_start_date"] = benchmark_start_date
+        if benchmark_end_date:
+            bench_info["benchmark_end_date"] = benchmark_end_date
+
+        notes: list[str] = []
+        if exact_period_match:
+            if benchmark_start_date and benchmark_start_date != portfolio_start_date:
+                notes.append(
+                    f"Benchmark uses first available trading day on or after "
+                    f"portfolio start ({portfolio_start_date} -> {benchmark_start_date})."
+                )
+        else:
+            notes.append(
+                f"Benchmark return is approximate: series covers ~{lb} calendar days "
+                f"ending today, which may not align exactly with portfolio start "
+                f"({portfolio_start_date}). Compare with caution."
+            )
+        if source_basis == "quote_aware":
+            notes.append(
+                "Benchmark uses quote-aware KRW prices to match current sleeve NAV; "
+                "native return is provided separately when available."
+            )
+        else:
+            notes.append("Benchmark uses daily-only KRW prices.")
+        if scope == "current_sleeve":
+            notes.append("Scope is current_sleeve, not cumulative/TWR history.")
+        elif scope == "cumulative":
+            notes.append("Scope is cumulative/TWR history, not the current sleeve reset period.")
+        if notes:
+            bench_info["note"] = " ".join(notes)
+        return bench_info
 
     def search_past_experiences(self, query: str, limit: int = 5) -> list[dict[str, Any]]:
         """Search your own past trades, lessons, and manual notes. Use this for your personal history only. For other models' distilled lessons, use search_peer_lessons."""
@@ -327,7 +507,7 @@ class _ContextTools:
         closes = self.repo.get_daily_closes(
             tickers=tickers,
             lookback_days=max(int(lookback_days), min_history) + 1,
-            sources=self._sources(),
+            sources=daily_history_sources(self._sources()),
         )
         aligned: list[list[float]] = []
         keep: list[str] = []
@@ -401,14 +581,14 @@ class _ContextTools:
             notes,
         )
 
-    def _build_hrp_rebalance_plan(
+    def _build_hrp_allocation(
         self,
         current_weights: dict[str, float],
         *,
         lookback_days: int = 252,
         delta_threshold: float = 0.005,
     ) -> dict[str, Any]:
-        """Builds a risk-parity rebalance plan for current holdings only."""
+        """Builds an HRP risk allocation view for current holdings."""
         tickers = [ticker for ticker in current_weights.keys() if str(ticker).strip()]
         keep, rets_or_reason = self._load_aligned_returns(
             tickers,
@@ -441,22 +621,28 @@ class _ContextTools:
         )
         target_cash_weight = max(0.0, 1.0 - float(sum(target_weights.values())))
 
-        target_rows: list[dict[str, Any]] = []
-        rebalance_orders: list[dict[str, Any]] = []
-        skipped_adjustments: list[dict[str, Any]] = []
+        hrp_rows: list[dict[str, Any]] = []
+        weight_deltas: list[dict[str, Any]] = []
+        small_deltas: list[dict[str, Any]] = []
         for ticker in tickers:
             current_weight = float(current_weights.get(ticker, 0.0))
-            target_weight = float(target_weights.get(ticker, 0.0))
-            delta_weight = target_weight - current_weight
+            hrp_weight = float(target_weights.get(ticker, 0.0))
+            delta_weight = hrp_weight - current_weight
+            relative_to_current = "similar"
+            if delta_weight >= delta_threshold:
+                relative_to_current = "higher"
+            elif delta_weight <= -delta_threshold:
+                relative_to_current = "lower"
             row = {
                 "ticker": ticker,
                 "current_weight": round(current_weight, 6),
-                "target_weight": round(target_weight, 6),
+                "hrp_weight": round(hrp_weight, 6),
                 "delta_weight": round(delta_weight, 6),
+                "relative_to_current": relative_to_current,
             }
-            target_rows.append(row)
+            hrp_rows.append(row)
             if abs(delta_weight) < delta_threshold:
-                skipped_adjustments.append(
+                small_deltas.append(
                     {
                         "ticker": ticker,
                         "reason": "delta_below_threshold",
@@ -465,50 +651,50 @@ class _ContextTools:
                 )
                 continue
             if delta_weight > 0:
-                rebalance_orders.append(
+                weight_deltas.append(
                     {
                         "ticker": ticker,
-                        "side": "BUY",
-                        "size_ratio": round(delta_weight, 4),
+                        "relative_to_current": "higher",
+                        "delta_weight": round(delta_weight, 6),
                         "current_weight": round(current_weight, 4),
-                        "target_weight": round(target_weight, 4),
+                        "hrp_weight": round(hrp_weight, 4),
                     }
                 )
             elif current_weight > 0:
-                rebalance_orders.append(
+                weight_deltas.append(
                     {
                         "ticker": ticker,
-                        "side": "SELL",
-                        "size_ratio": round(abs(delta_weight) / current_weight, 4),
+                        "relative_to_current": "lower",
+                        "delta_weight": round(delta_weight, 6),
                         "current_weight": round(current_weight, 4),
-                        "target_weight": round(target_weight, 4),
+                        "hrp_weight": round(hrp_weight, 4),
                     }
                 )
 
-        plan: dict[str, Any] = {
+        allocation: dict[str, Any] = {
             "status": "ready",
             "strategy": "hrp",
             "lookback_days": int(lookback_days),
-            "target_cash_weight": round(target_cash_weight, 6),
-            "target_concentration_top3": round(
+            "hrp_cash_weight": round(target_cash_weight, 6),
+            "hrp_concentration_top3": round(
                 sum(
-                    item["target_weight"]
-                    for item in sorted(target_rows, key=lambda item: item["target_weight"], reverse=True)[:3]
+                    item["hrp_weight"]
+                    for item in sorted(hrp_rows, key=lambda item: item["hrp_weight"], reverse=True)[:3]
                 ),
                 6,
             ),
-            "target_hhi": round(sum(float(weight) * float(weight) for weight in target_weights.values()), 6),
+            "hrp_hhi": round(sum(float(weight) * float(weight) for weight in target_weights.values()), 6),
             "constraints": {
                 "min_cash_buffer_ratio": round(min_cash_buffer_ratio, 6),
                 "max_position_ratio": round(max_position_ratio, 6),
             },
-            "target_weights": sorted(target_rows, key=lambda item: float(item["target_weight"]), reverse=True),
-            "rebalance_orders": rebalance_orders,
+            "hrp_weights": sorted(hrp_rows, key=lambda item: float(item["hrp_weight"]), reverse=True),
+            "weight_deltas": weight_deltas,
         }
-        if skipped_adjustments:
-            plan["skipped_adjustments"] = skipped_adjustments
         if notes:
-            plan["notes"] = notes
+            allocation["notes"] = [str(note) for note in notes if str(note).strip()]
+        if small_deltas:
+            allocation["small_deltas"] = small_deltas
 
         try:
             import numpy as np
@@ -518,7 +704,7 @@ class _ContextTools:
                 projected_rets = rets_or_reason @ target_vec
                 cum = np.cumprod(1.0 + projected_rets)
                 running_max = np.maximum.accumulate(cum)
-                plan["projected_mdd"] = {
+                allocation["projected_mdd"] = {
                     "days": int(rets_or_reason.shape[0]),
                     "value": round(float((cum / running_max - 1.0).min()), 6),
                 }
@@ -529,10 +715,10 @@ class _ContextTools:
                 str(exc),
             )
 
-        return plan
+        return allocation
 
     def portfolio_diagnosis(self, mdd_days: int = 60, top_n: int = 8, benchmark_ticker: str = "") -> dict[str, Any]:
-        """Diagnoses current holdings and returns an HRP rebalance plan."""
+        """Diagnoses current holdings and returns an HRP allocation view."""
         weights, _, _ = self._portfolio_weights()
         if not weights:
             return {"error": "no active positions"}
@@ -639,93 +825,25 @@ class _ContextTools:
             if bench:
                 try:
                     today = utc_now().date()
-                    period_start, agent_ret, agent_metric = self._benchmark_period_basis(perf)
-                    lb = 120
-                    portfolio_start_date: str | None = period_start.isoformat() if period_start is not None else None
-                    bench_ret: float | None = None
-                    series_len = 0
-                    benchmark_start_date: str | None = None
-                    benchmark_end_date: str | None = None
-                    exact_period_match = False
-
-                    frame_loader = getattr(self.repo, "get_daily_close_frame", None)
-                    if callable(frame_loader) and period_start is not None:
-                        frame = frame_loader(
-                            tickers=[bench],
-                            start=period_start,
-                            end=today,
-                            sources=self._sources(),
+                    benchmarks: dict[str, dict[str, object]] = {}
+                    for scope, (period_start, agent_ret, agent_metric) in self._benchmark_period_bases(perf).items():
+                        entry = self._benchmark_entry(
+                            scope=scope,
+                            bench=bench,
+                            period_start=period_start,
+                            agent_ret=agent_ret,
+                            agent_metric=agent_metric,
+                            today=today,
                         )
-                        if frame is not None and not frame.empty and bench in frame.columns:
-                            series = frame[bench].dropna()
-                            if len(series) >= 2:
-                                start_px = float(series.iloc[0])
-                                end_px = float(series.iloc[-1])
-                                if start_px > 0:
-                                    bench_ret = (end_px / start_px) - 1.0
-                                    series_len = int(len(series))
-                                    benchmark_start_date = series.index[0].date().isoformat()
-                                    benchmark_end_date = series.index[-1].date().isoformat()
-                                    exact_period_match = True
-
-                    if bench_ret is None:
-                        if period_start is not None:
-                            lb = max(30, min(400, (today - period_start).days + 5))
-                        bench_closes = self.repo.get_daily_closes(
-                            tickers=[bench],
-                            lookback_days=lb,
-                            sources=self._sources(),
+                        if entry is not None:
+                            benchmarks[scope] = entry
+                    if benchmarks:
+                        out["benchmarks"] = benchmarks
+                        out["benchmark"] = (
+                            benchmarks.get("current_sleeve")
+                            or benchmarks.get("cumulative")
+                            or next(iter(benchmarks.values()))
                         )
-                        series = bench_closes.get(bench, [])
-                        if series and len(series) >= 2:
-                            start_px = float(series[0])
-                            end_px = float(series[-1])
-                            if start_px > 0:
-                                bench_ret = (end_px / start_px) - 1.0
-                                series_len = len(series)
-
-                    if bench_ret is not None:
-                        bench_info: dict[str, object] = {
-                            "ticker": bench,
-                            "return": round(bench_ret, 6),
-                            "trading_days_in_series": int(series_len),
-                            "period_alignment": "exact" if exact_period_match else "approximate",
-                        }
-                        if portfolio_start_date:
-                            bench_info["portfolio_start_date"] = portfolio_start_date
-                        if benchmark_start_date:
-                            bench_info["benchmark_start_date"] = benchmark_start_date
-                        if benchmark_end_date:
-                            bench_info["benchmark_end_date"] = benchmark_end_date
-                        if agent_ret is not None:
-                            bench_info["agent_return_metric"] = agent_metric or "pnl_ratio"
-                            if str(agent_metric or "").startswith("current_sleeve"):
-                                bench_info["comparison_scope"] = "current_sleeve"
-                            elif str(agent_metric or "").startswith("cumulative"):
-                                bench_info["comparison_scope"] = "cumulative"
-                            else:
-                                bench_info["comparison_scope"] = "portfolio"
-                            bench_info["alpha_vs_benchmark"] = round(agent_ret - bench_ret, 6)
-                        if exact_period_match:
-                            if portfolio_start_date and benchmark_start_date and benchmark_start_date != portfolio_start_date:
-                                bench_info["note"] = (
-                                    f"Benchmark uses first available trading day on or after "
-                                    f"portfolio start ({portfolio_start_date} -> {benchmark_start_date})."
-                                )
-                        elif portfolio_start_date:
-                            bench_info["note"] = (
-                                f"Benchmark return is approximate: series covers ~{lb} calendar days "
-                                f"ending today, which may not align exactly with portfolio start "
-                                f"({portfolio_start_date}). Compare with caution."
-                            )
-                        else:
-                            bench_info["note"] = (
-                                f"WARNING: portfolio initialized_at is unknown. "
-                                f"Benchmark return covers last {lb} calendar days by default "
-                                f"and may NOT match your portfolio period. "
-                                f"Alpha comparison is unreliable."
-                            )
-                        out["benchmark"] = bench_info
                 except Exception as exc:
                     logger.warning(
                         "[yellow]portfolio benchmark calculation failed[/yellow] agent=%s benchmark=%s err=%s",
@@ -734,5 +852,5 @@ class _ContextTools:
                         str(exc),
                     )
 
-        out["rebalance_plan"] = self._build_hrp_rebalance_plan(weights)
+        out["hrp_allocation"] = self._build_hrp_allocation(weights)
         return out

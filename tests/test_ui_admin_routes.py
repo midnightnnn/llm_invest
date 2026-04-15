@@ -262,6 +262,9 @@ def test_settings_page_renders(monkeypatch) -> None:
     assert "에이전트별 장부 계보" in response_cap.text
     assert "capitalLineageGraph" in response_cap.text
     assert "Target Capital" in response_cap.text
+    assert "capitalSaveStatus" in response_cap.text
+    assert "form.requestSubmit" in response_cap.text
+    assert "form.submit();" not in response_cap.text
     assert "현재 sleeve 배분" not in response_cap.text
 
     # MCP tab
@@ -976,6 +979,9 @@ def test_admin_sleeve_save_prefers_capital_sync_over_legacy_sleeve_sync(monkeypa
         follow_redirects=False,
     )
     assert response.status_code == 303
+    location = response.headers.get("location", "")
+    assert "tab=capital" in location
+    assert "Target+Capital" in location
     assert repo.get_config("local", "sleeve_capital_krw") == "500000.0"
     assert repo.capital_sync_calls
     assert repo.sleeve_sync_calls == []

@@ -740,6 +740,27 @@ def test_quote_sync_us_skips_quote_rows_when_daily_features_are_missing() -> Non
     assert repo.rows == []
 
 
+def test_quote_sync_us_skips_quote_rows_when_daily_features_are_stale() -> None:
+    class RepoWithStaleDailyBase(FakeRepo):
+        def latest_market_features(self, *, tickers, limit, sources=None):
+            rows = super().latest_market_features(tickers=tickers, limit=limit, sources=sources)
+            for row in rows:
+                row["as_of_ts"] = datetime(2026, 1, 1, tzinfo=timezone.utc)
+            return rows
+
+    repo = RepoWithStaleDailyBase()
+    settings = _settings("nasdaq", ["AAPL"])
+    settings.usd_krw_fx_symbol = "USDKRW"
+    client = FakeClient()
+    service = MarketDataSyncService(settings=settings, repo=repo, client=client)
+
+    result = service.sync_market_quotes()
+
+    assert result.inserted_rows == 0
+    assert sorted(result.failed_tickers) == ["AAPL", "DIA", "QQQ", "SPY"]
+    assert repo.rows == []
+
+
 def test_quote_sync_us_held_ticker_probes_exchange() -> None:
     class RepoWithHoldings(FakeRepo):
         def get_all_held_tickers(self):

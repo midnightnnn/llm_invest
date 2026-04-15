@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 
 import pytest
 
@@ -266,6 +267,58 @@ def test_context_builder_falls_back_to_default_universe() -> None:
     assert "Budget " not in context["performance_context"]
     assert "Daily orders" not in context["performance_context"]
     assert "Cash " not in context["performance_context"]
+
+
+def test_context_builder_normalizes_market_features_from_raw_daily_closes() -> None:
+    class RepoWithRawCloses(FakeRepo):
+        def __init__(self):
+            super().__init__()
+            self.close_sources = None
+
+        def latest_market_features(self, tickers, limit, sources=None):
+            _ = (limit, sources)
+            self.calls.append(list(tickers))
+            return [
+                {
+                    "ticker": "AAPL",
+                    "close_price_krw": 1000.0,
+                    "ret_5d": 0.0,
+                    "ret_20d": 0.0,
+                    "volatility_20d": 0.0,
+                }
+            ]
+
+        def get_daily_closes(self, *, tickers, lookback_days, sources=None):
+            _ = (tickers, lookback_days)
+            self.close_sources = list(sources or [])
+            return {"AAPL": [100.0 + idx for idx in range(22)]}
+
+    settings = _settings()
+    settings.trading_mode = "live"
+    settings.kis_target_market = "nasdaq"
+    repo = RepoWithRawCloses()
+    builder = ContextBuilder(repo=repo, memory=FakeMemory(), board=FakeBoard(), settings=settings)
+    snapshot = AccountSnapshot(
+        cash_krw=1_000_000,
+        total_equity_krw=1_200_000,
+        positions={
+            "AAPL": Position(
+                ticker="AAPL",
+                quantity=1,
+                avg_price_krw=10_000,
+                market_price_krw=12_000,
+            )
+        },
+    )
+
+    context = builder.build(agent_id="gpt", snapshot=snapshot)
+
+    row = context["market_features"][0]
+    closes = [100.0 + idx for idx in range(22)]
+    assert math.isclose(row["ret_5d"], (closes[-1] / closes[-6]) - 1.0)
+    assert math.isclose(row["ret_20d"], (closes[-1] / closes[-21]) - 1.0)
+    assert row["volatility_20d"] > 0.0
+    assert repo.close_sources == ["open_trading_nasdaq", "open_trading_us"]
 
 
 def test_context_builder_loads_ticker_names_for_current_positions() -> None:

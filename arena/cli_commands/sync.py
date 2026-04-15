@@ -5,6 +5,10 @@ from math import ceil
 
 from arena.config import Settings
 from arena.data.bq import BigQueryRepository
+from arena.market_feature_normalization import (
+    daily_history_sources,
+    normalize_market_feature_rows_from_closes,
+)
 from arena.market_sources import live_market_sources_for_markets, parse_markets
 from arena.runtime_universe import resolve_runtime_universe
 from arena.tools.screening import DISCOVERY_BUCKETS, build_discovery_rows, momentum_scores
@@ -189,8 +193,9 @@ def _build_forecast_tickers(repo, settings: Settings, top_n: int) -> list[str]:
         closes = closes_loader(
             tickers=latest_tickers,
             lookback_days=128,
-            sources=sources,
+            sources=daily_history_sources(sources),
         ) or {}
+        latest_rows = normalize_market_feature_rows_from_closes(latest_rows, closes)
         momentum_rows = momentum_scores(closes, windows=[20, 60, 126], vol_adjust=True) if closes else []
 
     fundamentals_rows: list[dict] = []

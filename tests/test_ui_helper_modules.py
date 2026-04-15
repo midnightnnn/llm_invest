@@ -257,6 +257,9 @@ def test_build_capital_panel_focuses_on_agent_lineage() -> None:
     assert "capitalEventLog" in html
     assert "capital-agent-tab" in html
     assert "Target Capital" in html
+    assert "capitalSaveStatus" in html
+    assert "form.requestSubmit" in html
+    assert "form.submit();" not in html
     assert "Performance 탭은 TWR 기준" in html
     assert "현재 sleeve 배분" not in html
     assert "capitalSankey" not in html

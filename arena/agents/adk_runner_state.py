@@ -13,7 +13,6 @@ ANALYSIS_TOOLS: frozenset[str] = frozenset(
 )
 ORDERABLE_SIDES: frozenset[str] = frozenset({"BUY", "SELL"})
 EXECUTED_REPORT_STATUSES: frozenset[str] = frozenset({"FILLED", "SIMULATED"})
-CANDIDATE_NEXT_CHECKS: tuple[str, ...] = ("forecast_returns", "technical_signals", "get_fundamentals")
 
 
 def tickers_from_tool_args(args: dict[str, Any]) -> list[str]:
@@ -332,7 +331,6 @@ def candidate_cases(
         evidence = entry.get("discovery_evidence") if isinstance(entry.get("discovery_evidence"), dict) else {}
         source_tools = list(row.get("source_tools") or [])
         analyzed_by = list(row.get("analyzed_by") or [])
-        analyzed_set = set(analyzed_by)
         case_for = str(evidence.get("reason_for") or evidence.get("reason") or "").strip()
         if not case_for:
             buckets = row.get("discovery_buckets") if isinstance(row.get("discovery_buckets"), list) else []
@@ -348,7 +346,6 @@ def candidate_cases(
                 case_risk = "Review recent analysis outputs before initiating a new position."
             else:
                 case_risk = "Screen-only evidence; confirm with forecast/technical/fundamental tools before initiating."
-        missing_checks = [tool for tool in CANDIDATE_NEXT_CHECKS if tool not in analyzed_set]
         item: dict[str, Any] = {
             "ticker": ticker,
             "current_status": "candidate",
@@ -359,24 +356,7 @@ def candidate_cases(
             "case_risk": case_risk,
             "source_tools": source_tools,
             "analyzed_by": analyzed_by,
-            "suggested_next_checks": missing_checks[:3],
         }
-        for field in (
-            "bucket",
-            "bucket_rank",
-            "score",
-            "ret_20d",
-            "ret_5d",
-            "volatility_20d",
-            "sentiment_score",
-            "per",
-            "pbr",
-            "roe",
-            "debt_ratio",
-            "close_price_krw",
-        ):
-            if evidence.get(field) is not None:
-                item[field] = evidence.get(field)
         if row.get("discovery_buckets"):
             item["discovery_buckets"] = row.get("discovery_buckets")
         out.append(item)

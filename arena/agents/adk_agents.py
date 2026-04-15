@@ -20,6 +20,7 @@ from arena.agents.adk_agent_flow import (
     retry_policy_from_env,
 )
 from arena.agents.adk_context_tools import _ContextTools
+from arena.agents.evidence_index import build_evidence_index, record_tool_evidence
 from arena.agents.adk_models import (
     _has_credentials,
     _is_gemini_quota_error,
@@ -269,6 +270,7 @@ class _ADKDecisionRunner:
         self._seen_memory_ids: set[str] = set()
         self._wrapped_tool_names: set[str] = set()
         self._candidate_ledger: dict[str, dict[str, Any]] = {}
+        self._evidence_log: list[dict[str, Any]] = []
         self._held_tickers_cache: set[str] = set()
         self._current_phase: str = "unknown"
         self._current_context: dict[str, Any] | None = None
@@ -402,6 +404,10 @@ class _ADKDecisionRunner:
         self._current_context["analysis_funnel"] = metrics
         self._current_context["analysis_funnel_prompt"] = model_facing_funnel_metrics(metrics)
         self._current_context["candidate_cases"] = self._candidate_cases()
+        self._current_context["evidence_index"] = build_evidence_index(
+            self._evidence_log,
+            held_tickers=self._held_tickers_cache,
+        )
         self._current_context["decision_frame"] = self._decision_frame()
 
     def _update_candidate_ledger(self, tool_name: str, args: dict[str, Any], result: Any) -> None:
@@ -412,6 +418,12 @@ class _ADKDecisionRunner:
             tool_name=tool_name,
             args=args,
             result=result,
+        )
+        record_tool_evidence(
+            self._evidence_log,
+            tool_name=tool_name,
+            result=result,
+            phase=self._current_phase,
         )
         self._sync_pipeline_context()
 
@@ -656,6 +668,7 @@ class _ADKDecisionRunner:
             phase_start_idx = 0
             self._seen_memory_ids = set()
             self._candidate_ledger = {}
+            self._evidence_log = []
             self._prompt_snapshots = []
         self._current_phase = phase
         self._current_context = context

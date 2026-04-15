@@ -679,6 +679,7 @@ def test_build_order_intents_live_sell_rounds_up_small_position() -> None:
 def test_candidate_ledger_tracks_discovery_and_analysis_from_result_tickers() -> None:
     runner = _ADKDecisionRunner.__new__(_ADKDecisionRunner)
     runner._candidate_ledger = {}
+    runner._evidence_log = []
     runner._held_tickers_cache = {"AAPL"}
     runner._current_phase = "draft"
     runner._current_context = {}
@@ -734,6 +735,7 @@ def test_candidate_ledger_tracks_discovery_and_analysis_from_result_tickers() ->
 def test_candidate_ledger_records_screen_market_momentum_bucket_source() -> None:
     runner = _ADKDecisionRunner.__new__(_ADKDecisionRunner)
     runner._candidate_ledger = {}
+    runner._evidence_log = []
     runner._held_tickers_cache = set()
     runner._current_phase = "draft"
     runner._current_context = {}
@@ -757,6 +759,7 @@ def test_funnel_metrics_counts_held_analysis_from_result_tickers() -> None:
         "MSFT": {"analyzed_by": {"forecast_returns"}},
         "TSLA": {"analyzed_by": set()},
     }
+    runner._evidence_log = []
     runner._held_tickers_cache = {"AAPL"}
     runner._tool_events = [
         {
@@ -792,6 +795,7 @@ def test_candidate_ledger_tracks_order_and_execution_funnel() -> None:
         "MSFT": {"analyzed_by": {"forecast_returns"}},
         "TSLA": {"analyzed_by": set()},
     }
+    runner._evidence_log = []
     runner._held_tickers_cache = {"AAPL"}
     runner._current_phase = "execution"
     runner._current_context = {}
@@ -843,6 +847,7 @@ def test_candidate_ledger_tracks_order_and_execution_funnel() -> None:
 def test_sync_pipeline_context_adds_decision_frame_when_opportunities_have_budget() -> None:
     runner = _ADKDecisionRunner.__new__(_ADKDecisionRunner)
     runner._candidate_ledger = {"MSFT": {"source_tools": {"screen_market"}, "analyzed_by": set()}}
+    runner._evidence_log = []
     runner._held_tickers_cache = {"AAPL"}
     runner._current_phase = "execution"
     runner._tool_events = []
@@ -1024,11 +1029,14 @@ def test_portfolio_diagnosis_returns_derived_fields_not_raw_portfolio_echo() -> 
     assert "risk_contribution" in out
     assert "mdd" in out
     assert out["benchmark"]["ticker"] == "QQQ"
-    assert out["rebalance_plan"]["status"] == "ready"
-    assert out["rebalance_plan"]["strategy"] == "hrp"
-    assert out["rebalance_plan"]["target_cash_weight"] == pytest.approx(0.10, abs=1e-6)
-    assert sum(row["target_weight"] for row in out["rebalance_plan"]["target_weights"]) == pytest.approx(0.90, abs=1e-6)
-    assert out["rebalance_plan"]["rebalance_orders"]
+    assert "rebalance_plan" not in out
+    assert out["hrp_allocation"]["status"] == "ready"
+    assert out["hrp_allocation"]["strategy"] == "hrp"
+    assert out["hrp_allocation"]["hrp_cash_weight"] == pytest.approx(0.10, abs=1e-6)
+    assert sum(row["hrp_weight"] for row in out["hrp_allocation"]["hrp_weights"]) == pytest.approx(0.90, abs=1e-6)
+    assert out["hrp_allocation"]["weight_deltas"]
+    assert all("side" not in row for row in out["hrp_allocation"]["weight_deltas"])
+    assert all("size_ratio" not in row for row in out["hrp_allocation"]["weight_deltas"])
 
 
 def test_portfolio_diagnosis_aligns_benchmark_period_with_current_sleeve_return(monkeypatch) -> None:
@@ -1074,7 +1082,13 @@ def test_portfolio_diagnosis_aligns_benchmark_period_with_current_sleeve_return(
             "start": datetime(2026, 3, 1, 0, 0, tzinfo=timezone.utc).date(),
             "end": datetime(2026, 3, 28, 0, 0, tzinfo=timezone.utc).date(),
             "sources": tool._sources(),
-        }
+        },
+        {
+            "tickers": ["QQQ"],
+            "start": datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc).date(),
+            "end": datetime(2026, 3, 28, 0, 0, tzinfo=timezone.utc).date(),
+            "sources": tool._sources(),
+        },
     ]
     assert out["benchmark"]["period_alignment"] == "exact"
     assert out["benchmark"]["portfolio_start_date"] == "2026-03-01"
@@ -1082,9 +1096,29 @@ def test_portfolio_diagnosis_aligns_benchmark_period_with_current_sleeve_return(
     assert out["benchmark"]["benchmark_end_date"] == "2026-03-27"
     assert out["benchmark"]["agent_return_metric"] == "current_sleeve_pnl_ratio"
     assert out["benchmark"]["comparison_scope"] == "current_sleeve"
+    assert out["benchmark"]["currency_basis"] == "KRW"
+    assert out["benchmark"]["price_basis"] == "close_price_krw"
+    assert out["benchmark"]["source_basis"] == "quote_aware"
+    assert out["benchmark"]["agent_return"] == pytest.approx(0.05, abs=1e-6)
+    assert out["benchmark"]["excess_return_vs_benchmark"] == pytest.approx(0.05, abs=1e-6)
     assert out["benchmark"]["return"] == pytest.approx(0.0, abs=1e-6)
-    assert out["benchmark"]["alpha_vs_benchmark"] == pytest.approx(0.05, abs=1e-6)
+    assert "alpha_vs_benchmark" not in out["benchmark"]
+    assert "alpha_vs_benchmark" not in out["benchmarks"]["current_sleeve"]
+    assert "alpha_vs_benchmark" not in out["benchmarks"]["cumulative"]
+    assert "not risk-adjusted alpha" in out["benchmark"]["alpha_definition"]
+    assert "quote-aware KRW" in out["benchmark"]["note"]
     assert "2026-03-01 -> 2026-03-03" in out["benchmark"]["note"]
+    assert out["benchmark"] == out["benchmarks"]["current_sleeve"]
+    assert set(out["benchmarks"]) == {"current_sleeve", "cumulative"}
+    cumulative = out["benchmarks"]["cumulative"]
+    assert cumulative["comparison_scope"] == "cumulative"
+    assert cumulative["portfolio_start_date"] == "2026-01-01"
+    assert cumulative["benchmark_start_date"] == "2026-01-02"
+    assert cumulative["agent_return_metric"] == "cumulative_pnl_ratio"
+    assert cumulative["agent_return"] == pytest.approx(0.30, abs=1e-6)
+    assert cumulative["return_krw"] == pytest.approx((100.0 / 90.0) - 1.0, abs=1e-6)
+    assert cumulative["excess_return_vs_benchmark"] == pytest.approx(0.30 - ((100.0 / 90.0) - 1.0), abs=1e-6)
+    assert "cumulative/TWR" in cumulative["note"]
 
 
 def test_portfolio_diagnosis_logs_warning_when_mdd_calculation_fails(caplog) -> None:
@@ -1118,7 +1152,7 @@ def test_portfolio_diagnosis_logs_warning_when_mdd_calculation_fails(caplog) -> 
     assert "portfolio diagnosis MDD calculation failed" in caplog.text
 
 
-def test_compact_portfolio_diagnosis_includes_rebalance_plan_summary() -> None:
+def test_compact_portfolio_diagnosis_includes_hrp_allocation_summary() -> None:
     out = _compact_tool_result_for_prompt(
         "portfolio_diagnosis",
         {
@@ -1132,29 +1166,61 @@ def test_compact_portfolio_diagnosis_includes_rebalance_plan_summary() -> None:
             "momentum_5d_weighted": 0.02,
             "volatility_20d_weighted": 0.18,
             "mdd": {"days": 60, "value": -0.12},
-            "rebalance_plan": {
+            "benchmark": {
+                "ticker": "SPY",
+                "return_krw": 0.05,
+                "agent_return": -0.01,
+                "alpha_vs_benchmark": -0.06,
+                "alpha_definition": "simple excess return: agent_return - benchmark return_krw; not risk-adjusted alpha",
+            },
+            "benchmarks": {
+                "current_sleeve": {
+                    "ticker": "SPY",
+                    "return_krw": 0.05,
+                    "agent_return": -0.01,
+                    "alpha_vs_benchmark": -0.06,
+                    "alpha_definition": "simple excess return: agent_return - benchmark return_krw; not risk-adjusted alpha",
+                },
+                "cumulative": {
+                    "ticker": "SPY",
+                    "return_krw": 0.08,
+                    "agent_return": 0.02,
+                    "alpha_vs_benchmark": -0.06,
+                    "alpha_definition": "simple excess return: agent_return - benchmark return_krw; not risk-adjusted alpha",
+                },
+            },
+            "hrp_allocation": {
                 "status": "ready",
                 "strategy": "hrp",
-                "target_cash_weight": 0.10,
-                "target_concentration_top3": 0.90,
-                "target_hhi": 0.28,
-                "target_weights": [
-                    {"ticker": "AAPL", "current_weight": 0.52, "target_weight": 0.45, "delta_weight": -0.07},
-                    {"ticker": "MSFT", "current_weight": 0.28, "target_weight": 0.45, "delta_weight": 0.17},
+                "hrp_cash_weight": 0.10,
+                "hrp_concentration_top3": 0.90,
+                "hrp_hhi": 0.28,
+                "hrp_weights": [
+                    {"ticker": "AAPL", "current_weight": 0.52, "hrp_weight": 0.45, "delta_weight": -0.07, "relative_to_current": "lower"},
+                    {"ticker": "MSFT", "current_weight": 0.28, "hrp_weight": 0.45, "delta_weight": 0.17, "relative_to_current": "higher"},
                 ],
-                "rebalance_orders": [
-                    {"ticker": "AAPL", "side": "SELL", "size_ratio": 0.1346, "current_weight": 0.52, "target_weight": 0.45},
-                    {"ticker": "MSFT", "side": "BUY", "size_ratio": 0.17, "current_weight": 0.28, "target_weight": 0.45},
+                "weight_deltas": [
+                    {"ticker": "AAPL", "relative_to_current": "lower", "delta_weight": -0.07, "current_weight": 0.52, "hrp_weight": 0.45},
+                    {"ticker": "MSFT", "relative_to_current": "higher", "delta_weight": 0.17, "current_weight": 0.28, "hrp_weight": 0.45},
                 ],
                 "projected_mdd": {"days": 252, "value": -0.08},
             },
         },
     )
 
-    assert out["rebalance_plan"]["strategy"] == "hrp"
-    assert out["rebalance_plan"]["target_cash_weight"] == 0.10
-    assert len(out["rebalance_plan"]["target_weights"]) == 2
-    assert len(out["rebalance_plan"]["rebalance_orders"]) == 2
+    assert "rebalance_plan" not in out
+    assert out["hrp_allocation"]["strategy"] == "hrp"
+    assert out["hrp_allocation"]["hrp_cash_weight"] == 0.10
+    assert len(out["hrp_allocation"]["hrp_weights"]) == 2
+    assert len(out["hrp_allocation"]["weight_deltas"]) == 2
+    assert all("side" not in row for row in out["hrp_allocation"]["weight_deltas"])
+    assert all("size_ratio" not in row for row in out["hrp_allocation"]["weight_deltas"])
+    assert "alpha_vs_benchmark" not in out["benchmark"]
+    assert out["benchmark"]["excess_return_vs_benchmark"] == -0.06
+    assert "not risk-adjusted alpha" in out["benchmark"]["alpha_definition"]
+    assert "alpha_vs_benchmark" not in out["benchmarks"]["current_sleeve"]
+    assert "alpha_vs_benchmark" not in out["benchmarks"]["cumulative"]
+    assert out["benchmarks"]["current_sleeve"]["excess_return_vs_benchmark"] == -0.06
 
 
 def test_search_peer_lessons_returns_only_compactor_reflections() -> None:
@@ -1881,6 +1947,7 @@ def test_decide_orders_keeps_tool_events_reference_for_wrapped_tools(monkeypatch
     runner._tool_events = shared_tool_events
     runner._seen_memory_ids = set()
     runner._candidate_ledger = {}
+    runner._evidence_log = []
     runner._current_phase = "unknown"
     runner._current_context = None
     runner._held_tickers_cache = set()

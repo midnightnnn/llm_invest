@@ -51,6 +51,7 @@ def build_resume_prompt(
                     "risk_policy": context.get("risk_policy", {}),
                     "analysis_funnel": model_facing_funnel_metrics(analysis_funnel),
                     "candidate_cases": context.get("candidate_cases", []),
+                    "evidence_index": context.get("evidence_index", {"cycle_evidence": [], "security_cases": []}),
                     "decision_frame": context.get("decision_frame", ""),
                     "tool_budget": {
                         "max_tool_calls": max_tool_events,

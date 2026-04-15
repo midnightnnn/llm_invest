@@ -79,11 +79,14 @@ def _base_entries(
         ),
         _tool(
             tool_id="portfolio_diagnosis",
-            description="Diagnoses current holdings, concentration, risk contribution, MDD, benchmark alpha, and returns an HRP rebalance plan for existing positions.",
+            description=(
+                "Diagnoses current holdings, concentration, risk contribution, MDD, and benchmark excess return. "
+                "Includes HRP risk allocation weights and deltas for existing positions."
+            ),
             category="quant",
             tier="core",
             label_ko="포트폴리오 진단",
-            description_ko="현재 보유 종목의 집중도, 개별 리스크 기여도, 최대 낙폭(MDD), 벤치마크 대비 초과수익(alpha)을 종합 진단합니다. 결과로 HRP(Hierarchical Risk Parity) 기반 리밸런스 계획을 제안하여 기존 포지션을 어떻게 조정하면 좋을지 안내합니다.",
+            description_ko="현재 보유 종목의 집중도, 개별 리스크 기여도, 최대 낙폭(MDD), 벤치마크 대비 초과수익을 종합 진단합니다. HRP(Hierarchical Risk Parity) 기반 리스크 배분 가중치와 현재 비중 대비 델타를 함께 제공합니다.",
             sort_order=40,
         ),
         _tool(

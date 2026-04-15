@@ -18,6 +18,7 @@ from arena.market_sources import (
     live_market_sources_for_markets,
     parse_markets,
 )
+from arena.market_feature_normalization import normalize_market_feature_rows
 from arena.memory.forgetting import effective_memory_score
 from arena.memory.candidates import CANDIDATE_MEMORY_EVENT_TYPES
 from arena.memory.graph import memory_event_node_id
@@ -2121,6 +2122,12 @@ class ContextBuilder:
                 limit=self.settings.context_max_market_rows,
                 sources=sources,
             )
+        market_rows = normalize_market_feature_rows(
+            market_rows,
+            repo=self.repo,
+            sources=sources,
+            lookback_days=22,
+        )
         ticker_name_tokens: list[str] = []
         for token in [*snapshot.positions.keys(), *[row.get("ticker") for row in market_rows if isinstance(row, dict)]]:
             clean = str(token or "").strip().upper()

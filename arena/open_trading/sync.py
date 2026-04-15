@@ -85,6 +85,41 @@ def _has_daily_feature_metrics(row: dict[str, object]) -> bool:
     )
 
 
+def _coerce_feature_date(value: object) -> date | None:
+    """Best-effort conversion of BigQuery/Python timestamp values to a date."""
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).date()
+    except ValueError:
+        pass
+    try:
+        return date.fromisoformat(text[:10])
+    except ValueError:
+        return None
+
+
+def _has_fresh_daily_feature_metrics(
+    row: dict[str, object],
+    *,
+    quote_as_of_ts: datetime,
+    max_age_days: int = 7,
+) -> bool:
+    """True when quote enrichment can safely reuse daily-history metrics."""
+    if not _has_daily_feature_metrics(row):
+        return False
+    feature_date = _coerce_feature_date(row.get("as_of_ts"))
+    if feature_date is None:
+        return True
+    age_days = (quote_as_of_ts.date() - feature_date).days
+    return age_days <= int(max_age_days)
+
+
 def _pick_str(row: dict[str, object], keys: list[str]) -> str:
     """Returns the first non-empty string value for keys."""
     for key in keys:
@@ -1256,8 +1291,8 @@ class MarketDataSyncService:
                     if last <= 0:
                         raise ValueError("quote returned empty last")
                     base = daily_map.get((ticker, "KRX"), daily_map.get((ticker, ""), {}))
-                    if not _has_daily_feature_metrics(base):
-                        raise ValueError("daily history features unavailable for quote snapshot")
+                    if not _has_fresh_daily_feature_metrics(base, quote_as_of_ts=as_of_ts):
+                        raise ValueError("fresh daily history features unavailable for quote snapshot")
                     rows.append(
                         {
                             "as_of_ts": as_of_ts,
@@ -1293,8 +1328,8 @@ class MarketDataSyncService:
                     quote_meta, instrument_row = self._sync_us_quote(ticker=ticker, preferred_excd=preferred_excd)
                     exchange_code = str(quote_meta.get("exchange_code") or "").strip().upper()
                     base = daily_map.get((ticker, exchange_code), daily_map.get((ticker, ""), {}))
-                    if not _has_daily_feature_metrics(base):
-                        raise ValueError("daily history features unavailable for quote snapshot")
+                    if not _has_fresh_daily_feature_metrics(base, quote_as_of_ts=as_of_ts):
+                        raise ValueError("fresh daily history features unavailable for quote snapshot")
                     rows.append(
                         {
                             "as_of_ts": as_of_ts,

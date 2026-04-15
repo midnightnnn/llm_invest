@@ -20,6 +20,11 @@ from arena.market_sources import (
     US_MARKETS as _US_MARKETS,
     live_market_sources_for_markets,
 )
+from arena.market_feature_normalization import (
+    daily_history_sources,
+    normalize_market_feature_rows,
+    normalize_market_feature_rows_from_closes,
+)
 from arena.open_trading.client import OpenTradingClient
 from arena.open_trading.exchange_codes import (
     normalize_us_quote_exchange,
@@ -524,7 +529,7 @@ class QuantTools:
         closes = self.repo.get_daily_closes(
             tickers=tickers,
             lookback_days=int(lookback_days) + 1,
-            sources=self._sources(),
+            sources=daily_history_sources(self._sources()),
         )
 
         aligned: list[list[float]] = []
@@ -639,11 +644,6 @@ class QuantTools:
             limit=max(50, len(universe)),
             sources=sources,
         )
-        if min_ret_20d is not None:
-            latest_rows = [row for row in latest_rows if float(row.get("ret_20d") or 0.0) >= float(min_ret_20d)]
-        if max_volatility is not None:
-            latest_rows = [row for row in latest_rows if float(row.get("volatility_20d") or 0.0) <= float(max_volatility)]
-
         latest_tickers = [
             str(row.get("ticker") or "").strip().upper()
             for row in latest_rows
@@ -652,8 +652,13 @@ class QuantTools:
         closes = self.repo.get_daily_closes(
             tickers=latest_tickers,
             lookback_days=max(windows) + 2,
-            sources=sources,
+            sources=daily_history_sources(sources),
         ) if latest_tickers else {}
+        latest_rows = normalize_market_feature_rows_from_closes(latest_rows, closes)
+        if min_ret_20d is not None:
+            latest_rows = [row for row in latest_rows if float(row.get("ret_20d") or 0.0) >= float(min_ret_20d)]
+        if max_volatility is not None:
+            latest_rows = [row for row in latest_rows if float(row.get("volatility_20d") or 0.0) <= float(max_volatility)]
         momentum_rows = momentum_scores(closes, windows=windows, vol_adjust=vol_adjust) if closes else []
 
         fundamentals_rows: list[dict[str, Any]] = []
@@ -897,7 +902,7 @@ class QuantTools:
         closes = self.repo.get_daily_closes(
             tickers=[token],
             lookback_days=lookback,
-            sources=self._sources(),
+            sources=daily_history_sources(self._sources()),
         )
         series = closes.get(token, [])
         if len(series) < 35:
@@ -1140,6 +1145,12 @@ class QuantTools:
             tickers=self._target_universe(),
             top_n=200,
             sources=self._sources(),
+        )
+        rows = normalize_market_feature_rows(
+            rows,
+            repo=self.repo,
+            sources=self._sources(),
+            lookback_days=22,
         )
 
         buckets: dict[str, list[dict]] = {}

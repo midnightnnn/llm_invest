@@ -565,18 +565,22 @@ class MarketStore:
         start: date,
         end: date,
         sources: list[str] | None = None,
+        price_field: str = "close_price_krw",
     ) -> "pd.DataFrame":
-        """Loads daily close_price_krw into a DataFrame (index=datetime, columns=ticker)."""
+        """Loads daily close prices into a DataFrame (index=datetime, columns=ticker)."""
         import pandas as pd
 
         tokens = [str(t).strip().upper() for t in tickers if str(t).strip()]
         tokens = list(dict.fromkeys(tokens))
         if not tokens:
             return pd.DataFrame()
+        price_column = str(price_field or "close_price_krw").strip()
+        if price_column not in {"close_price_krw", "close_price_native"}:
+            raise ValueError("price_field must be close_price_krw or close_price_native")
 
         filters: list[str] = [
             "ticker IN UNNEST(@tickers)",
-            "close_price_krw IS NOT NULL",
+            f"{price_column} IS NOT NULL",
             "DATE(as_of_ts) >= @start",
             "DATE(as_of_ts) <= @end",
             _DAILY_FILTER_SQL,
@@ -594,7 +598,7 @@ class MarketStore:
         where = " AND ".join(filters)
         sql = f"""
         WITH dedup_source AS (
-          SELECT DATE(as_of_ts) AS d, as_of_ts, ticker, close_price_krw, source, ingested_at,
+          SELECT DATE(as_of_ts) AS d, as_of_ts, ticker, {price_column} AS close_price, source, ingested_at,
                  ROW_NUMBER() OVER (
                    PARTITION BY DATE(as_of_ts), ticker, source
                    ORDER BY as_of_ts DESC, IFNULL(ingested_at, as_of_ts) DESC
@@ -602,7 +606,7 @@ class MarketStore:
           FROM `{self.session.dataset_fqn}.market_features`
           WHERE {where}
         ), dedup_day AS (
-          SELECT d, ticker, close_price_krw, as_of_ts, source, ingested_at,
+          SELECT d, ticker, close_price, as_of_ts, source, ingested_at,
                  ROW_NUMBER() OVER (
                    PARTITION BY d, ticker
                    ORDER BY as_of_ts DESC, IFNULL(ingested_at, as_of_ts) DESC, source DESC
@@ -610,7 +614,7 @@ class MarketStore:
           FROM dedup_source
           WHERE rn_source = 1
         )
-        SELECT d, ticker, close_price_krw
+        SELECT d, ticker, close_price
         FROM dedup_day
         WHERE rn_day = 1
         ORDER BY d ASC, ticker ASC
@@ -627,7 +631,7 @@ class MarketStore:
         df["d"] = pd.to_datetime(df["d"])
         # Safety net: keep one row per day/ticker even if upstream query returns duplicates.
         df = df.sort_values(["d", "ticker"]).drop_duplicates(subset=["d", "ticker"], keep="last")
-        pivot = df.pivot(index="d", columns="ticker", values="close_price_krw").sort_index()
+        pivot = df.pivot(index="d", columns="ticker", values="close_price").sort_index()
         return pivot
 
     def get_predicted_returns(

@@ -561,10 +561,10 @@ def test_get_daily_close_frame_deduplicates_same_day_rows() -> None:
     store = _make_market_store(
         [
             [
-                {"d": "2026-02-20", "ticker": "AAPL", "close_price_krw": 100.0},
-                {"d": "2026-02-20", "ticker": "AAPL", "close_price_krw": 101.0},
-                {"d": "2026-02-21", "ticker": "AAPL", "close_price_krw": 102.0},
-                {"d": "2026-02-20", "ticker": "MSFT", "close_price_krw": 200.0},
+                {"d": "2026-02-20", "ticker": "AAPL", "close_price": 100.0},
+                {"d": "2026-02-20", "ticker": "AAPL", "close_price": 101.0},
+                {"d": "2026-02-21", "ticker": "AAPL", "close_price": 102.0},
+                {"d": "2026-02-20", "ticker": "MSFT", "close_price": 200.0},
             ]
         ]
     )
@@ -578,6 +578,27 @@ def test_get_daily_close_frame_deduplicates_same_day_rows() -> None:
     assert float(frame.loc["2026-02-20", "AAPL"]) == 101.0
     assert float(frame.loc["2026-02-21", "AAPL"]) == 102.0
     assert float(frame.loc["2026-02-20", "MSFT"]) == 200.0
+
+
+def test_get_daily_close_frame_supports_native_price_field() -> None:
+    store = _make_market_store(
+        [
+            [
+                {"d": "2026-02-20", "ticker": "AAPL", "close_price": 100.0},
+                {"d": "2026-02-21", "ticker": "AAPL", "close_price": 105.0},
+            ]
+        ]
+    )
+
+    frame = store.get_daily_close_frame(
+        tickers=["AAPL"],
+        start=date(2026, 2, 20),
+        end=date(2026, 2, 21),
+        price_field="close_price_native",
+    )
+
+    assert "close_price_native AS close_price" in store.session.calls[0]
+    assert float(frame.loc["2026-02-21", "AAPL"]) == 105.0
 
 
 def test_insert_market_features_appends_via_load_job_without_delete() -> None:

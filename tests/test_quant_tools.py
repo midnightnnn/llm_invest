@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from types import SimpleNamespace
 
 from arena.config import Settings
@@ -288,6 +289,11 @@ def test_screen_market_excludes_quote_only_rows_without_history_features() -> No
             ]
             self.universe_rows = ["MISSING", "ZERO"]
 
+        def get_daily_closes(self, *, tickers, lookback_days, sources=None):
+            out = super().get_daily_closes(tickers=tickers, lookback_days=lookback_days, sources=sources)
+            out.pop("MISSING", None)
+            return out
+
     settings = _settings()
     settings.default_universe = ["MISSING", "ZERO"]
     qt = QuantTools(repo=_SparseRepo(), settings=settings)
@@ -295,6 +301,26 @@ def test_screen_market_excludes_quote_only_rows_without_history_features() -> No
     rows = qt.screen_market(bucket="defensive", top_n=5)
 
     assert {row["ticker"] for row in rows} == {"ZERO"}
+
+
+def test_screen_market_overlays_stored_returns_with_raw_close_features() -> None:
+    class _ZeroFeatureRepo(FakeRepo):
+        def __init__(self):
+            super().__init__()
+            for row in self._features:
+                row["ret_5d"] = 0.0
+                row["ret_20d"] = 0.0
+                row["volatility_20d"] = 0.0
+
+    qt = QuantTools(repo=_ZeroFeatureRepo(), settings=_settings())
+
+    rows = qt.screen_market(bucket="defensive", top_n=10)
+
+    aapl = next(row for row in rows if row["ticker"] == "AAPL")
+    closes = [100.0 + i for i in range(128)]
+    assert math.isclose(aapl["ret_5d"], (closes[-1] / closes[-6]) - 1.0)
+    assert math.isclose(aapl["ret_20d"], (closes[-1] / closes[-21]) - 1.0)
+    assert aapl["volatility_20d"] > 0.0
 
 
 def test_target_universe_filters_us_markets_to_alpha_tickers() -> None:
@@ -356,7 +382,12 @@ def test_screen_market_live_us_passes_quote_sources() -> None:
         "open_trading_amex",
     ]
     assert repo.last_close_kwargs is not None
-    assert repo.last_close_kwargs["sources"] == repo.last_market_kwargs["sources"]
+    assert repo.last_close_kwargs["sources"] == [
+        "open_trading_us",
+        "open_trading_nasdaq",
+        "open_trading_nyse",
+        "open_trading_amex",
+    ]
 
 
 def test_screen_market_legacy_sort_mode_still_uses_bq_screen() -> None:
@@ -403,13 +434,9 @@ def test_screen_market_momentum_bucket_live_us_passes_quote_sources() -> None:
 
     assert repo.last_close_kwargs is not None
     assert repo.last_close_kwargs["sources"] == [
-        "open_trading_us_quote",
         "open_trading_us",
-        "open_trading_nasdaq_quote",
         "open_trading_nasdaq",
-        "open_trading_nyse_quote",
         "open_trading_nyse",
-        "open_trading_amex_quote",
         "open_trading_amex",
     ]
 

@@ -1054,6 +1054,20 @@ FIELD_PARENT_OVERRIDES: dict[str, str] = {
     "retrieval.reranking.outcome_bonus_max": "retrieval.reranking",
     "retrieval.reranking.effective_score_bonus_scale": "retrieval.reranking",
     "retrieval.reranking.effective_score_bonus_cap": "retrieval.reranking",
+    "graph.semantic_triples.enabled": "graph.semantic_triples",
+    "graph.semantic_triples.mode": "graph.semantic_triples",
+    "graph.semantic_triples.min_confidence": "graph.semantic_triples",
+    "graph.semantic_triples.max_candidates": "graph.semantic_triples",
+    "graph.semantic_triples.boost_bonus_base": "graph.semantic_triples",
+    "graph.semantic_triples.boost_bonus_cap": "graph.semantic_triples",
+    "graph.semantic_triples.max_relation_context_items": "graph.semantic_triples",
+    "graph.semantic_triples.tuning.enabled": "graph.semantic_triples.tuning",
+    "graph.semantic_triples.tuning.auto_transition_enabled": "graph.semantic_triples.tuning",
+    "graph.semantic_triples.tuning.lookback_days": "graph.semantic_triples.tuning",
+    "graph.semantic_triples.tuning.stability_window_days": "graph.semantic_triples.tuning",
+    "graph.semantic_triples.tuning.required_healthy_evaluations": "graph.semantic_triples.tuning",
+    "graph.semantic_triples.tuning.demote_unhealthy_evaluations": "graph.semantic_triples.tuning",
+    "graph.semantic_triples.tuning.post_demote_cooldown_evaluations": "graph.semantic_triples.tuning",
 }
 
 
@@ -2690,6 +2704,34 @@ def build_memory_graph(
                 }
             )
             links.append({"source": group_id, "target": branch_id})
+
+    # Handle nested branches (branches whose parent is another branch, not a group)
+    for branch in BRANCH_SPECS:
+        branch_id = str(branch["id"])
+        if branch_id in branch_positions:
+            continue
+        parent_id = str(branch["parent"])
+        parent_pos = branch_positions.get(parent_id)
+        if not parent_pos:
+            continue
+        nested_pos = _child_positions(parent_pos, count=1, radius=42.0, y_offset=-16.0)[0]
+        branch_positions[branch_id] = nested_pos
+        nodes.append(
+            {
+                "id": branch_id,
+                "label": branch["label"],
+                "group": branch["group"],
+                "color": group_colors.get(branch["group"], "#94a3b8"),
+                "size": 12,
+                "editable": False,
+                "kind": "branch",
+                "description": branch.get("description") or "",
+                "x": nested_pos[0],
+                "y": nested_pos[1],
+                "z": nested_pos[2],
+            }
+        )
+        links.append({"source": parent_id, "target": branch_id})
 
     field_specs_by_parent: dict[str, list[MemoryFieldSpec]] = {}
     for spec in FIELD_SPECS:
