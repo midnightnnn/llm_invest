@@ -1820,6 +1820,89 @@ class OpenTradingClient:
             rows = [rows]
         return [dict(r) for r in rows if isinstance(r, dict)]
 
+    # ── Domestic daily short sale ───────────────────────────────────────
+    def get_domestic_daily_short_sale(
+        self,
+        ticker: str,
+        *,
+        start_date: str = "",
+        end_date: str = "",
+    ) -> list[dict[str, Any]]:
+        """공매도 일별추이 (TR: FHPST04830000).
+
+        Returns rows with ``ssts_cntg_qty`` (공매도 체결수량),
+        ``ssts_vol_rlim`` (공매도 거래량 비중 %).
+        """
+        from datetime import datetime, timedelta
+
+        if not end_date:
+            end_date = datetime.now().strftime("%Y%m%d")
+        if not start_date:
+            start_date = (datetime.now() - timedelta(days=20)).strftime("%Y%m%d")
+
+        body, _ = self._request(
+            method="GET",
+            path="/uapi/domestic-stock/v1/quotations/daily-short-sale",
+            tr_id="FHPST04830000",
+            params={
+                "FID_COND_MRKT_DIV_CODE": "J",
+                "FID_INPUT_ISCD": ticker.strip(),
+                "FID_INPUT_DATE_1": start_date.replace("-", ""),
+                "FID_INPUT_DATE_2": end_date.replace("-", ""),
+            },
+        )
+        rows = body.get("output2") or body.get("output") or []
+        if isinstance(rows, dict):
+            rows = [rows]
+        return [dict(r) for r in rows if isinstance(r, dict)]
+
+    # ── Domestic analyst consensus (invest opinion) ────────────────────
+    def get_domestic_invest_opinion(
+        self,
+        ticker: str,
+        *,
+        start_date: str = "",
+        end_date: str = "",
+        max_pages: int = 2,
+    ) -> list[dict[str, Any]]:
+        """종목 투자의견 (TR: FHKST663300C0).
+
+        Returns rows with ``invt_opnn`` (투자의견), ``hts_goal_prc`` (목표가),
+        ``stck_prdy_clpr`` (전일종가), ``nday_dprt`` (N일괴리율).
+        """
+        from datetime import datetime, timedelta
+
+        if not end_date:
+            end_date = datetime.now().strftime("%Y%m%d")
+        if not start_date:
+            start_date = (datetime.now() - timedelta(days=90)).strftime("%Y%m%d")
+
+        rows: list[dict[str, Any]] = []
+        tr_cont = ""
+        for _ in range(max_pages):
+            body, headers = self._request(
+                method="GET",
+                path="/uapi/domestic-stock/v1/quotations/invest-opinion",
+                tr_id="FHKST663300C0",
+                tr_cont=tr_cont,
+                params={
+                    "FID_COND_MRKT_DIV_CODE": "J",
+                    "FID_COND_SCR_DIV_CODE": "16633",
+                    "FID_INPUT_ISCD": ticker.strip(),
+                    "FID_INPUT_DATE_1": start_date.replace("-", ""),
+                    "FID_INPUT_DATE_2": end_date.replace("-", ""),
+                },
+            )
+            page_rows = body.get("output") or []
+            if isinstance(page_rows, dict):
+                page_rows = [page_rows]
+            rows.extend(dict(r) for r in page_rows if isinstance(r, dict))
+            next_flag = (headers.get("tr_cont") or "").upper()
+            if next_flag not in {"M", "F"}:
+                break
+            tr_cont = "N"
+        return rows
+
     # ── Domestic earnings estimate ────────────────────────────────────
     def get_domestic_estimate_perform(
         self,

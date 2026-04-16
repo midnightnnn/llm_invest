@@ -201,7 +201,7 @@ def cmd_smoke_thesis_compaction(
     if timeout_seconds > 0:
         settings.llm_timeout_seconds = int(timeout_seconds)
 
-    settings.trading_mode = str(getattr(settings, "trading_mode", "paper") or "paper").strip().lower() or "paper"
+    settings.trading_mode = getattr(settings, "trading_mode", "paper").strip().lower()
     cli._validate_or_exit(settings, require_kis=False, require_llm=True, live=False)
 
     repo = cli._repo_or_exit(settings)
@@ -209,7 +209,7 @@ def cmd_smoke_thesis_compaction(
     repo.ensure_tables()
 
     clean_agent_ids: list[str] = []
-    for token in list(agent_ids or []) or list(getattr(settings, "agent_ids", []) or []):
+    for token in list(agent_ids or []) or list(getattr(settings, "agent_ids", [])):
         agent_id = str(token or "").strip()
         if agent_id and agent_id not in clean_agent_ids:
             clean_agent_ids.append(agent_id)

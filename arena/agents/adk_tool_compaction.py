@@ -145,18 +145,21 @@ def _compact_tool_result_for_prompt(
                 ma = row.get("moving_averages") or {}
                 bb = row.get("bollinger_20_2") or {}
                 macd = row.get("macd") or {}
-                rows.append(
-                    {
-                        "ticker": row.get("ticker"),
-                        "price": row.get("price"),
-                        "rsi_14": row.get("rsi_14"),
-                        "rsi_state": row.get("rsi_state"),
-                        "macd_state": macd.get("state"),
-                        "trend_state": row.get("trend_state"),
-                        "price_vs_sma20": ma.get("price_vs_sma20"),
-                        "bb_state": bb.get("state"),
-                    }
-                )
+                item: dict[str, Any] = {
+                    "ticker": row.get("ticker"),
+                    "price": row.get("price"),
+                    "rsi_14": row.get("rsi_14"),
+                    "rsi_state": row.get("rsi_state"),
+                    "macd_state": macd.get("state"),
+                    "trend_state": row.get("trend_state"),
+                    "price_vs_sma20": ma.get("price_vs_sma20"),
+                    "bb_state": bb.get("state"),
+                }
+                if row.get("investor_flow"):
+                    item["investor_flow"] = row["investor_flow"]
+                if row.get("short_sale"):
+                    item["short_sale"] = row["short_sale"]
+                rows.append(item)
             compacted = {
                 "tickers": list(core.get("tickers") or [])[:10],
                 "count": len(rows),
@@ -186,6 +189,10 @@ def _compact_tool_result_for_prompt(
                 "trend_state": core.get("trend_state"),
                 "points": core.get("points"),
             }
+            if core.get("investor_flow"):
+                compacted["investor_flow"] = core["investor_flow"]
+            if core.get("short_sale"):
+                compacted["short_sale"] = core["short_sale"]
     elif token == "sector_summary":
         rows: list[dict[str, Any]] = []
         if isinstance(core, list):
@@ -222,6 +229,7 @@ def _compact_tool_result_for_prompt(
                 "currency",
                 "exchange",
                 "settlement_date",
+                "consensus",
             ):
                 if row.get(field) is not None:
                     item[field] = row.get(field)
@@ -458,6 +466,25 @@ def _compact_tool_result_for_prompt(
             compacted["hrp_allocation"] = compact_allocation
         if core.get("error") is not None:
             compacted["error"] = core.get("error")
+    elif token == "trade_performance" and isinstance(core, dict):
+        rt = core.get("round_trips") or {}
+        compacted = {
+            "period": core.get("period"),
+            "total_trades": core.get("total_trades"),
+            "round_trips": {
+                k: rt[k] for k in ("closed", "win_rate", "avg_return_pct", "avg_holding_days", "best", "worst")
+                if k in rt
+            },
+        }
+        bh = core.get("behavioral")
+        if bh:
+            compacted["behavioral"] = bh
+        streak = core.get("recent_streak") or {}
+        if streak.get("last_5"):
+            compacted["recent_streak"] = streak
+        unrealized = list(core.get("unrealized") or [])[:5]
+        if unrealized:
+            compacted["unrealized"] = unrealized
     elif token == "optimize_portfolio" and isinstance(core, dict):
         compacted = {
             "strategy": core.get("strategy"),

@@ -265,6 +265,7 @@ class _ADKDecisionRunner:
         self._registry.bind("get_research_briefing", self._toolbox.get_research_briefing)
         self._registry.bind("portfolio_diagnosis", self._toolbox.portfolio_diagnosis)
         self._registry.bind("save_memory", self._toolbox.save_memory)
+        self._registry.bind("trade_performance", self._toolbox.trade_performance)
         self._tool_events: list[dict[str, Any]] = []
         self._seen_memory_ids: set[str] = set()
         self._wrapped_tool_names: set[str] = set()
@@ -977,7 +978,7 @@ class AdkTradingAgent:
         title = str(board_decision.get("board_title", "")).strip()[:120] or str(initial_post.title or "").strip()[:120] or "거래 아이디어"
         body = str(board_decision.get("board_body", "")).strip()[:1800] or execution_summary
         tickers: list[str] = []
-        for token in [*list(getattr(initial_post, "tickers", []) or []), *[intent.ticker for intent in intents]]:
+        for token in [*list(getattr(initial_post, "tickers", [])), *[intent.ticker for intent in intents]]:
             clean = str(token or "").strip().upper()
             if clean and clean not in tickers:
                 tickers.append(clean)
@@ -987,7 +988,7 @@ class AdkTradingAgent:
             title=title,
             body=body,
             draft_summary=str(getattr(initial_post, "draft_summary", "") or "").strip()[:200],
-            trading_mode=str(getattr(initial_post, "trading_mode", "paper") or "paper"),
+            trading_mode=getattr(initial_post, "trading_mode", "paper"),
             tickers=tickers,
             cycle_id=str(cycle_id or "").strip(),
         )

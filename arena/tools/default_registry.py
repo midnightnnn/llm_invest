@@ -99,6 +99,18 @@ def _base_entries(
             sort_order=50,
         ),
         _tool(
+            tool_id="trade_performance",
+            description=(
+                "Analyses your closed round-trip trades (win rate, avg return, holding period, behavioral patterns) "
+                "and current unrealised P&L. Use to review your own track record before making new decisions."
+            ),
+            category="context",
+            tier="optional",
+            label_ko="매매 성과 분석",
+            description_ko="과거 라운드트립 매매의 승률·평균수익률·보유기간·행동 패턴(처분 효과, 포지션 크기별 승률)을 분석하고, 현재 미실현 손익도 함께 제공합니다. 자기 매매 패턴을 정량적으로 점검하여 의사결정을 보정할 때 사용합니다.",
+            sort_order=55,
+        ),
+        _tool(
             tool_id="screen_market",
             description=(
                 "Single discovery entry point for the runtime universe. "
@@ -143,7 +155,8 @@ def _base_entries(
             tool_id="technical_signals",
             description=(
                 "Returns RSI, MACD, Bollinger Bands, moving-average trend, volume analysis (volume ratio, OBV trend, "
-                "price-volume confirmation), and KOSPI investor flow signals (foreign/institutional net buy)."
+                "price-volume confirmation), KOSPI investor flow signals (foreign/institutional net buy), "
+                "and KOSPI short-selling ratio."
             ),
             category="quant",
             tier="optional",
@@ -166,7 +179,7 @@ def _base_entries(
             tool_id="get_fundamentals",
             description=(
                 "Fetches valuation metrics for a basket. US stocks get PER/PBR/EPS/BPS, while KOSPI stocks get "
-                "EPS/BPS/ROE/debt ratio/growth metrics."
+                "EPS/BPS/ROE/debt ratio/growth metrics plus analyst consensus (target price, opinion, upside %)."
             ),
             category="quant",
             tier="optional",

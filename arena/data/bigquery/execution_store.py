@@ -336,11 +336,15 @@ class ExecutionStore:
         since: datetime,
         trading_mode: str | None = None,
         tenant_id: str | None = None,
+        include_simulated: bool = False,
     ) -> list[dict[str, Any]]:
-        """Returns FILLED execution rows on or after a timestamp."""
+        """Returns FILLED (and optionally SIMULATED) execution rows on or after a timestamp."""
         tenant = self._tenant_token(tenant_id)
-        filters = ["tenant_id = @tenant_id", "status = 'FILLED'", "created_at >= @since"]
-        params: dict[str, object] = {"tenant_id": tenant, "since": since}
+        statuses = ["FILLED"]
+        if include_simulated:
+            statuses.append("SIMULATED")
+        filters = ["tenant_id = @tenant_id", "status IN UNNEST(@statuses)", "created_at >= @since"]
+        params: dict[str, object] = {"tenant_id": tenant, "since": since, "statuses": statuses}
         mode = self._normalize_trading_mode_token(trading_mode)
         if mode:
             filters.append(f"{self._execution_trading_mode_expr()} = @trading_mode")

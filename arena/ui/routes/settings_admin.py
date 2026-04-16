@@ -149,7 +149,7 @@ def register_admin_settings_routes(app: FastAPI, *, deps: AdminSettingsRouteDeps
         tenant_settings: Settings,
         updated_by: str,
     ) -> str:
-        current_market = str(getattr(tenant_settings, "kis_target_market", "") or "").strip().lower()
+        current_market = getattr(tenant_settings, "kis_target_market", "").strip().lower()
         next_market = _derive_tenant_market_from_agents(entries, fallback_market=current_market)
         if next_market and next_market != current_market:
             repo.set_config(tenant, "kis_target_market", next_market, updated_by)

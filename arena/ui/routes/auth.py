@@ -102,7 +102,7 @@ def register_auth_routes(app: FastAPI, *, deps: AuthRouteDeps) -> None:
             user = deps.exchange_google_code_for_user(code)
             request.session["user"] = user
             access_result = deps.ensure_user_access(user)
-            access_rows = list(getattr(access_result, "access_rows", []) or [])
+            access_rows = list(getattr(access_result, "access_rows", []))
             viewer_tenants = deps.tenant_list_for_roles(access_rows, deps.viewer_roles)
             next_path = str(request.session.pop("next_path", "") or "/")
             if str(getattr(access_result, "blocked_status", "") or "").strip().lower() == "rejected":

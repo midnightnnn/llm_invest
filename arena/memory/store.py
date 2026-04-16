@@ -215,18 +215,18 @@ class MemoryStore:
                 current_event_id=event_id,
             )
         if kind == "trade_execution":
-            intent = data.get("intent") if isinstance(data, dict) else None
-            report = data.get("report") if isinstance(data, dict) else None
+            intent = data.get("intent")
+            report = data.get("report")
             ticker = str(intent.get("ticker") or "").strip().upper() if isinstance(intent, dict) else ""
             status = str(report.get("status") or "").strip().upper() if isinstance(report, dict) else ""
             return bool(ticker and status in {"FILLED", "SIMULATED"})
         if kind in CANDIDATE_MEMORY_EVENT_TYPES:
-            ticker = str(data.get("ticker") or "").strip().upper() if isinstance(data, dict) else ""
-            source = str(data.get("source") or "").strip().lower() if isinstance(data, dict) else ""
+            ticker = str(data.get("ticker") or "").strip().upper()
+            source = str(data.get("source") or "").strip().lower()
             return bool(ticker and source == "candidate_discovery")
         if kind in {"thesis_invalidated", "thesis_realized"}:
-            thesis_id = str(data.get("thesis_id") or "").strip() if isinstance(data, dict) else ""
-            ticker = str(data.get("ticker") or "").strip().upper() if isinstance(data, dict) else ""
+            thesis_id = str(data.get("thesis_id") or "").strip()
+            ticker = str(data.get("ticker") or "").strip().upper()
             return bool(thesis_id and ticker)
         return False
 

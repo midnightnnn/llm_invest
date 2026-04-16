@@ -854,3 +854,160 @@ class _ContextTools:
 
         out["hrp_allocation"] = self._build_hrp_allocation(weights)
         return out
+
+    # ── Trade performance ────────────────────────────────────────────
+    def _unrealized_positions(self, target: str = "") -> list[dict[str, Any]]:
+        """Extract current unrealised P&L from context (portfolio or performance)."""
+        portfolio = self._context.get("portfolio") or {}
+        perf = self._context.get("performance") or {}
+        # portfolio["positions"] is dict {ticker: {qty, avg_price_krw, ...}}
+        # performance["positions"] is list [{ticker, quantity, avg_price_krw, market_price_krw, ...}]
+        unrealized: list[dict[str, Any]] = []
+
+        pos_list: list[dict[str, Any]] = []
+        perf_positions = perf.get("positions") if isinstance(perf, dict) else None
+        port_positions = portfolio.get("positions") if isinstance(portfolio, dict) else None
+        if isinstance(perf_positions, list):
+            pos_list = perf_positions
+        elif isinstance(port_positions, dict):
+            pos_list = [{"ticker": tk, **v} for tk, v in port_positions.items() if isinstance(v, dict)]
+        elif isinstance(port_positions, list):
+            pos_list = port_positions
+
+        for pos in pos_list:
+            tk = str(pos.get("ticker") or "").strip().upper()
+            if target and tk != target:
+                continue
+            qty = float(pos.get("quantity") or pos.get("qty") or 0)
+            cost = float(pos.get("avg_price_krw") or 0)
+            mkt = float(pos.get("market_price_krw") or 0)
+            if qty > 0 and cost > 0 and mkt > 0:
+                unrealized.append({
+                    "ticker": tk,
+                    "qty": int(qty),
+                    "cost_krw": round(cost, 0),
+                    "current_krw": round(mkt, 0),
+                    "return_pct": round((mkt / cost - 1) * 100, 2),
+                })
+        return unrealized
+
+    def trade_performance(self, lookback_days: int = 90, ticker: str = "") -> dict[str, Any]:
+        """Analyses closed round-trip trades and current unrealised P&L."""
+        from datetime import timedelta
+
+        target = str(ticker or "").strip().upper()
+
+        since = utc_now() - timedelta(days=max(7, min(int(lookback_days), 365)))
+        rows = self.repo.filled_execution_reports_since(
+            since=since,
+            tenant_id=self.tenant_id,
+            include_simulated=True,
+        )
+
+        # filter to this agent
+        rows = [r for r in rows if str(r.get("agent_id") or "").strip().lower() == self.agent_id]
+        if target:
+            rows = [r for r in rows if str(r.get("ticker") or "").strip().upper() == target]
+
+        unrealized = self._unrealized_positions(target)
+
+        if not rows:
+            return {"period": f"{lookback_days}d", "total_trades": 0, "round_trips": {}, "unrealized": unrealized}
+
+        # ── FIFO round-trip matching ──
+        lots: dict[str, list[dict]] = {}
+        closed: list[dict[str, Any]] = []
+
+        for r in rows:
+            tk = str(r.get("ticker") or "").strip().upper()
+            side = str(r.get("side") or "").strip().upper()
+            qty = float(r.get("filled_qty") or 0)
+            price = float(r.get("avg_price_krw") or 0)
+            ts = r.get("created_at")
+            if not tk or qty <= 0 or price <= 0:
+                continue
+
+            if side == "BUY":
+                lots.setdefault(tk, []).append({"qty": qty, "cost": price, "ts": ts, "notional": qty * price})
+            elif side == "SELL" and lots.get(tk):
+                remaining = qty
+                cost_sum = 0.0
+                bought_qty = 0.0
+                earliest_ts = lots[tk][0]["ts"] if lots[tk] else ts
+                while remaining > 0 and lots[tk]:
+                    lot = lots[tk][0]
+                    take = min(remaining, lot["qty"])
+                    cost_sum += take * lot["cost"]
+                    bought_qty += take
+                    remaining -= take
+                    lot["qty"] -= take
+                    if lot["qty"] <= 0:
+                        lots[tk].pop(0)
+                if bought_qty > 0:
+                    avg_cost = cost_sum / bought_qty
+                    ret_pct = round((price / avg_cost - 1) * 100, 2)
+                    held_days = (ts - earliest_ts).days if ts and earliest_ts else 0
+                    closed.append({
+                        "ticker": tk,
+                        "return_pct": ret_pct,
+                        "held_days": held_days,
+                        "notional": round(cost_sum, 0),
+                        "closed_at": ts,
+                    })
+
+        # ── Summary ──
+        total_trades = len(rows)
+        n_closed = len(closed)
+        winners = [t for t in closed if t["return_pct"] > 0]
+        losers = [t for t in closed if t["return_pct"] <= 0]
+
+        round_trips: dict[str, Any] = {"closed": n_closed}
+        if n_closed:
+            round_trips["win_rate"] = round(len(winners) / n_closed, 2)
+            round_trips["avg_return_pct"] = round(sum(t["return_pct"] for t in closed) / n_closed, 2)
+            round_trips["avg_holding_days"] = round(sum(t["held_days"] for t in closed) / n_closed, 1)
+            best = max(closed, key=lambda t: t["return_pct"])
+            worst = min(closed, key=lambda t: t["return_pct"])
+            round_trips["best"] = {"ticker": best["ticker"], "return_pct": best["return_pct"], "held_days": best["held_days"]}
+            round_trips["worst"] = {"ticker": worst["ticker"], "return_pct": worst["return_pct"], "held_days": worst["held_days"]}
+
+        # ── Behavioral ──
+        behavioral: dict[str, Any] = {}
+        if winners:
+            behavioral["avg_winner_held_days"] = round(sum(t["held_days"] for t in winners) / len(winners), 1)
+        if losers:
+            behavioral["avg_loser_held_days"] = round(sum(t["held_days"] for t in losers) / len(losers), 1)
+        if winners and losers and behavioral.get("avg_winner_held_days") and behavioral.get("avg_loser_held_days"):
+            behavioral["disposition_flag"] = behavioral["avg_loser_held_days"] > behavioral["avg_winner_held_days"] * 1.5
+
+        if len(closed) >= 4:
+            notionals = sorted(t["notional"] for t in closed)
+            threshold = notionals[len(notionals) * 7 // 10]
+            large = [t for t in closed if t["notional"] >= threshold]
+            small = [t for t in closed if t["notional"] < threshold]
+            if large:
+                behavioral["large_position_win_rate"] = round(len([t for t in large if t["return_pct"] > 0]) / len(large), 2)
+            if small:
+                behavioral["small_position_win_rate"] = round(len([t for t in small if t["return_pct"] > 0]) / len(small), 2)
+
+        # ── Recent streak ──
+        recent = sorted(closed, key=lambda t: t["closed_at"] or datetime.min, reverse=True)[:5]
+        now = utc_now()
+        recent_streak = {
+            "last_5": [
+                {"ticker": t["ticker"], "return_pct": t["return_pct"], "days_ago": (now - t["closed_at"]).days if t["closed_at"] else 0}
+                for t in recent
+            ],
+        }
+        if recent:
+            wins = sum(1 for t in recent if t["return_pct"] > 0)
+            recent_streak["momentum"] = "winning" if wins >= 3 else "losing" if wins <= 1 else "mixed"
+
+        return {
+            "period": f"{lookback_days}d",
+            "total_trades": total_trades,
+            "round_trips": round_trips,
+            "behavioral": behavioral,
+            "recent_streak": recent_streak,
+            "unrealized": unrealized,
+        }

@@ -206,7 +206,7 @@ class ArenaOrchestrator:
         include_simulated = self.settings.trading_mode != "live"
 
         force_reinit = str(os.getenv("ARENA_FORCE_SLEEVE_REINIT", "")).strip().lower() in {"1", "true", "yes", "y", "on"}
-        excluded_tickers = list(getattr(self.settings, "reconcile_excluded_tickers", []) or [])
+        excluded_tickers = list(getattr(self.settings, "reconcile_excluded_tickers", []))
         if force_reinit and hasattr(self.gateway.repo, "reinitialize_agent_state_checkpoints"):
             logger.warning(
                 "[yellow]Force checkpoint reinit enabled[/yellow] env=ARENA_FORCE_SLEEVE_REINIT total_cash=%.0f",

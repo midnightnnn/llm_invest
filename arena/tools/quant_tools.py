@@ -1064,6 +1064,26 @@ class QuantTools:
         except Exception as exc:
             logger.debug("Investor flow fetch failed ticker=%s err=%s", token, str(exc)[:80])
 
+        # ── Short selling ratio (KOSPI only, best-effort) ──
+        short_sale: dict[str, Any] | None = None
+        try:
+            if token.isdigit() and len(token) == 6 and self._has_kospi_market():
+                ss_rows = self._ot().get_domestic_daily_short_sale(ticker=token)
+                if ss_rows:
+                    recent = ss_rows[:5]
+                    ratios = [float(r.get("ssts_vol_rlim") or 0) for r in recent]
+                    qtys = [float(r.get("ssts_cntg_qty") or 0) for r in recent]
+                    avg_ratio = round(sum(ratios) / len(ratios), 2) if ratios else 0
+                    latest_ratio = ratios[0] if ratios else 0
+                    latest_qty = int(qtys[0]) if qtys else 0
+                    short_sale = {
+                        "latest_ratio_pct": latest_ratio,
+                        "avg_5d_ratio_pct": avg_ratio,
+                        "latest_qty": latest_qty,
+                    }
+        except Exception as exc:
+            logger.debug("Short sale fetch failed ticker=%s err=%s", token, str(exc)[:80])
+
         result: dict[str, Any] = {
             "ticker": token,
             "price": round(last, 6),
@@ -1093,6 +1113,8 @@ class QuantTools:
             result["volume"] = volume_data
         if investor_flow is not None:
             result["investor_flow"] = investor_flow
+        if short_sale is not None:
+            result["short_sale"] = short_sale
         return result
 
     def technical_signals(
@@ -1250,23 +1272,47 @@ class QuantTools:
                     errors.append({"ticker": ticker, "error": "no financial ratio data"})
                     continue
                 latest = ratio_rows[0]
-                rows.append(
-                    {
-                        "ticker": ticker,
-                        "market": "kospi",
-                        "exchange": "KRX",
-                        "currency": "KRW",
-                        "eps": _to_float(latest.get("eps"), default=None),
-                        "bps": _to_float(latest.get("bps"), default=None),
-                        "sps": _to_float(latest.get("sps"), default=None),
-                        "roe": _to_float(latest.get("roe_val"), default=None),
-                        "debt_ratio": _to_float(latest.get("lblt_rate"), default=None),
-                        "reserve_ratio": _to_float(latest.get("rsrv_rate"), default=None),
-                        "operating_profit_growth": _to_float(latest.get("bsop_prfi_inrt"), default=None),
-                        "net_profit_growth": _to_float(latest.get("ntin_inrt"), default=None),
-                        "settlement_date": str(latest.get("stac_yymm", "")).strip(),
-                    }
-                )
+                row_data: dict[str, Any] = {
+                    "ticker": ticker,
+                    "market": "kospi",
+                    "exchange": "KRX",
+                    "currency": "KRW",
+                    "eps": _to_float(latest.get("eps"), default=None),
+                    "bps": _to_float(latest.get("bps"), default=None),
+                    "sps": _to_float(latest.get("sps"), default=None),
+                    "roe": _to_float(latest.get("roe_val"), default=None),
+                    "debt_ratio": _to_float(latest.get("lblt_rate"), default=None),
+                    "reserve_ratio": _to_float(latest.get("rsrv_rate"), default=None),
+                    "operating_profit_growth": _to_float(latest.get("bsop_prfi_inrt"), default=None),
+                    "net_profit_growth": _to_float(latest.get("ntin_inrt"), default=None),
+                    "settlement_date": str(latest.get("stac_yymm", "")).strip(),
+                }
+
+                # Analyst consensus (best-effort)
+                try:
+                    opinion_rows = client.get_domestic_invest_opinion(ticker=ticker)
+                    if opinion_rows:
+                        latest_op = opinion_rows[0]
+                        target_price = _to_float(latest_op.get("hts_goal_prc"), default=None)
+                        opinion = str(latest_op.get("invt_opnn") or "").strip()
+                        prev_close = _to_float(latest_op.get("stck_prdy_clpr"), default=None)
+                        gap_pct = _to_float(latest_op.get("nday_dprt"), default=None)
+                        if target_price or opinion:
+                            consensus: dict[str, Any] = {}
+                            if opinion:
+                                consensus["opinion"] = opinion
+                            if target_price:
+                                consensus["target_price"] = target_price
+                            if prev_close and target_price and prev_close > 0:
+                                consensus["upside_pct"] = round((target_price / prev_close - 1) * 100, 2)
+                            if gap_pct is not None:
+                                consensus["gap_pct"] = gap_pct
+                            consensus["reports"] = len(opinion_rows)
+                            row_data["consensus"] = consensus
+                except Exception:
+                    pass  # best-effort
+
+                rows.append(row_data)
             except Exception as exc:
                 errors.append({"ticker": ticker, "error": str(exc)[:240]})
 

@@ -63,7 +63,8 @@ class UIProvisioner:
         try:
             return bool(fetch_rows(sql, {"tenant_id": tenant}))
         except Exception:
-            return False
+            logger.warning("[yellow]Tenant existence check failed[/yellow] tenant=%s — refusing to guess", tenant)
+            raise
 
     def _choose_tenant_id(self, user_email: str) -> str:
         email = str(user_email or "").strip().lower()

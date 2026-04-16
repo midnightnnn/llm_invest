@@ -550,7 +550,7 @@ def run_memory_forgetting_tuner(
     previous_state = _load_previous_tuning_state(repo, tenant)
     previous_history = previous_state.get("history") if isinstance(previous_state.get("history"), dict) else {}
     previous_effective_mode = str(previous_state.get("effective_mode") or previous_state.get("mode") or "").strip().lower()
-    trading_mode = str(getattr(settings, "trading_mode", "paper") or "paper").strip().lower() or "paper"
+    trading_mode = getattr(settings, "trading_mode", "paper").strip().lower()
     tuning_enabled = memory_forgetting_tuning_enabled(active_policy)
     mode = memory_forgetting_tuning_mode(active_policy)
     lookback_days = memory_forgetting_tuning_lookback_days(active_policy)

@@ -458,7 +458,7 @@ def run_memory_relation_tuner(
     previous_state = _load_previous_state(repo, tenant)
     previous_history = previous_state.get("history") if isinstance(previous_state.get("history"), dict) else {}
     previous_versions = previous_state.get("versions") if isinstance(previous_state.get("versions"), dict) else {}
-    trading_mode = str(getattr(settings, "trading_mode", "paper") or "paper").strip().lower() or "paper"
+    trading_mode = getattr(settings, "trading_mode", "paper").strip().lower()
     evaluation_now = utc_now()
 
     mode = memory_graph_semantic_triples_mode(active_policy)

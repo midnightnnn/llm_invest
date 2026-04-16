@@ -106,7 +106,7 @@ def recompute_forgetting_scores(
     recompute_memory_forgetting_fields(
         repo,
         tenant_id=tenant_id,
-        trading_mode=str(getattr(settings, "trading_mode", "paper") or "paper").strip().lower() or "paper",
+        trading_mode=getattr(settings, "trading_mode", "paper").strip().lower(),
         default_decay_factor=memory_forgetting_default_decay_factor(active_policy),
         min_decay_multiplier=memory_forgetting_min_effective_score(active_policy),
         access_curve=memory_forgetting_access_curve(active_policy),
@@ -186,7 +186,7 @@ def run_memory_cleanup(
         "tenant_id": tenant,
         "enabled": enabled,
         "forgetting_enabled": forgetting_enabled,
-        "trading_mode": str(getattr(settings, "trading_mode", "paper") or "paper").strip().lower() or "paper",
+        "trading_mode": getattr(settings, "trading_mode", "paper").strip().lower(),
         "max_age_days": max_age_days,
         "min_score": min_score,
         "cutoff_ts": cutoff_ts.isoformat(),

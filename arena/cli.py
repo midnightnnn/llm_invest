@@ -282,7 +282,7 @@ def _dispatch_command(args: argparse.Namespace, parser: argparse.ArgumentParser)
         ),
         "smoke-thesis-compaction": lambda ns: cmd_smoke_thesis_compaction(
             str(getattr(ns, "cycle_id", "") or ""),
-            agent_ids=list(getattr(ns, "agent", []) or []),
+            agent_ids=list(getattr(ns, "agent", [])),
             timeout_seconds=int(getattr(ns, "timeout", 0) or 0),
             save=bool(getattr(ns, "save", False)),
         ),
@@ -303,22 +303,22 @@ def _dispatch_command(args: argparse.Namespace, parser: argparse.ArgumentParser)
             note=str(getattr(ns, "note", "") or ""),
         ),
         "backfill-tenant-markets": lambda ns: cmd_backfill_tenant_markets(
-            tenant_ids=list(getattr(ns, "tenant", []) or []),
+            tenant_ids=list(getattr(ns, "tenant", [])),
             updated_by=str(getattr(ns, "updated_by", "") or "cli-admin"),
         ),
         "enable-memory-forgetting": lambda ns: cmd_enable_memory_forgetting(
-            tenant_ids=list(getattr(ns, "tenant", []) or []),
+            tenant_ids=list(getattr(ns, "tenant", [])),
             updated_by=str(getattr(ns, "updated_by", "") or "cli-admin"),
         ),
         "run-memory-forgetting-tuner": lambda ns: cmd_run_memory_forgetting_tuner(
-            tenant_ids=list(getattr(ns, "tenant", []) or []),
+            tenant_ids=list(getattr(ns, "tenant", [])),
             updated_by=str(getattr(ns, "updated_by", "") or "cli-memory-tuner"),
         ),
         "extract-memory-relations": lambda ns: cmd_extract_memory_relations(
-            tenant_ids=list(getattr(ns, "tenant", []) or []),
+            tenant_ids=list(getattr(ns, "tenant", [])),
             limit=int(getattr(ns, "limit", 25) or 25),
             source_table=str(getattr(ns, "source_table", "") or ""),
-            event_types=list(getattr(ns, "event_type", []) or []),
+            event_types=list(getattr(ns, "event_type", [])),
             dry_run=bool(getattr(ns, "dry_run", False)),
             timeout_seconds=int(getattr(ns, "timeout", 0) or 0),
             provider=str(getattr(ns, "provider", "") or ""),

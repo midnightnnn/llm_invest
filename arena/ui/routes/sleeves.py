@@ -397,7 +397,7 @@ def register_sleeve_routes(app: FastAPI, *, deps: SleeveRouteDeps) -> None:
             recovery = StateRecoveryService(
                 settings=tenant_settings,
                 repo=deps.repo,
-                excluded_tickers=list(getattr(tenant_settings, "reconcile_excluded_tickers", []) or []),
+                excluded_tickers=list(getattr(tenant_settings, "reconcile_excluded_tickers", [])),
                 qty_tolerance=max(deps.float_env("ARENA_RECONCILE_QTY_TOLERANCE", 1e-9), 0.0),
                 cash_tolerance_krw=max(deps.float_env("ARENA_RECONCILE_CASH_TOLERANCE_KRW", 50_000.0), 0.0),
                 cash_reconciliation_enabled=str(os.getenv("ARENA_RECONCILE_CASH_ENABLED", "true")).strip().lower() in {"1", "true", "yes", "y", "on"},

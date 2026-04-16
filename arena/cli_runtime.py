@@ -169,7 +169,7 @@ def _apply_shared_research_gemini(
 
 def _reconcile_excluded_tickers(settings: Settings) -> list[str]:
     """Returns normalized reconciliation exclusions from runtime settings/env."""
-    configured = list(getattr(settings, "reconcile_excluded_tickers", []) or [])
+    configured = list(getattr(settings, "reconcile_excluded_tickers", []))
     if not configured:
         configured = _csv_env("ARENA_RECONCILE_EXCLUDED_TICKERS")
     out: list[str] = []

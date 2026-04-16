@@ -227,19 +227,19 @@ def apply_distribution_mode(settings: Settings) -> Settings:
 
 def effective_research_gemini_api_key(settings: Settings) -> str:
     """Returns the Gemini API key used for research generation."""
-    research_key = str(getattr(settings, "research_gemini_api_key", "") or "").strip()
+    research_key = getattr(settings, "research_gemini_api_key", "").strip()
     if research_key:
         return research_key
-    return str(getattr(settings, "gemini_api_key", "") or "").strip()
+    return getattr(settings, "gemini_api_key", "").strip()
 
 
 def research_generation_status(settings: Settings) -> dict[str, Any]:
     """Returns tenant-scoped Gemini research generation capability state."""
     enabled_by_config = bool(getattr(settings, "research_enabled", False))
-    has_gemini_key = bool(str(getattr(settings, "gemini_api_key", "") or "").strip())
+    has_gemini_key = bool(getattr(settings, "gemini_api_key", "").strip())
     has_research_gemini_key = bool(effective_research_gemini_api_key(settings))
-    research_source = str(getattr(settings, "research_gemini_source", "") or "").strip().lower()
-    research_source_tenant = str(getattr(settings, "research_gemini_source_tenant", "") or "").strip().lower()
+    research_source = getattr(settings, "research_gemini_source", "").strip().lower()
+    research_source_tenant = getattr(settings, "research_gemini_source_tenant", "").strip().lower()
     use_vertex = _to_bool(os.getenv("GOOGLE_GENAI_USE_VERTEXAI"), False)
     shared_source_tenant = str(os.getenv("ARENA_SHARED_RESEARCH_GEMINI_SOURCE_TENANT", "") or "").strip().lower()
     public_fallback_tenant = str(os.getenv("ARENA_PUBLIC_DEMO_TENANT", "") or shared_source_tenant or "").strip().lower()
@@ -295,7 +295,7 @@ def research_generation_status(settings: Settings) -> dict[str, Any]:
         "research_source": research_source,
         "research_source_tenant": research_source_tenant,
         "can_generate": code in {"enabled", "vertex_enabled", "shared_live_tenant"},
-        "model": str(getattr(settings, "research_gemini_model", "") or "").strip(),
+        "model": getattr(settings, "research_gemini_model", "").strip(),
         "message": message,
     }
 
@@ -724,7 +724,7 @@ def apply_runtime_overrides(settings: Settings, repo: Any, tenant_id: str) -> Se
     ]
     if runtime_excluded_tickers:
         merged: list[str] = []
-        for token in [*list(getattr(settings, "reconcile_excluded_tickers", []) or []), *runtime_excluded_tickers]:
+        for token in [*list(getattr(settings, "reconcile_excluded_tickers", [])), *runtime_excluded_tickers]:
             normalized = str(token).strip().upper()
             if normalized and normalized not in merged:
                 merged.append(normalized)
