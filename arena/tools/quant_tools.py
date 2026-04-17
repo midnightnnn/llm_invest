@@ -36,9 +36,11 @@ from arena.runtime_universe import resolve_runtime_universe
 from .allocation import (
     AllocationResult,
     apply_weight_constraints,
+    blend_forecast_mu,
     optimize_forecast_sharpe,
     optimize_hrp,
     optimize_max_sharpe,
+    recompute_stats,
 )
 from .screening import build_discovery_rows, momentum_scores
 from .sector_map import SECTOR_BY_TICKER
@@ -79,11 +81,18 @@ def _build_decision_summary(
             "confidence": "low",
         }
 
-    if not orders:
-        # No current portfolio context — suggest only.
+    if orders is None:
         return {
             "headline_code": "no_current_portfolio",
             "headline": "No current portfolio context; weights are suggestions only.",
+            "turnover": 0.0,
+            "confidence": "low",
+        }
+    if not orders:
+        # Portfolio already aligned with target — nothing to trade.
+        return {
+            "headline_code": "hold",
+            "headline": "Keep allocation unchanged; portfolio already aligned with target.",
             "turnover": 0.0,
             "confidence": "low",
         }
@@ -924,6 +933,7 @@ class QuantTools:
 
         degraded_reasons: list[str] = []
         forecast_coverage: float | None = None
+        blended_mu: np.ndarray | None = None  # set only when forecast optimizer is actually used
 
         if len(keep) == 1:
             # Single-name graceful path — no optimizer needed.
@@ -968,6 +978,9 @@ class QuantTools:
                         risk_free_rate=risk_free_rate,
                         mu_confidence=mu_confidence,
                     )
+                    blended_mu = blend_forecast_mu(
+                        keep, rets, predicted_mu, mu_confidence=mu_confidence,
+                    )
             elif strategy == "risk_parity":
                 result = optimize_hrp(keep, rets, risk_free_rate=risk_free_rate)
             else:
@@ -986,6 +999,9 @@ class QuantTools:
             )
 
         # Apply weight constraints (cap / floor / cash buffer) if requested.
+        # Only recompute stats when weights actually change — a non-binding
+        # constraint (e.g. max_weight=1.0) must preserve the optimizer's stats,
+        # which matters especially for forecast strategy (blended mu basis).
         constraints_applied: list[str] = []
         if any(x is not None for x in (max_weight, min_weight, cash_buffer)):
             constrained = apply_weight_constraints(
@@ -1001,14 +1017,32 @@ class QuantTools:
                     constraints_applied.append(f"min_weight={float(min_weight):.3f}")
                 if cash_buffer is not None:
                     constraints_applied.append(f"cash_buffer={float(cash_buffer):.3f}")
-            result = AllocationResult(
-                weights=constrained,
-                expected_return=result.expected_return,
-                volatility=result.volatility,
-                sharpe=result.sharpe,
-                strategy=result.strategy,
-            )
-            keep = [t for t in keep if t in constrained]
+
+                # Drop columns for tickers removed by min_weight, keep rets + blended_mu aligned.
+                dropped_idx = [i for i, t in enumerate(keep) if t not in constrained]
+                if dropped_idx and rets is not None:
+                    kept_idx = [i for i, t in enumerate(keep) if t in constrained]
+                    rets = rets[:, kept_idx]
+                    if blended_mu is not None:
+                        blended_mu = blended_mu[kept_idx]
+                    keep = [keep[i] for i in kept_idx]
+
+                if rets is not None and len(keep) > 0:
+                    new_ret, new_vol, new_sharpe = recompute_stats(
+                        keep, constrained, rets,
+                        risk_free_rate=risk_free_rate,
+                        mu_override=blended_mu,
+                    )
+                else:
+                    new_ret, new_vol, new_sharpe = result.expected_return, result.volatility, result.sharpe
+
+                result = AllocationResult(
+                    weights=constrained,
+                    expected_return=new_ret,
+                    volatility=new_vol,
+                    sharpe=new_sharpe,
+                    strategy=result.strategy,
+                )
 
         out = self._format_allocation(keep, result, rets=rets, mdd_days=mdd_days)
         out["data_quality"] = quality

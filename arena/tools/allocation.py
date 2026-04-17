@@ -57,6 +57,74 @@ def _to_daily_rf(risk_free_rate: float, days: int = TRADING_DAYS) -> float:
     return (1.0 + float(risk_free_rate)) ** (1.0 / float(days)) - 1.0
 
 
+def blend_forecast_mu(
+    tickers: list[str],
+    daily_returns: np.ndarray,
+    predicted_mu: dict[str, float],
+    *,
+    mu_confidence: float,
+    forecast_horizon: int = 20,
+) -> np.ndarray:
+    """Returns the blended mu vector used by optimize_forecast_sharpe.
+
+    Exposed so callers can recompute stats on constrained weights using the
+    same return basis the optimizer used, rather than historical-only mu.
+    """
+    x = np.asarray(daily_returns, dtype=float)
+    mu_hist = np.nanmean(x, axis=0)
+    conf = max(0.0, min(float(mu_confidence), 1.0))
+    horizon = max(1, int(forecast_horizon))
+    mu = np.array(mu_hist, dtype=float)
+    for i, t in enumerate(tickers):
+        if t not in predicted_mu:
+            continue
+        try:
+            period_ret = float(predicted_mu[t])
+        except (TypeError, ValueError):
+            continue
+        daily = (1.0 + period_ret) ** (1.0 / float(horizon)) - 1.0
+        mu[i] = (1.0 - conf) * mu_hist[i] + conf * daily
+    return mu
+
+
+def recompute_stats(
+    tickers: list[str],
+    weights: dict[str, float],
+    daily_returns: np.ndarray,
+    *,
+    risk_free_rate: float = 0.04,
+    mu_override: np.ndarray | None = None,
+) -> tuple[float, float, float]:
+    """Recomputes (expected_return, volatility, sharpe) for arbitrary weights.
+
+    Used when post-optimizer constraints (cap/floor/cash_buffer) alter weights,
+    so the reported stats match the actually-returned allocation.
+
+    Pass `mu_override` to recompute on a non-historical basis (e.g. the blended
+    forecast mu from blend_forecast_mu); otherwise historical mu is used.
+    """
+    x = np.asarray(daily_returns, dtype=float)
+    if x.ndim != 2 or x.shape[1] != len(tickers) or x.shape[1] == 0:
+        return 0.0, 0.0, 0.0
+    if mu_override is not None and np.asarray(mu_override).shape == (len(tickers),):
+        mu = np.asarray(mu_override, dtype=float)
+    else:
+        mu = np.nanmean(x, axis=0)
+    rf_daily = _to_daily_rf(risk_free_rate)
+    w = np.array([float(weights.get(t, 0.0)) for t in tickers], dtype=float)
+    if x.shape[1] == 1:
+        # np.cov on a single series is scalar; handle directly.
+        var = float(np.nanvar(x[:, 0], ddof=1)) if x.shape[0] > 1 else 0.0
+        ret = float(mu[0] * w[0])
+        vol = math.sqrt(max(var, 0.0)) * abs(float(w[0]))
+        sharpe = 0.0
+        if vol > 0:
+            sharpe = (ret - rf_daily) / vol
+        return ret, vol, float(sharpe)
+    cov = sanitize_cov(np.cov(np.nan_to_num(x, nan=0.0), rowvar=False))
+    return _portfolio_stats(w, mu, cov, rf_daily)
+
+
 def apply_weight_constraints(
     weights: dict[str, float],
     *,

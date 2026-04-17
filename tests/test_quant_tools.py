@@ -3,6 +3,8 @@ from __future__ import annotations
 import math
 from types import SimpleNamespace
 
+import pytest
+
 from arena.config import Settings
 from arena.tools.quant_tools import QuantTools
 
@@ -633,6 +635,105 @@ def test_optimize_portfolio_evidence_gaps_emitted() -> None:
     assert "some_tickers_excluded" in out.get("evidence_gaps", [])
     notes = out["validation_notes"]
     assert any("timing" in n.lower() for n in notes)
+
+
+def test_optimize_portfolio_binding_forecast_preserves_forecast_basis() -> None:
+    # Binding constraints on a forecast allocation must recompute stats on the
+    # forecast-blended mu basis — not historical mu — so the reported
+    # expected_return_daily/sharpe_daily stay coherent with the optimizer.
+    import numpy as np
+    from arena.tools.allocation import blend_forecast_mu, recompute_stats
+
+    repo = FakeRepo()
+    qt = QuantTools(repo=repo, settings=_settings())
+    out = qt.optimize_portfolio(
+        ["AAPL", "MSFT", "PLTD"],
+        strategy="forecast",
+        mu_confidence=1.0,
+        lookback_days=20,
+        max_weight=0.40,  # binding: PLTD would otherwise dominate
+    )
+    assert "constraints_applied" in out
+
+    tickers = out["tickers"]
+    closes = repo.get_daily_closes(tickers=tickers, lookback_days=21)
+    aligned = np.stack([np.array(closes[t], dtype=float) for t in tickers], axis=1)
+    rets = (aligned[1:] / aligned[:-1]) - 1.0
+    predicted_mu = {p["ticker"]: p["exp_return_period"] for p in repo._preds}
+    mu_blended = blend_forecast_mu(tickers, rets, predicted_mu, mu_confidence=1.0)
+
+    exp_ret_forecast, vol_forecast, sharpe_forecast = recompute_stats(
+        tickers, out["weights"], rets, mu_override=mu_blended,
+    )
+    exp_ret_hist, _, _ = recompute_stats(tickers, out["weights"], rets)
+
+    # Output must match forecast-basis recompute, not historical-only.
+    assert out["expected_return_daily"] == pytest.approx(exp_ret_forecast, abs=1e-6)
+    assert out["volatility_daily"] == pytest.approx(vol_forecast, abs=1e-6)
+    assert out["sharpe_daily"] == pytest.approx(sharpe_forecast, abs=1e-3)
+    # Forecast vs historical basis differ materially in this fixture.
+    assert abs(exp_ret_forecast - exp_ret_hist) > 1e-6
+
+
+def test_optimize_portfolio_non_binding_constraint_preserves_forecast_stats() -> None:
+    # When a constraint is passed but does not bind (e.g. max_weight=1.0),
+    # weights must be unchanged AND stats must match the unconstrained call.
+    # Matters most for strategy='forecast' whose mu blends historical + forecast.
+    qt = QuantTools(repo=FakeRepo(), settings=_settings())
+    base = qt.optimize_portfolio(["AAPL", "MSFT"], strategy="forecast", lookback_days=20, mu_confidence=0.3)
+    held = qt.optimize_portfolio(
+        ["AAPL", "MSFT"], strategy="forecast", lookback_days=20, mu_confidence=0.3,
+        max_weight=1.0,  # non-binding
+    )
+    assert held["weights"] == base["weights"]
+    assert held["expected_return_daily"] == base["expected_return_daily"]
+    assert held["sharpe_daily"] == base["sharpe_daily"]
+    assert held["volatility_daily"] == base["volatility_daily"]
+    assert "constraints_applied" not in held
+
+
+def test_optimize_portfolio_cash_buffer_recomputes_stats() -> None:
+    qt = QuantTools(repo=FakeRepo(), settings=_settings())
+    base = qt.optimize_portfolio(["AAPL", "MSFT"], strategy="risk_parity", lookback_days=20)
+    buffered = qt.optimize_portfolio(
+        ["AAPL", "MSFT"], strategy="risk_parity", lookback_days=20, cash_buffer=0.50,
+    )
+    # Weights scaled down, expected_return + volatility should scale accordingly.
+    assert sum(buffered["weights"].values()) == pytest.approx(0.50, abs=1e-6)
+    # Rounded to 6 decimals in the output — tolerate rounding noise.
+    assert buffered["expected_return_daily"] == pytest.approx(base["expected_return_daily"] * 0.5, abs=1e-6)
+    assert buffered["volatility_daily"] == pytest.approx(base["volatility_daily"] * 0.5, abs=1e-6)
+
+
+def test_optimize_portfolio_min_weight_preserves_backtest_mdd() -> None:
+    qt = QuantTools(repo=FakeRepo(), settings=_settings())
+    out = qt.optimize_portfolio(
+        ["AAPL", "MSFT", "TSLA"],
+        strategy="risk_parity",
+        lookback_days=20,
+        min_weight=0.40,  # drops at least one name
+    )
+    # Shape mismatch would silently drop backtest_mdd — assert it survives.
+    assert "backtest_mdd" in out
+    assert out["backtest_mdd"]["value"] <= 0.0
+
+
+def test_optimize_portfolio_aligned_portfolio_headline_is_hold() -> None:
+    qt = QuantTools(repo=FakeRepo(), settings=_settings())
+    # First compute the optimizer's target weights with no context.
+    suggestion = qt.optimize_portfolio(["AAPL", "MSFT"], strategy="risk_parity", lookback_days=20)
+    target = suggestion["weights"]
+    # Now set a portfolio exactly matching the target weights (quantity * avg_price = weight).
+    qt.set_context({
+        "target_market": "nasdaq",
+        "portfolio": {"positions": {
+            "AAPL": {"quantity": target["AAPL"] * 100.0, "avg_price_krw": 1.0},
+            "MSFT": {"quantity": target["MSFT"] * 100.0, "avg_price_krw": 1.0},
+        }},
+    })
+    out = qt.optimize_portfolio(["AAPL", "MSFT"], strategy="risk_parity", lookback_days=20)
+    assert out["rebalance_orders"] == []
+    assert out["decision_summary"]["headline_code"] == "hold"
 
 
 def test_optimize_portfolio_single_usable_ticker() -> None:
