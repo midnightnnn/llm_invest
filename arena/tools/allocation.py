@@ -57,6 +57,54 @@ def _to_daily_rf(risk_free_rate: float, days: int = TRADING_DAYS) -> float:
     return (1.0 + float(risk_free_rate)) ** (1.0 / float(days)) - 1.0
 
 
+def apply_weight_constraints(
+    weights: dict[str, float],
+    *,
+    max_weight: float | None = None,
+    min_weight: float | None = None,
+    cash_buffer: float | None = None,
+) -> dict[str, float]:
+    """Applies drop-min / cap-max / cash-buffer to a weight dict.
+
+    Semantics:
+        - min_weight: drop names below threshold, renormalize remainder to sum=1.
+        - max_weight: cap each name at threshold; redistribute excess pro-rata to
+          uncapped names, iterating until stable.
+        - cash_buffer: scale final weights so equities sum to (1 - cash_buffer).
+    Any of the arguments may be None to skip that constraint.
+    """
+    w = {str(k): float(v) for k, v in weights.items() if float(v) > 0.0}
+
+    if min_weight is not None and float(min_weight) > 0.0:
+        thresh = float(min_weight)
+        w = {k: v for k, v in w.items() if v >= thresh}
+        s = sum(w.values())
+        if s > 0:
+            w = {k: v / s for k, v in w.items()}
+
+    if max_weight is not None and float(max_weight) > 0.0 and w:
+        cap = float(max_weight)
+        for _ in range(len(w) + 2):
+            over = [k for k, v in w.items() if v > cap + 1e-12]
+            if not over:
+                break
+            excess = sum(w[k] - cap for k in over)
+            for k in over:
+                w[k] = cap
+            uncapped = {k: v for k, v in w.items() if v < cap - 1e-12}
+            base = sum(uncapped.values())
+            if base <= 0:
+                break  # all names at cap — sum may stay < 1, caller must cope
+            for k in list(uncapped.keys()):
+                w[k] += excess * (uncapped[k] / base)
+
+    if cash_buffer is not None and float(cash_buffer) > 0.0:
+        scale = max(0.0, 1.0 - float(cash_buffer))
+        w = {k: v * scale for k, v in w.items()}
+
+    return w
+
+
 def _normalize_weights(w: np.ndarray) -> np.ndarray:
     w = np.asarray(w, dtype=float).reshape(-1)
     w = np.nan_to_num(w, nan=0.0, posinf=0.0, neginf=0.0)

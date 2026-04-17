@@ -34,6 +34,8 @@ from arena.open_trading.exchange_codes import (
 from arena.runtime_universe import resolve_runtime_universe
 
 from .allocation import (
+    AllocationResult,
+    apply_weight_constraints,
     optimize_forecast_sharpe,
     optimize_hrp,
     optimize_max_sharpe,
@@ -55,6 +57,83 @@ def _to_float(value: Any, default: float | None = 0.0) -> float | None:
         return float(text)
     except (TypeError, ValueError):
         return default
+
+
+def _build_decision_summary(
+    *,
+    strategy: str,
+    orders: list[dict] | None,
+    weights: dict[str, float],
+) -> dict[str, Any]:
+    """Rule-based canonical summary from strategy + orders.
+
+    No LLM-style phrasing: fixed vocabulary (Increase/Reduce/Tilt toward/Keep).
+    Outputs headline_code for deterministic test assertions.
+    """
+    if strategy == "single_name" and weights:
+        ticker = next(iter(weights))
+        return {
+            "headline_code": "single_name",
+            "headline": f"Only one usable ticker; allocation set to {ticker}=1.0.",
+            "turnover": 0.0,
+            "confidence": "low",
+        }
+
+    if not orders:
+        # No current portfolio context — suggest only.
+        return {
+            "headline_code": "no_current_portfolio",
+            "headline": "No current portfolio context; weights are suggestions only.",
+            "turnover": 0.0,
+            "confidence": "low",
+        }
+
+    buys = [o for o in orders if o.get("side") == "BUY"]
+    sells = [o for o in orders if o.get("side") == "SELL"]
+    buy_total = sum(float(o.get("target_weight", 0.0)) - float(o.get("current_weight", 0.0)) for o in buys)
+    sell_total = sum(float(o.get("current_weight", 0.0)) - float(o.get("target_weight", 0.0)) for o in sells)
+    turnover = round((buy_total + sell_total) / 2.0, 4)
+
+    top_buy = max(
+        buys,
+        key=lambda o: float(o.get("target_weight", 0.0)) - float(o.get("current_weight", 0.0)),
+        default=None,
+    )
+    top_sell = max(
+        sells,
+        key=lambda o: float(o.get("current_weight", 0.0)) - float(o.get("target_weight", 0.0)),
+        default=None,
+    )
+
+    if turnover < 0.03:
+        code = "hold"
+        headline = "Keep allocation mostly unchanged; expected benefit does not justify turnover."
+    elif top_buy and top_sell:
+        code = "rotate"
+        headline = f"Increase {top_buy['ticker']} and reduce {top_sell['ticker']}."
+    elif top_buy:
+        code = "accumulate"
+        headline = f"Tilt toward {top_buy['ticker']}."
+    elif top_sell:
+        code = "trim"
+        headline = f"Reduce {top_sell['ticker']}."
+    else:
+        code = "hold"
+        headline = "Keep allocation mostly unchanged."
+
+    if turnover >= 0.10:
+        confidence = "high"
+    elif turnover >= 0.03:
+        confidence = "medium"
+    else:
+        confidence = "low"
+
+    return {
+        "headline_code": code,
+        "headline": headline,
+        "turnover": turnover,
+        "confidence": confidence,
+    }
 
 
 def _has_any_value(payload: dict[str, Any], *keys: str) -> bool:
@@ -520,14 +599,34 @@ class QuantTools:
             self.ot_client = OpenTradingClient(self.settings)
         return self.ot_client
 
-    def _load_aligned_returns(self, tickers: list[str], *, lookback_days: int) -> tuple[list[str], np.ndarray] | tuple[None, dict]:
-        """Loads aligned close series and converts to daily returns matrix."""
-        tickers = self._normalize_tickers(tickers)
-        if len(tickers) < 2:
-            return None, {"error": "need at least 2 tickers"}
+    def _load_aligned_returns(
+        self, tickers: list[str], *, lookback_days: int
+    ) -> tuple[list[str], np.ndarray | None, dict]:
+        """Loads aligned close series and returns (keep, rets, quality).
+
+        quality fields:
+            status: "ok" | "partial" | "unusable"
+            requested_tickers: int
+            usable_tickers: int
+            excluded: [{ticker, reason}] where reason in {"no_data", "insufficient_history"}
+            min_history_days: int (0 when unusable)
+        """
+        normalized = self._normalize_tickers(tickers)
+        requested = len(normalized)
+
+        excluded: list[dict[str, str]] = []
+        if requested == 0:
+            quality = {
+                "status": "unusable",
+                "requested_tickers": 0,
+                "usable_tickers": 0,
+                "excluded": excluded,
+                "min_history_days": 0,
+            }
+            return [], None, quality
 
         closes = self.repo.get_daily_closes(
-            tickers=tickers,
+            tickers=normalized,
             lookback_days=int(lookback_days) + 1,
             sources=daily_history_sources(self._sources()),
         )
@@ -535,21 +634,40 @@ class QuantTools:
         aligned: list[list[float]] = []
         keep: list[str] = []
         min_len: int | None = None
-        for t in tickers:
+        for t in normalized:
             series = closes.get(t, [])
+            if not series:
+                excluded.append({"ticker": t, "reason": "no_data"})
+                continue
             if len(series) < 10:
+                excluded.append({"ticker": t, "reason": "insufficient_history"})
                 continue
             if min_len is None or len(series) < min_len:
                 min_len = len(series)
             keep.append(t)
             aligned.append(series)
 
-        if not keep or min_len is None or min_len < 10:
-            return None, {"error": "insufficient history in BigQuery for selected tickers"}
+        usable = len(keep)
+        if usable == 0 or min_len is None or min_len < 10:
+            quality = {
+                "status": "unusable",
+                "requested_tickers": requested,
+                "usable_tickers": 0,
+                "excluded": excluded,
+                "min_history_days": 0,
+            }
+            return [], None, quality
 
         trimmed = np.stack([np.array(s[-min_len:], dtype=float) for s in aligned], axis=1)
         rets = (trimmed[1:, :] / trimmed[:-1, :]) - 1.0
-        return keep, rets
+        quality = {
+            "status": "ok" if usable == requested else "partial",
+            "requested_tickers": requested,
+            "usable_tickers": usable,
+            "excluded": excluded,
+            "min_history_days": int(min_len),
+        }
+        return keep, rets, quality
 
     def _format_allocation(self, tickers: list[str], result, rets=None, mdd_days: int = 60) -> dict:
         weights = {k: round(float(v), 4) for k, v in result.weights.items()}
@@ -572,20 +690,21 @@ class QuantTools:
                 if abs(delta_w) < 0.005:
                     continue
                 if delta_w > 0:
-                    side = "BUY"
-                    size_ratio = round(delta_w, 4)
+                    orders.append({
+                        "ticker": t, "side": "BUY",
+                        "current_weight": round(cur_w, 4), "target_weight": round(tgt_w, 4),
+                    })
                 else:
-                    size_ratio = round(abs(delta_w) / cur_w, 4) if cur_w > 0 else 0.0
-                    side = "SELL"
-                orders.append({
-                    "ticker": t, "side": side, "size_ratio": size_ratio,
-                    "current_weight": round(cur_w, 4), "target_weight": round(tgt_w, 4),
-                })
+                    sell_ratio = round(abs(delta_w) / cur_w, 4) if cur_w > 0 else 0.0
+                    orders.append({
+                        "ticker": t, "side": "SELL", "sell_ratio": sell_ratio,
+                        "current_weight": round(cur_w, 4), "target_weight": round(tgt_w, 4),
+                    })
             # Currently held but not in target → SELL all
             for t, cur_w in cur_weights.items():
                 if t not in weights and cur_w > 0.005:
                     orders.append({
-                        "ticker": t, "side": "SELL", "size_ratio": 1.0,
+                        "ticker": t, "side": "SELL", "sell_ratio": 1.0,
                         "current_weight": round(cur_w, 4), "target_weight": 0.0,
                     })
             out["rebalance_orders"] = orders
@@ -608,6 +727,11 @@ class QuantTools:
             except Exception:
                 pass
 
+        out["decision_summary"] = _build_decision_summary(
+            strategy=out["strategy"],
+            orders=out.get("rebalance_orders"),
+            weights=weights,
+        )
         return out
 
     def _discovery_inputs(
@@ -765,11 +889,17 @@ class QuantTools:
         mu_confidence: float = 1.0,
         forecast_mode: str | None = None,
         regime_scale: float = 1.0,
+        max_weight: float | None = None,
+        min_weight: float | None = None,
+        cash_buffer: float | None = None,
     ) -> dict:
         """Runs portfolio optimization with backtest MDD.
 
         strategy: 'sharpe' (Max-Sharpe Markowitz), 'risk_parity' (HRP), 'forecast' (ML forecast-enhanced).
         regime_scale: 0.5-1.0, scales all weights down for risk-off environments (default 1.0 = no scaling).
+        max_weight: per-name cap (e.g. 0.35). Excess redistributed pro-rata to uncapped names.
+        min_weight: drops names below threshold (e.g. 0.02), renormalizes remainder.
+        cash_buffer: final cash reserve in [0, 1]; equities scaled to (1 - cash_buffer).
         """
         strategy = str(strategy or "sharpe").strip().lower()
         if strategy not in {"sharpe", "risk_parity", "forecast"}:
@@ -782,42 +912,72 @@ class QuantTools:
             int(lookback_days),
         )
 
-        keep, rets_or_err = self._load_aligned_returns(tickers, lookback_days=lookback_days)
-        if keep is None:
-            return rets_or_err
+        keep, rets, quality = self._load_aligned_returns(tickers, lookback_days=lookback_days)
 
-        if strategy == "sharpe":
-            result = optimize_max_sharpe(keep, rets_or_err, risk_free_rate=risk_free_rate)
-        elif strategy == "risk_parity":
-            result = optimize_hrp(keep, rets_or_err, risk_free_rate=risk_free_rate)
+        if quality["status"] == "unusable":
+            return {
+                "status": "unusable",
+                "strategy_requested": strategy,
+                "data_quality": quality,
+                "error": "no usable tickers after data quality filter",
+            }
+
+        degraded_reasons: list[str] = []
+        forecast_coverage: float | None = None
+
+        if len(keep) == 1:
+            # Single-name graceful path — no optimizer needed.
+            ticker = keep[0]
+            daily_rets = rets[:, 0] if rets is not None else np.array([], dtype=float)
+            exp_ret = float(np.nanmean(daily_rets)) if daily_rets.size else 0.0
+            vol = float(np.nanstd(daily_rets, ddof=1)) if daily_rets.size > 1 else 0.0
+            sharpe = 0.0
+            if vol > 0:
+                rf_daily = (1.0 + float(risk_free_rate)) ** (1.0 / 252.0) - 1.0
+                sharpe = (exp_ret - rf_daily) / vol
+            result = AllocationResult(
+                weights={ticker: 1.0},
+                expected_return=exp_ret,
+                volatility=vol,
+                sharpe=sharpe,
+                strategy="single_name",
+            )
+            degraded_reasons.append("single_usable_ticker")
         else:
-            # forecast strategy
-            mode = self._forecast_mode(forecast_mode)
-            table_id = str(self.settings.forecast_table or "").strip() or None
-            rows = self.repo.get_predicted_returns(
-                tickers=keep, limit=len(keep), mode=mode, table_id=table_id,
-            )
+            if strategy == "forecast":
+                mode = self._forecast_mode(forecast_mode)
+                table_id = str(self.settings.forecast_table or "").strip() or None
+                rows = self.repo.get_predicted_returns(
+                    tickers=keep, limit=len(keep), mode=mode, table_id=table_id,
+                )
+                predicted_mu: dict[str, float] = {}
+                if rows:
+                    for r in rows:
+                        t = str(r.get("ticker", "")).strip().upper()
+                        try:
+                            predicted_mu[t] = float(r.get("exp_return_period"))
+                        except (KeyError, TypeError, ValueError):
+                            continue
+                forecast_coverage = len(predicted_mu) / float(len(keep))
+                if forecast_coverage < 0.5:
+                    degraded_reasons.append("forecast_coverage_insufficient")
+                    result = optimize_hrp(keep, rets, risk_free_rate=risk_free_rate)
+                else:
+                    result = optimize_forecast_sharpe(
+                        keep, rets, predicted_mu,
+                        risk_free_rate=risk_free_rate,
+                        mu_confidence=mu_confidence,
+                    )
+            elif strategy == "risk_parity":
+                result = optimize_hrp(keep, rets, risk_free_rate=risk_free_rate)
+            else:
+                result = optimize_max_sharpe(keep, rets, risk_free_rate=risk_free_rate)
 
-            predicted_mu: dict[str, float] = {}
-            if rows:
-                for r in rows:
-                    t = str(r.get("ticker", "")).strip().upper()
-                    try:
-                        predicted_mu[t] = float(r.get("exp_return_period"))
-                    except (KeyError, TypeError, ValueError):
-                        continue
-
-            result = optimize_forecast_sharpe(
-                keep, rets_or_err, predicted_mu,
-                risk_free_rate=risk_free_rate,
-                mu_confidence=mu_confidence,
-            )
-
-        # Apply regime scaling to weights if requested
+        # Apply regime scaling to weights if requested.
         rs = max(0.3, min(float(regime_scale), 1.0))
         if rs < 1.0:
             scaled = {k: v * rs for k, v in result.weights.items()}
-            result = result._replace(weights=scaled) if hasattr(result, "_replace") else type(result)(
+            result = AllocationResult(
                 weights=scaled,
                 expected_return=result.expected_return,
                 volatility=result.volatility,
@@ -825,9 +985,57 @@ class QuantTools:
                 strategy=getattr(result, "strategy", "unknown"),
             )
 
-        out = self._format_allocation(keep, result, rets=rets_or_err, mdd_days=mdd_days)
+        # Apply weight constraints (cap / floor / cash buffer) if requested.
+        constraints_applied: list[str] = []
+        if any(x is not None for x in (max_weight, min_weight, cash_buffer)):
+            constrained = apply_weight_constraints(
+                result.weights,
+                max_weight=max_weight,
+                min_weight=min_weight,
+                cash_buffer=cash_buffer,
+            )
+            if constrained != result.weights:
+                if max_weight is not None:
+                    constraints_applied.append(f"max_weight={float(max_weight):.3f}")
+                if min_weight is not None:
+                    constraints_applied.append(f"min_weight={float(min_weight):.3f}")
+                if cash_buffer is not None:
+                    constraints_applied.append(f"cash_buffer={float(cash_buffer):.3f}")
+            result = AllocationResult(
+                weights=constrained,
+                expected_return=result.expected_return,
+                volatility=result.volatility,
+                sharpe=result.sharpe,
+                strategy=result.strategy,
+            )
+            keep = [t for t in keep if t in constrained]
+
+        out = self._format_allocation(keep, result, rets=rets, mdd_days=mdd_days)
+        out["data_quality"] = quality
+        if forecast_coverage is not None:
+            out["forecast_coverage"] = round(float(forecast_coverage), 4)
+        if degraded_reasons:
+            out["status"] = "degraded"
+            out["degraded_reasons"] = degraded_reasons
+        else:
+            out["status"] = "ok"
+        out["strategy_requested"] = strategy
+        if constraints_applied:
+            out["constraints_applied"] = constraints_applied
         if rs < 1.0:
             out["regime_scale"] = round(rs, 4)
+
+        evidence_gaps: list[str] = []
+        if quality.get("excluded"):
+            evidence_gaps.append("some_tickers_excluded")
+        if forecast_coverage is not None and forecast_coverage < 1.0:
+            evidence_gaps.append("forecast_coverage_partial")
+        if evidence_gaps:
+            out["evidence_gaps"] = evidence_gaps
+        out["validation_notes"] = [
+            "Entry timing not evaluated by this tool.",
+            "Backtest MDD is target-basket drawdown over the last window, not walk-forward.",
+        ]
         self._log_tool_result("optimize_portfolio", [out] if isinstance(out, dict) else out, key_fields=["ticker", "weight", "expected_return"])
         return out
 

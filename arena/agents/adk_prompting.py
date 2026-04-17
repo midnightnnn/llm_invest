@@ -133,9 +133,10 @@ EXECUTION_FORMAT = """\
 ## 주문 규칙
 - 정수(whole-share) 단위의 주식 주문만 지원합니다. 소수점 단위 주식(fractional shares)은 주문하지 마십시오.
 - side는 BUY, SELL, HOLD 중 하나입니다.
-- size_ratio는 0.0~1.0 범위입니다. BUY는 sleeve_equity 대비 목표 익스포저의 공격성, SELL은 보유 수량 대비 매도 비율을 의미합니다.
-- size_ratio=1은 무조건적인 풀매수(all-in)가 아니라 가장 강한 확신의 설정치입니다. 최종 체결 가능 수량은 런타임 포트폴리오와 브로커 제약에 따라 조정될 수 있습니다.
-- BUY는 예상 주식 수(sleeve_equity * size_ratio / price_per_share)가 최소 1 이상이 되도록 설정하십시오. 1 미만이면 해당 티커는 HOLD를 사용하십시오.
+- BUY 주문은 target_weight를 사용합니다. target_weight는 sleeve_equity 대비 해당 종목의 최종 목표 비중이며 0.0~1.0 범위입니다.
+- SELL 주문은 sell_ratio를 사용합니다. sell_ratio는 현재 보유 수량 대비 매도 비율이며 0.0~1.0 범위입니다.
+- BUY에는 target_weight만 포함하고, SELL에는 sell_ratio만 포함하십시오.
+- BUY는 예상 추가 주식 수(max(sleeve_equity * target_weight - current_position_value, 0) / price_per_share)가 최소 1 이상이 되도록 설정하십시오. 1 미만이면 해당 티커는 HOLD를 사용하십시오.
 - sleeve_state.buy_blocked가 true이거나 order_budget.max_buy_notional_krw가 0 또는 0에 가까우면 BUY를 내지 말고 SELL 또는 HOLD만 사용하십시오.
 - orders 배열에는 여러 종목의 주문을 넣을 수 있습니다. 거래가 필요 없으면 빈 배열 []로 반환하십시오.
 
@@ -147,7 +148,7 @@ EXECUTION_FORMAT = """\
     {
       "ticker": "AAPL",
       "side": "BUY",
-      "size_ratio": 0.15,
+      "target_weight": 0.15,
       "rationale": "매수 근거",
       "strategy_refs": ["momentum", "earnings_growth"]
     }

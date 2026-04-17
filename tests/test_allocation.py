@@ -91,3 +91,34 @@ def test_optimize_forecast_sharpe_responds_to_mu_when_scipy_available() -> None:
     predicted_mu = {"UP": 0.25, "DOWN": -0.05}
     res = alloc.optimize_forecast_sharpe(tickers, rets, predicted_mu, mu_confidence=1.0)
     assert float(res.weights["UP"]) > float(res.weights["DOWN"])
+
+
+def test_apply_weight_constraints_max_weight_redistributes_excess() -> None:
+    w = {"A": 0.60, "B": 0.25, "C": 0.15}
+    out = alloc.apply_weight_constraints(w, max_weight=0.35)
+    assert out["A"] == pytest.approx(0.35, abs=1e-9)
+    assert sum(out.values()) == pytest.approx(1.0, abs=1e-9)
+    assert out["B"] > 0.25 and out["C"] > 0.15  # absorbed excess
+
+
+def test_apply_weight_constraints_min_weight_drops_small_names() -> None:
+    w = {"A": 0.50, "B": 0.30, "C": 0.18, "D": 0.02}
+    out = alloc.apply_weight_constraints(w, min_weight=0.05)
+    assert "D" not in out
+    assert sum(out.values()) == pytest.approx(1.0, abs=1e-9)
+
+
+def test_apply_weight_constraints_cash_buffer_scales_sum() -> None:
+    w = {"A": 0.6, "B": 0.4}
+    out = alloc.apply_weight_constraints(w, cash_buffer=0.10)
+    assert sum(out.values()) == pytest.approx(0.90, abs=1e-9)
+    # proportions preserved
+    assert out["A"] / out["B"] == pytest.approx(0.6 / 0.4, abs=1e-9)
+
+
+def test_apply_weight_constraints_combined_order() -> None:
+    w = {"A": 0.70, "B": 0.20, "C": 0.08, "D": 0.02}
+    out = alloc.apply_weight_constraints(w, max_weight=0.40, min_weight=0.05, cash_buffer=0.10)
+    assert "D" not in out
+    assert max(out.values()) <= 0.40 * 0.90 + 1e-9
+    assert sum(out.values()) == pytest.approx(0.90, abs=1e-9)

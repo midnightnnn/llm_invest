@@ -544,7 +544,13 @@ def test_optimize_portfolio_forecast_heuristic_fallback() -> None:
     repo._preds = []  # no BQ forecast data
     qt = QuantTools(repo=repo, settings=_settings())
     out = qt.optimize_portfolio(["AAPL", "MSFT"], strategy="forecast", lookback_days=20)
-    assert out["strategy"] == "forecast_max_sharpe"
+    # With zero forecast coverage, tool degrades to HRP instead of silently
+    # running forecast_max_sharpe with empty predicted_mu.
+    assert out["strategy"] == "hrp"
+    assert out["status"] == "degraded"
+    assert "forecast_coverage_insufficient" in out["degraded_reasons"]
+    assert out["forecast_coverage"] == 0.0
+    assert out["strategy_requested"] == "forecast"
     w = out["weights"]
     assert set(w.keys()) == {"AAPL", "MSFT"}
     assert abs(sum(w.values()) - 1.0) < 1e-6
@@ -554,6 +560,95 @@ def test_optimize_portfolio_invalid_strategy() -> None:
     qt = QuantTools(repo=FakeRepo(), settings=_settings())
     out = qt.optimize_portfolio(["AAPL", "MSFT"], strategy="invalid_xyz")
     assert "error" in out
+
+
+def test_optimize_portfolio_partial_excludes_short_history() -> None:
+    class _Repo(FakeRepo):
+        def get_daily_closes(self, *, tickers, lookback_days, sources=None):
+            out = super().get_daily_closes(tickers=tickers, lookback_days=lookback_days, sources=sources)
+            out["TSLA"] = [100.0, 101.0, 102.0]  # insufficient (<10)
+            return out
+
+    qt = QuantTools(repo=_Repo(), settings=_settings())
+    out = qt.optimize_portfolio(["AAPL", "MSFT", "TSLA"], strategy="risk_parity", lookback_days=20)
+    assert out["status"] == "ok"
+    assert out["data_quality"]["status"] == "partial"
+    assert out["data_quality"]["usable_tickers"] == 2
+    assert any(
+        e["ticker"] == "TSLA" and e["reason"] == "insufficient_history"
+        for e in out["data_quality"]["excluded"]
+    )
+    assert set(out["weights"].keys()) == {"AAPL", "MSFT"}
+
+
+def test_optimize_portfolio_unusable_returns_graceful_error() -> None:
+    class _Repo(FakeRepo):
+        def get_daily_closes(self, *, tickers, lookback_days, sources=None):
+            return {}  # no data for any ticker
+
+    qt = QuantTools(repo=_Repo(), settings=_settings())
+    out = qt.optimize_portfolio(["AAPL", "MSFT"], strategy="sharpe", lookback_days=20)
+    assert out["status"] == "unusable"
+    assert out["data_quality"]["status"] == "unusable"
+    assert out["data_quality"]["usable_tickers"] == 0
+    assert len(out["data_quality"]["excluded"]) == 2
+    assert "error" in out
+
+
+def test_optimize_portfolio_decision_summary_without_context_is_suggestion() -> None:
+    qt = QuantTools(repo=FakeRepo(), settings=_settings())
+    out = qt.optimize_portfolio(["AAPL", "MSFT"], strategy="risk_parity", lookback_days=20)
+    ds = out["decision_summary"]
+    assert ds["headline_code"] == "no_current_portfolio"
+    assert ds["confidence"] == "low"
+    assert ds["turnover"] == 0.0
+
+
+def test_optimize_portfolio_decision_summary_rotate() -> None:
+    qt = QuantTools(repo=FakeRepo(), settings=_settings())
+    qt.set_context({
+        "target_market": "nasdaq",
+        "portfolio": {"positions": {"TSLA": {"quantity": 1.0, "avg_price_krw": 100.0}}},
+    })
+    out = qt.optimize_portfolio(["AAPL", "MSFT", "TSLA"], strategy="risk_parity", lookback_days=20)
+    ds = out["decision_summary"]
+    # Starting from 100% TSLA, HRP spreads across AAPL/MSFT → rotate (both BUY and SELL).
+    assert ds["headline_code"] == "rotate"
+    assert ds["confidence"] in {"medium", "high"}
+    assert ds["turnover"] > 0.03
+    # Canonical vocabulary — no hype words.
+    for bad in ("strong", "guaranteed", "best", "must"):
+        assert bad not in ds["headline"].lower()
+
+
+def test_optimize_portfolio_evidence_gaps_emitted() -> None:
+    class _Repo(FakeRepo):
+        def get_daily_closes(self, *, tickers, lookback_days, sources=None):
+            out = super().get_daily_closes(tickers=tickers, lookback_days=lookback_days, sources=sources)
+            out["TSLA"] = [100.0, 101.0]  # insufficient
+            return out
+
+    qt = QuantTools(repo=_Repo(), settings=_settings())
+    out = qt.optimize_portfolio(["AAPL", "MSFT", "TSLA"], strategy="forecast", lookback_days=20)
+    assert "some_tickers_excluded" in out.get("evidence_gaps", [])
+    notes = out["validation_notes"]
+    assert any("timing" in n.lower() for n in notes)
+
+
+def test_optimize_portfolio_single_usable_ticker() -> None:
+    class _Repo(FakeRepo):
+        def get_daily_closes(self, *, tickers, lookback_days, sources=None):
+            out = super().get_daily_closes(tickers=tickers, lookback_days=lookback_days, sources=sources)
+            out.pop("MSFT", None)  # only AAPL usable
+            return out
+
+    qt = QuantTools(repo=_Repo(), settings=_settings())
+    out = qt.optimize_portfolio(["AAPL", "MSFT"], strategy="sharpe", lookback_days=20)
+    assert out["status"] == "degraded"
+    assert "single_usable_ticker" in out["degraded_reasons"]
+    assert out["strategy"] == "single_name"
+    assert out["weights"] == {"AAPL": 1.0}
+    assert out["data_quality"]["usable_tickers"] == 1
 
 
 def test_forecast_returns_reads_predictions() -> None:

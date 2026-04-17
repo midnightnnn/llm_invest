@@ -277,6 +277,10 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _clamped_unit_float(value: Any) -> float:
+    return max(0.0, min(_safe_float(value), 1.0))
+
+
 def _resolve_exchange_identity(
     settings: Settings,
     *,
@@ -319,7 +323,8 @@ def _resolve_order_quantity(
     settings: Settings,
     *,
     side_raw: str,
-    size_ratio: float,
+    target_weight: float,
+    sell_ratio: float,
     price: float,
     sleeve_equity: float,
     holdings: dict[str, Any],
@@ -331,7 +336,7 @@ def _resolve_order_quantity(
     hold_qty = _safe_float(position.get("quantity") if isinstance(position, dict) else 0.0)
 
     if side_raw == "SELL":
-        target_qty = max(hold_qty * size_ratio, 0.0)
+        target_qty = max(hold_qty * sell_ratio, 0.0)
         if hold_qty > 0:
             target_qty = min(target_qty, hold_qty)
         if settings.trading_mode == "live":
@@ -339,15 +344,15 @@ def _resolve_order_quantity(
             return float(int(min(math.ceil(target_qty), max(hold_qty, 0.0))))
         return round(max(target_qty, 0.0001), 4)
 
-    budget = min(sleeve_equity * size_ratio, settings.max_order_krw * 0.95)
+    current_value = max(hold_qty, 0.0) * float(price)
+    max_position_value = max(float(settings.max_position_ratio) * float(sleeve_equity), 0.0)
+    target_value = max(float(sleeve_equity) * float(target_weight), 0.0)
+    target_value = min(target_value, max_position_value)
+    budget = max(target_value - current_value, 0.0)
+    budget = min(budget, settings.max_order_krw * 0.95)
     max_buy_notional = _safe_float(order_budget.get("max_buy_notional_krw"))
     if max_buy_notional > 0:
         budget = min(budget, max_buy_notional * 0.98)
-
-    current_value = max(hold_qty, 0.0) * float(price)
-    max_position_value = max(float(settings.max_position_ratio) * float(sleeve_equity), 0.0)
-    max_add_by_position = max(max_position_value - current_value, 0.0)
-    budget = min(budget, max_add_by_position * 0.98)
 
     if budget <= 0:
         return 0.0
@@ -400,7 +405,8 @@ def build_order_intents(
 
         side_raw = str(order.get("side", "HOLD")).strip().upper()
         ticker = str(order.get("ticker", "")).strip().upper()
-        size_ratio = max(0.0, min(_safe_float(order.get("size_ratio")), 1.0))
+        target_weight = _clamped_unit_float(order.get("target_weight")) if side_raw == "BUY" else 0.0
+        sell_ratio = _clamped_unit_float(order.get("sell_ratio")) if side_raw == "SELL" else 0.0
         rationale = str(order.get("rationale", ""))[:1200]
         strategy_refs = order.get("strategy_refs", [])
         if not isinstance(strategy_refs, list):
@@ -408,7 +414,8 @@ def build_order_intents(
 
         if ticker:
             tickers_mentioned.add(ticker)
-        if side_raw not in {"BUY", "SELL"} or not ticker or size_ratio <= 0:
+        sizing_value = target_weight if side_raw == "BUY" else sell_ratio
+        if side_raw not in {"BUY", "SELL"} or not ticker or sizing_value <= 0:
             continue
 
         market_row = row_map.get(ticker)
@@ -441,7 +448,8 @@ def build_order_intents(
         quantity = _resolve_order_quantity(
             settings,
             side_raw=side_raw,
-            size_ratio=size_ratio,
+            target_weight=target_weight,
+            sell_ratio=sell_ratio,
             price=price,
             sleeve_equity=sleeve_equity,
             holdings=holdings,

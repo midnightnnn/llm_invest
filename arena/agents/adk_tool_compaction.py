@@ -359,111 +359,6 @@ def _compact_tool_result_for_prompt(
             }
         if core.get("benchmark") is not None:
             compacted["benchmark"] = _benchmark_for_prompt(core.get("benchmark"))
-        allocation = core.get("hrp_allocation")
-        legacy_reference = False
-        if not isinstance(allocation, dict):
-            allocation = core.get("hrp_reference")
-            legacy_reference = isinstance(allocation, dict)
-        if not isinstance(allocation, dict):
-            allocation = core.get("rebalance_plan")
-            legacy_reference = isinstance(allocation, dict)
-        if isinstance(allocation, dict):
-            raw_weights = allocation.get("hrp_weights")
-            if not isinstance(raw_weights, list):
-                raw_weights = allocation.get("target_weights")
-            compact_weights = _compact_rows(
-                raw_weights,
-                fields=(
-                    "ticker",
-                    "current_weight",
-                    "hrp_weight",
-                    "target_weight",
-                    "delta_weight",
-                    "relative_to_current",
-                    "direction",
-                ),
-                limit=6,
-            )
-            for row in compact_weights:
-                if row.get("hrp_weight") is None and row.get("target_weight") is not None:
-                    row["hrp_weight"] = row.pop("target_weight")
-                else:
-                    row.pop("target_weight", None)
-                if row.get("relative_to_current") is None and row.get("direction") is not None:
-                    direction = str(row.pop("direction") or "").strip().lower()
-                    row["relative_to_current"] = {
-                        "increase": "higher",
-                        "decrease": "lower",
-                        "maintain": "similar",
-                    }.get(direction, direction)
-                else:
-                    row.pop("direction", None)
-
-            compact_allocation: dict[str, Any] = {
-                "status": allocation.get("status"),
-                "strategy": allocation.get("strategy"),
-                "hrp_cash_weight": allocation.get("hrp_cash_weight", allocation.get("target_cash_weight")),
-                "hrp_concentration_top3": allocation.get(
-                    "hrp_concentration_top3",
-                    allocation.get("target_concentration_top3"),
-                ),
-                "hrp_hhi": allocation.get("hrp_hhi", allocation.get("target_hhi")),
-                "hrp_weights": compact_weights,
-            }
-            deltas = _compact_rows(
-                allocation.get("weight_deltas") or allocation.get("reference_adjustments"),
-                fields=(
-                    "ticker",
-                    "relative_to_current",
-                    "direction",
-                    "delta_weight",
-                    "current_weight",
-                    "hrp_weight",
-                    "target_weight",
-                ),
-                limit=8,
-            )
-            if not deltas and legacy_reference:
-                legacy_orders = _compact_rows(
-                    allocation.get("rebalance_orders"),
-                    fields=("ticker", "side", "current_weight", "target_weight"),
-                    limit=8,
-                )
-                for order in legacy_orders:
-                    side = str(order.pop("side", "") or "").strip().upper()
-                    relative = "higher" if side == "BUY" else ("lower" if side == "SELL" else "")
-                    if relative:
-                        order["relative_to_current"] = relative
-                    deltas.append(order)
-            for row in deltas:
-                if row.get("hrp_weight") is None and row.get("target_weight") is not None:
-                    row["hrp_weight"] = row.pop("target_weight")
-                else:
-                    row.pop("target_weight", None)
-                if row.get("relative_to_current") is None and row.get("direction") is not None:
-                    direction = str(row.pop("direction") or "").strip().lower()
-                    row["relative_to_current"] = {
-                        "increase": "higher",
-                        "decrease": "lower",
-                        "maintain": "similar",
-                    }.get(direction, direction)
-                else:
-                    row.pop("direction", None)
-            compact_allocation["weight_deltas"] = deltas
-            if allocation.get("projected_mdd") is not None:
-                compact_allocation["projected_mdd"] = allocation.get("projected_mdd")
-            if allocation.get("reason") is not None:
-                compact_allocation["reason"] = allocation.get("reason")
-            if allocation.get("notes"):
-                compact_allocation["notes"] = list(allocation.get("notes") or [])[:3]
-            small_deltas = allocation.get("small_deltas") or allocation.get("skipped_adjustments")
-            if small_deltas:
-                compact_allocation["small_deltas"] = _compact_rows(
-                    small_deltas,
-                    fields=("ticker", "reason", "delta_weight"),
-                    limit=6,
-                )
-            compacted["hrp_allocation"] = compact_allocation
         if core.get("error") is not None:
             compacted["error"] = core.get("error")
     elif token == "trade_performance" and isinstance(core, dict):
@@ -507,7 +402,7 @@ def _compact_tool_result_for_prompt(
             compacted["allocations"] = ordered[:12]
         orders = _compact_rows(
             core.get("rebalance_orders"),
-            fields=("ticker", "side", "size_ratio", "current_weight", "target_weight"),
+            fields=("ticker", "side", "target_weight", "sell_ratio", "current_weight"),
             limit=12,
         )
         if orders:

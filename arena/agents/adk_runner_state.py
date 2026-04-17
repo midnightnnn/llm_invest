@@ -375,11 +375,12 @@ def record_candidate_orders(
             continue
         ticker = str(order.get("ticker") or "").strip().upper()
         side = str(order.get("side") or "").strip().upper()
+        sizing_key = "target_weight" if side == "BUY" else "sell_ratio"
         try:
-            size_ratio = float(order.get("size_ratio") or 0.0)
+            sizing_value = float(order.get(sizing_key) or 0.0)
         except (TypeError, ValueError):
-            size_ratio = 0.0
-        if not ticker or side not in ORDERABLE_SIDES or size_ratio <= 0:
+            sizing_value = 0.0
+        if not ticker or side not in ORDERABLE_SIDES or sizing_value <= 0:
             continue
         if ticker not in candidate_ledger:
             continue

@@ -80,13 +80,14 @@ def _base_entries(
         _tool(
             tool_id="portfolio_diagnosis",
             description=(
-                "Diagnoses current holdings, concentration, risk contribution, MDD, and benchmark excess return. "
-                "Includes HRP risk allocation weights and deltas for existing positions."
+                "Diagnoses current holdings: concentration (HHI), per-ticker risk contribution, portfolio MDD, "
+                "weighted momentum/volatility, and benchmark excess return. Pure diagnosis — no allocation advice. "
+                "Use optimize_portfolio afterwards if you need rebalancing weights."
             ),
             category="quant",
             tier="core",
             label_ko="포트폴리오 진단",
-            description_ko="현재 보유 종목의 집중도, 개별 리스크 기여도, 최대 낙폭(MDD), 벤치마크 대비 초과수익을 종합 진단합니다. HRP(Hierarchical Risk Parity) 기반 리스크 배분 가중치와 현재 비중 대비 델타를 함께 제공합니다.",
+            description_ko="현재 보유 종목의 집중도(HHI), 개별 리스크 기여도, 최대 낙폭(MDD), 가중 모멘텀/변동성, 벤치마크 대비 초과수익을 종합 진단합니다. 진단 전용 — 리밸런싱이 필요하면 optimize_portfolio를 사용하세요.",
             sort_order=40,
         ),
         _tool(
@@ -127,15 +128,22 @@ def _base_entries(
         _tool(
             tool_id="optimize_portfolio",
             description=(
-                "Given a basket of tickers, computes mathematically optimal allocation weights and generates ready-to-execute rebalance orders. "
-                "Strategies: 'sharpe', 'risk_parity', and 'forecast'. Includes backtest MDD. "
-                "Optional regime_scale (0.3-1.0) scales all weights down for risk-off environments."
+                "Answers one question: how much of each ticker to hold. "
+                "Computes target weights for a basket (current holdings + new candidates) and emits ready-to-execute "
+                "rebalance orders (BUY target_weight / SELL sell_ratio). strategy='forecast' blends the 7-model ML ensemble into weight "
+                "optimization; 'sharpe' = max-Sharpe Markowitz; 'risk_parity' = HRP. "
+                "Gracefully degrades: tickers with insufficient history are excluded (reported in data_quality.excluded); "
+                "forecast strategy falls back to HRP when coverage<50%; a single usable ticker returns weight=1.0. "
+                "Optional constraints — max_weight (per-name cap, e.g. 0.35), min_weight (drop floor, e.g. 0.02), "
+                "cash_buffer (0.0-0.5 reserve). regime_scale (0.3-1.0) scales weights down for risk-off. "
+                "Returns: weights, rebalance_orders, backtest_mdd, data_quality (status/excluded), status "
+                "(ok/degraded/unusable), decision_summary (headline_code + turnover + confidence), evidence_gaps."
             ),
             category="quant",
             tier="optional",
             callable=qt.optimize_portfolio,
             label_ko="포트폴리오 최적화",
-            description_ko="후보 종목 바스켓을 입력하면 수학적 최적 배분 비중을 계산하고, 현재 포지션 기준 리밸런스 주문을 생성합니다. 샤프 비율 극대화(sharpe), 리스크 패리티(risk_parity), 수익률 예측 기반(forecast) 전략을 지원하며, 백테스트 MDD도 함께 제공합니다. regime_scale(0.3~1.0)로 리스크오프 환경에서 비중을 일괄 축소할 수 있습니다.",
+            description_ko="한 가지 질문에 답합니다: 각 종목을 얼마나 담을지. 보유+후보 바스켓의 목표 비중과 리밸런스 주문(BUY/SELL+비중)을 생성합니다. strategy='forecast'(7-모델 ML 앙상블 반영), 'sharpe'(샤프 극대화), 'risk_parity'(HRP). 데이터 품질이 나쁘면 graceful degrade — 히스토리 부족 종목은 data_quality.excluded에 리포트, forecast coverage<50%면 HRP로 fallback, 단일 종목만 usable하면 weight=1.0. 제약 옵션: max_weight(종목당 상한, 예 0.35), min_weight(하한 drop, 예 0.02), cash_buffer(현금 유보 0.0~0.5). regime_scale(0.3~1.0) 리스크오프 축소. 출력: weights, rebalance_orders, backtest_mdd, data_quality, status(ok/degraded/unusable), decision_summary(headline_code+turnover+confidence), evidence_gaps.",
             sort_order=120,
         ),
         _tool(

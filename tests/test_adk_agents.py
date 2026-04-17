@@ -475,7 +475,7 @@ def test_build_order_intents_defaults_single_market_us_exchange() -> None:
             {
                 "ticker": "AAPL",
                 "side": "BUY",
-                "size_ratio": 0.5,
+                "target_weight": 0.5,
                 "rationale": "single-market default exchange",
             }
         ],
@@ -496,6 +496,52 @@ def test_build_order_intents_defaults_single_market_us_exchange() -> None:
     assert len(intents) == 1
     assert intents[0].exchange_code == "NASD"
     assert intents[0].instrument_id == "NASD:AAPL"
+
+
+def test_build_order_intents_buy_target_weight_only_adds_shortfall() -> None:
+    settings = load_settings()
+    settings.trading_mode = "paper"
+    settings.kis_target_market = "nasdaq"
+    settings.max_order_krw = 2_000_000.0
+    settings.max_position_ratio = 1.0
+
+    intents, _ = build_order_intents(
+        repo=_RepoForAdkGenerate(),
+        settings=settings,
+        agent_id="gpt",
+        sleeve_capital_krw=2_000_000.0,
+        cycle_id="cycle_order_target_weight",
+        context={
+            "portfolio": {
+                "cash_krw": 1_480_000.0,
+                "total_equity_krw": 2_000_000.0,
+                "positions": {"AAPL": {"quantity": 4.0}},
+            },
+            "order_budget": {"max_buy_notional_krw": 2_000_000.0},
+        },
+        orders=[
+            {
+                "ticker": "AAPL",
+                "side": "BUY",
+                "target_weight": 0.5,
+                "rationale": "raise to target weight",
+            }
+        ],
+        row_map={
+            "AAPL": {
+                "ticker": "AAPL",
+                "exchange_code": "NASD",
+                "instrument_id": "NASD:AAPL",
+                "close_price_krw": 130000.0,
+                "close_price_native": 100.0,
+                "quote_currency": "USD",
+                "fx_rate_used": 1300.0,
+            }
+        },
+    )
+
+    assert len(intents) == 1
+    assert intents[0].quantity == 3.6923
 
 
 def test_resolve_order_price_multi_market_infers_usd_from_exchange_identity() -> None:
@@ -545,7 +591,7 @@ def test_build_order_intents_multi_market_defaults_korean_exchange() -> None:
             {
                 "ticker": "005930",
                 "side": "BUY",
-                "size_ratio": 0.5,
+                "target_weight": 0.5,
                 "rationale": "combo-market KRX inference",
             }
         ],
@@ -592,13 +638,13 @@ def test_build_order_intents_collects_feedback_events() -> None:
             {
                 "ticker": "AAPL",
                 "side": "BUY",
-                "size_ratio": 0.5,
+                "target_weight": 0.5,
                 "rationale": "build intent",
             },
             {
                 "ticker": "TSLA",
                 "side": "BUY",
-                "size_ratio": 0.3,
+                "target_weight": 0.3,
                 "rationale": "missing price",
             },
         ],
@@ -654,7 +700,7 @@ def test_build_order_intents_live_sell_rounds_up_small_position() -> None:
             {
                 "ticker": "005930",
                 "side": "SELL",
-                "size_ratio": 0.1,
+                "sell_ratio": 0.1,
                 "rationale": "small live trim",
             }
         ],
@@ -799,8 +845,8 @@ def test_candidate_ledger_tracks_order_and_execution_funnel() -> None:
 
     runner.record_candidate_orders(
         [
-            {"ticker": "MSFT", "side": "BUY", "size_ratio": 0.2},
-            {"ticker": "AAPL", "side": "BUY", "size_ratio": 0.1},
+            {"ticker": "MSFT", "side": "BUY", "target_weight": 0.2},
+            {"ticker": "AAPL", "side": "BUY", "target_weight": 0.1},
         ]
     )
     runner.record_candidate_order_feedback(
@@ -1025,13 +1071,7 @@ def test_portfolio_diagnosis_returns_derived_fields_not_raw_portfolio_echo() -> 
     assert "mdd" in out
     assert out["benchmark"]["ticker"] == "QQQ"
     assert "rebalance_plan" not in out
-    assert out["hrp_allocation"]["status"] == "ready"
-    assert out["hrp_allocation"]["strategy"] == "hrp"
-    assert out["hrp_allocation"]["hrp_cash_weight"] == pytest.approx(0.10, abs=1e-6)
-    assert sum(row["hrp_weight"] for row in out["hrp_allocation"]["hrp_weights"]) == pytest.approx(0.90, abs=1e-6)
-    assert out["hrp_allocation"]["weight_deltas"]
-    assert all("side" not in row for row in out["hrp_allocation"]["weight_deltas"])
-    assert all("size_ratio" not in row for row in out["hrp_allocation"]["weight_deltas"])
+    assert "hrp_allocation" not in out
 
 
 def test_portfolio_diagnosis_aligns_benchmark_period_with_current_sleeve_return(monkeypatch) -> None:
@@ -1147,7 +1187,7 @@ def test_portfolio_diagnosis_logs_warning_when_mdd_calculation_fails(caplog) -> 
     assert "portfolio diagnosis MDD calculation failed" in caplog.text
 
 
-def test_compact_portfolio_diagnosis_includes_hrp_allocation_summary() -> None:
+def test_compact_portfolio_diagnosis_no_hrp_allocation() -> None:
     out = _compact_tool_result_for_prompt(
         "portfolio_diagnosis",
         {
@@ -1184,32 +1224,10 @@ def test_compact_portfolio_diagnosis_includes_hrp_allocation_summary() -> None:
                     "alpha_definition": "simple excess return: agent_return - benchmark return_krw; not risk-adjusted alpha",
                 },
             },
-            "hrp_allocation": {
-                "status": "ready",
-                "strategy": "hrp",
-                "hrp_cash_weight": 0.10,
-                "hrp_concentration_top3": 0.90,
-                "hrp_hhi": 0.28,
-                "hrp_weights": [
-                    {"ticker": "AAPL", "current_weight": 0.52, "hrp_weight": 0.45, "delta_weight": -0.07, "relative_to_current": "lower"},
-                    {"ticker": "MSFT", "current_weight": 0.28, "hrp_weight": 0.45, "delta_weight": 0.17, "relative_to_current": "higher"},
-                ],
-                "weight_deltas": [
-                    {"ticker": "AAPL", "relative_to_current": "lower", "delta_weight": -0.07, "current_weight": 0.52, "hrp_weight": 0.45},
-                    {"ticker": "MSFT", "relative_to_current": "higher", "delta_weight": 0.17, "current_weight": 0.28, "hrp_weight": 0.45},
-                ],
-                "projected_mdd": {"days": 252, "value": -0.08},
-            },
         },
     )
 
-    assert "rebalance_plan" not in out
-    assert out["hrp_allocation"]["strategy"] == "hrp"
-    assert out["hrp_allocation"]["hrp_cash_weight"] == 0.10
-    assert len(out["hrp_allocation"]["hrp_weights"]) == 2
-    assert len(out["hrp_allocation"]["weight_deltas"]) == 2
-    assert all("side" not in row for row in out["hrp_allocation"]["weight_deltas"])
-    assert all("size_ratio" not in row for row in out["hrp_allocation"]["weight_deltas"])
+    assert "hrp_allocation" not in out
     assert "alpha_vs_benchmark" not in out["benchmark"]
     assert out["benchmark"]["excess_return_vs_benchmark"] == -0.06
     assert "not risk-adjusted alpha" in out["benchmark"]["alpha_definition"]
@@ -1449,7 +1467,7 @@ class _FakeRunner:
                     {
                         "ticker": "AAPL",
                         "side": "BUY",
-                        "size_ratio": 0.5,
+                        "target_weight": 0.5,
                         "rationale": "fx repricing",
                     }
                 ],
@@ -1473,7 +1491,7 @@ class _FakeKospiRunner(_FakeRunner):
                     {
                         "ticker": "025860",
                         "side": "BUY",
-                        "size_ratio": 0.2,
+                        "target_weight": 0.2,
                         "rationale": "momentum continuation",
                     }
                 ],

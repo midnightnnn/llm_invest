@@ -852,7 +852,6 @@ class _ContextTools:
                         str(exc),
                     )
 
-        out["hrp_allocation"] = self._build_hrp_allocation(weights)
         return out
 
     # ── Trade performance ────────────────────────────────────────────
