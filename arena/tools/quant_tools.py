@@ -47,7 +47,29 @@ from .sector_map import SECTOR_BY_TICKER
 
 logger = logging.getLogger(__name__)
 
+_RECOMMEND_OPPORTUNITY_MAX_POOL = 500
 
+
+def _opportunity_selection_limits(
+    *,
+    top_n: int,
+    max_candidates: int | None,
+) -> tuple[int, int, str]:
+    """Returns global and per-profile rank limits for opportunity selection."""
+    try:
+        top = int(top_n)
+    except (TypeError, ValueError):
+        top = 8
+    top = max(1, min(top, 20))
+
+    if max_candidates is not None:
+        try:
+            requested = int(max_candidates)
+        except (TypeError, ValueError):
+            requested = top
+        return max(top, min(max(1, requested), _RECOMMEND_OPPORTUNITY_MAX_POOL)), top, "explicit"
+
+    return top, top, "ranked_union"
 
 
 def _to_float(value: Any, default: float | None = 0.0) -> float | None:
@@ -1051,7 +1073,7 @@ class QuantTools:
         top_n: int = 8,
         *,
         buckets: list[str] | None = None,
-        max_candidates: int = 20,
+        max_candidates: int | None = None,
         include_watchlist: bool = True,
         max_score_age_hours: int = 30,
     ) -> dict[str, Any]:
@@ -1067,24 +1089,44 @@ class QuantTools:
             "max_score_age_hours": max_score_age_hours,
             "warnings": [],
         }
+        bucket_tokens = [
+            str(bucket or "").strip().lower()
+            for bucket in (buckets or [])
+            if str(bucket or "").strip()
+        ]
+        bucket_tokens = list(dict.fromkeys(bucket_tokens))
+        global_limit, per_profile_limit, selection_mode = _opportunity_selection_limits(
+            top_n=top_n,
+            max_candidates=max_candidates,
+        )
+        diagnostics["selection_scope"] = {
+            "mode": selection_mode,
+            "requested_max_candidates": max_candidates,
+            "global_limit": global_limit,
+            "per_profile_limit": per_profile_limit,
+            "requested_buckets": bucket_tokens,
+        }
         learned_rows: list[dict[str, Any]] = []
         loader = getattr(self.repo, "latest_opportunity_ranker_scores", None)
         if callable(loader):
             try:
                 learned_rows = loader(
-                    limit=max(1, min(int(max_candidates), 500)),
+                    limit=global_limit,
                     max_age_hours=max(1, min(int(max_score_age_hours), 24 * 14)),
+                    buckets=bucket_tokens or None,
+                    per_profile_limit=per_profile_limit,
                 ) or []
             except Exception as exc:
                 diagnostics["warnings"].append(f"latest_opportunity_ranker_scores failed: {str(exc)[:160]}")
         else:
             diagnostics["warnings"].append("latest_opportunity_ranker_scores unavailable")
+        diagnostics["selection_scope"]["loaded_rows"] = len(learned_rows)
 
         if learned_rows:
             out = self._recommend_opportunities_from_learned_rows(
                 learned_rows,
                 top_n=top_n,
-                buckets=buckets,
+                buckets=bucket_tokens,
                 include_watchlist=include_watchlist,
                 diagnostics=diagnostics,
             )

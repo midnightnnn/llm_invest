@@ -1566,9 +1566,15 @@ class MarketStore:
         *,
         tickers: list[str] | None = None,
         profiles: list[str] | None = None,
+        buckets: list[str] | None = None,
+        per_profile_limit: int | None = None,
         limit: int = 50,
         max_age_hours: int = 30,
     ) -> list[dict[str, Any]]:
+        profile_limit = 0
+        if per_profile_limit is not None:
+            profile_limit = max(0, min(int(per_profile_limit), 100))
+        max_return_rows = min(500, max(1, min(int(limit), 500)) + profile_limit * 8)
         batch_filters = [
             "computed_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @max_age_hours HOUR)",
         ]
@@ -1578,6 +1584,8 @@ class MarketStore:
         params: dict[str, Any] = {
             "limit": max(1, min(int(limit), 500)),
             "max_age_hours": max(1, min(int(max_age_hours), 24 * 14)),
+            "per_profile_limit": profile_limit,
+            "max_return_rows": max_return_rows,
         }
         if tickers:
             tokens = [str(t).strip().upper() for t in tickers if str(t).strip()]
@@ -1591,6 +1599,12 @@ class MarketStore:
                 batch_filters.append("profile IN UNNEST(@profiles)")
                 row_filters.append("s.profile IN UNNEST(@profiles)")
                 params["profiles"] = list(dict.fromkeys(profile_tokens))
+        if buckets:
+            bucket_tokens = [str(b).strip().lower() for b in buckets if str(b).strip()]
+            if bucket_tokens:
+                batch_filters.append("bucket IN UNNEST(@buckets)")
+                row_filters.append("s.bucket IN UNNEST(@buckets)")
+                params["buckets"] = list(dict.fromkeys(bucket_tokens))
 
         batch_where = "WHERE " + " AND ".join(batch_filters)
         row_where = "WHERE " + " AND ".join(row_filters)
@@ -1614,11 +1628,25 @@ class MarketStore:
             PARTITION BY s.ticker
             ORDER BY s.recommendation_rank ASC, s.recommendation_score DESC
           ) = 1
+        ),
+        ranked AS (
+          SELECT
+            d.*,
+            ROW_NUMBER() OVER (
+              ORDER BY d.recommendation_rank ASC, d.recommendation_score DESC, d.ticker
+            ) AS global_rn,
+            ROW_NUMBER() OVER (
+              PARTITION BY d.profile
+              ORDER BY d.recommendation_rank ASC, d.recommendation_score DESC, d.ticker
+            ) AS profile_rn
+          FROM dedup d
         )
-        SELECT *
-        FROM dedup
+        SELECT * EXCEPT(global_rn, profile_rn)
+        FROM ranked
+        WHERE global_rn <= @limit
+           OR (@per_profile_limit > 0 AND profile_rn <= @per_profile_limit)
         ORDER BY recommendation_rank ASC, recommendation_score DESC, ticker
-        LIMIT @limit
+        LIMIT @max_return_rows
         """
         return self.session.fetch_rows(sql, params)
 

@@ -120,7 +120,10 @@ def _base_entries(
                 "lowvol, sentiment, forecast, RSI/MA/Bollinger, EP/BP/SP/ROE/growth/safety). "
                 "Today's score = sum(predicted_IC_i × signal_i). Returns aggressive/balanced/"
                 "defensive/value/tactical groups with per-signal contributions and model "
-                "confidence. Surfaces status='unusable' when prep is stale — no silent fallback."
+                "confidence. Final recommendations are global top_n by learned rank; profile "
+                "context is fetched separately with per-profile rank windows. Pass "
+                "max_candidates only when manually widening the global read. Surfaces "
+                "status='unusable' when prep is stale — no silent fallback."
             ),
             category="quant",
             tier="optional",

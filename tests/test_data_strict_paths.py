@@ -556,7 +556,14 @@ def test_refresh_signal_daily_values_uses_point_in_time_sources() -> None:
 def test_latest_opportunity_ranker_scores_reads_fresh_latest_batch() -> None:
     store = _make_market_store([[{"ticker": "AAPL", "recommendation_score": 0.2}]])
 
-    rows = store.latest_opportunity_ranker_scores(tickers=["AAPL"], profiles=["aggressive"], limit=3, max_age_hours=12)
+    rows = store.latest_opportunity_ranker_scores(
+        tickers=["AAPL"],
+        profiles=["aggressive"],
+        buckets=["momentum"],
+        per_profile_limit=2,
+        limit=3,
+        max_age_hours=12,
+    )
 
     assert rows[0]["ticker"] == "AAPL"
     sql, params = store.session.call_pairs[-1]
@@ -564,7 +571,13 @@ def test_latest_opportunity_ranker_scores_reads_fresh_latest_batch() -> None:
     assert "latest_batch" in sql
     assert "s.ticker IN UNNEST(@tickers)" in sql
     assert "s.profile IN UNNEST(@profiles)" in sql
+    assert "s.bucket IN UNNEST(@buckets)" in sql
+    assert "profile_rn <= @per_profile_limit" in sql
+    assert "global_rn <= @limit" in sql
     assert params["max_age_hours"] == 12
+    assert params["buckets"] == ["momentum"]
+    assert params["per_profile_limit"] == 2
+    assert params["max_return_rows"] == 19
 
 
 def test_insert_opportunity_ranker_scores_latest_appends_json_rows() -> None:

@@ -1486,7 +1486,14 @@ def test_compact_tool_result_recommend_opportunities_keeps_validation_fields() -
                 "score_policy": {
                     "version": "heuristic_ranker_v1",
                     "score_formula": "0.40*screen_rank_score + ...",
-                }
+                },
+                "selection_scope": {
+                    "mode": "ranked_union",
+                    "global_limit": 8,
+                    "per_profile_limit": 8,
+                    "loaded_rows": 73,
+                    "requested_buckets": ["value"],
+                },
             },
         },
     )
@@ -1499,6 +1506,9 @@ def test_compact_tool_result_recommend_opportunities_keeps_validation_fields() -
     assert out["recommendations"][0]["score_components"]["forecast"] == 0.5
     assert out["optimizer"]["weights"] == {"PBR": 0.18}
     assert out["score_policy"]["version"] == "heuristic_ranker_v1"
+    assert out["selection_scope"]["global_limit"] == 8
+    assert out["selection_scope"]["per_profile_limit"] == 8
+    assert out["selection_scope"]["loaded_rows"] == 73
 
 
 def test_build_memory_query_recommend_opportunities_mentions_profiles_and_tickers() -> None:

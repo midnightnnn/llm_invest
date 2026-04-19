@@ -512,8 +512,19 @@ def test_screen_market_value_bucket_prefers_snapshot_valuation() -> None:
 
 def test_recommend_opportunities_uses_precomputed_learned_scores() -> None:
     class _Repo(FakeRepo):
-        def latest_opportunity_ranker_scores(self, *, limit=50, max_age_hours=30, tickers=None, profiles=None):
-            _ = (limit, max_age_hours, tickers, profiles)
+        def __init__(self):
+            super().__init__()
+            self.last_ranker_kwargs = None
+
+        def latest_opportunity_ranker_scores(self, *, limit=50, max_age_hours=30, tickers=None, profiles=None, buckets=None, per_profile_limit=None):
+            self.last_ranker_kwargs = {
+                "limit": limit,
+                "max_age_hours": max_age_hours,
+                "tickers": tickers,
+                "profiles": profiles,
+                "buckets": buckets,
+                "per_profile_limit": per_profile_limit,
+            }
             return [
                 {
                     "as_of_date": "2026-04-17",
@@ -536,7 +547,8 @@ def test_recommend_opportunities_uses_precomputed_learned_scores() -> None:
                 }
             ]
 
-    qt = QuantTools(repo=_Repo(), settings=_settings())
+    repo = _Repo()
+    qt = QuantTools(repo=repo, settings=_settings())
 
     out = qt.recommend_opportunities(top_n=3)
 
@@ -545,6 +557,58 @@ def test_recommend_opportunities_uses_precomputed_learned_scores() -> None:
     assert out["recommendations"][0]["ticker"] == "MSFT"
     assert out["recommendations"][0]["score_source"] == "learned"
     assert out["recommendations"][0]["predicted_excess_return_20d"] == 0.032
+    assert repo.last_ranker_kwargs["limit"] == 3
+    assert repo.last_ranker_kwargs["per_profile_limit"] == 3
+    assert out["diagnostics"]["selection_scope"]["mode"] == "ranked_union"
+    assert out["diagnostics"]["selection_scope"]["global_limit"] == 3
+    assert out["diagnostics"]["selection_scope"]["per_profile_limit"] == 3
+    assert out["diagnostics"]["selection_scope"]["loaded_rows"] == 1
+
+
+def test_recommend_opportunities_uses_bucket_filter_with_profile_context() -> None:
+    class _Repo(FakeRepo):
+        def __init__(self):
+            super().__init__()
+            self.last_ranker_kwargs = None
+
+        def latest_opportunity_ranker_scores(self, *, limit=50, max_age_hours=30, tickers=None, profiles=None, buckets=None, per_profile_limit=None):
+            self.last_ranker_kwargs = {
+                "limit": limit,
+                "max_age_hours": max_age_hours,
+                "tickers": tickers,
+                "profiles": profiles,
+                "buckets": buckets,
+                "per_profile_limit": per_profile_limit,
+            }
+            return [
+                {
+                    "as_of_date": "2026-04-17",
+                    "computed_at": "2026-04-18T00:00:00+00:00",
+                    "ranker_version": "opportunity_ranker_20260417_test",
+                    "score_source": "learned_ic",
+                    "ticker": "MSFT",
+                    "profile": "defensive",
+                    "bucket": "defensive",
+                    "recommendation_rank": 1,
+                    "recommendation_score": 0.041,
+                    "model_confidence": "medium",
+                    "action": "candidate",
+                    "evidence_level": "validated",
+                    "feature_json": {},
+                    "explanation_json": {},
+                }
+            ]
+
+    repo = _Repo()
+    qt = QuantTools(repo=repo, settings=_settings())
+
+    out = qt.recommend_opportunities(top_n=8, buckets=["defensive"])
+
+    assert out["status"] == "ok"
+    assert repo.last_ranker_kwargs["limit"] == 8
+    assert repo.last_ranker_kwargs["per_profile_limit"] == 8
+    assert repo.last_ranker_kwargs["buckets"] == ["defensive"]
+    assert out["diagnostics"]["selection_scope"]["requested_buckets"] == ["defensive"]
 
 
 def test_recommend_opportunities_learned_missing_is_not_silent_heuristic_fallback() -> None:

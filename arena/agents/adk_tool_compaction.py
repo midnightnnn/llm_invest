@@ -121,6 +121,13 @@ def _compact_tool_result_for_prompt(
                 for key in ("version", "score_formula")
                 if policy.get(key) is not None
             }
+        if isinstance(diagnostics, dict) and isinstance(diagnostics.get("selection_scope"), dict):
+            scope = diagnostics.get("selection_scope") or {}
+            compacted["selection_scope"] = {
+                key: scope.get(key)
+                for key in ("mode", "requested_max_candidates", "global_limit", "per_profile_limit", "loaded_rows", "requested_buckets")
+                if scope.get(key) is not None
+            }
         if isinstance(diagnostics, dict) and diagnostics.get("warnings"):
             compacted["warnings"] = list(diagnostics.get("warnings") or [])[:5]
     elif token == "screen_market":
