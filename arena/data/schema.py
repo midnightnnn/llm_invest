@@ -528,6 +528,208 @@ TABLE_DDLS: tuple[str, ...] = (
     CLUSTER BY ticker, forecast_model, is_stacked
     """,
     """
+    CREATE TABLE IF NOT EXISTS `{project}.{dataset}.opportunity_ranker_scores_latest` (
+      as_of_date DATE NOT NULL,
+      computed_at TIMESTAMP NOT NULL,
+      ranker_version STRING NOT NULL,
+      score_source STRING NOT NULL,
+      ticker STRING NOT NULL,
+      market STRING,
+      exchange_code STRING,
+      instrument_id STRING,
+      source STRING,
+      profile STRING,
+      bucket STRING,
+      recommendation_rank INT64,
+      recommendation_score FLOAT64,
+      predicted_excess_return_20d FLOAT64,
+      prob_outperform_20d FLOAT64,
+      predicted_drawdown_20d FLOAT64,
+      model_confidence STRING,
+      action STRING,
+      evidence_level STRING,
+      optimizer_weight FLOAT64,
+      optimizer_raw_weight FLOAT64,
+      feature_json JSON,
+      explanation_json JSON
+    )
+    PARTITION BY as_of_date
+    CLUSTER BY ranker_version, profile, recommendation_rank
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS `{project}.{dataset}.opportunity_ranker_runs` (
+      run_id STRING NOT NULL,
+      created_at TIMESTAMP NOT NULL,
+      ranker_version STRING NOT NULL,
+      status STRING NOT NULL,
+      score_source STRING,
+      training_rows INT64,
+      validation_rows INT64,
+      scoring_rows INT64,
+      oos_ic_20d FLOAT64,
+      oos_hit_rate_20d FLOAT64,
+      feature_columns JSON,
+      detail_json JSON
+    )
+    PARTITION BY DATE(created_at)
+    CLUSTER BY status, ranker_version
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS `{project}.{dataset}.signal_daily_values` (
+      as_of_date DATE NOT NULL,
+      created_at TIMESTAMP NOT NULL,
+      ticker STRING NOT NULL,
+      market STRING,
+      exchange_code STRING,
+      instrument_id STRING,
+      source STRING,
+      bucket STRING,
+      profile STRING,
+      signal_momentum_20d FLOAT64,
+      signal_pullback FLOAT64,
+      signal_meanrev_5d FLOAT64,
+      signal_lowvol FLOAT64,
+      signal_sentiment FLOAT64,
+      signal_forecast_er FLOAT64,
+      signal_forecast_prob FLOAT64,
+      signal_rsi_reversal FLOAT64,
+      signal_ma_crossover FLOAT64,
+      signal_bollinger_position FLOAT64,
+      signal_ep FLOAT64,
+      signal_bp FLOAT64,
+      signal_sp FLOAT64,
+      signal_roe FLOAT64,
+      signal_revenue_growth FLOAT64,
+      signal_eps_growth FLOAT64,
+      signal_low_debt FLOAT64,
+      ret_5d FLOAT64,
+      ret_20d FLOAT64,
+      volatility_20d FLOAT64,
+      sentiment_score FLOAT64,
+      close_price_krw FLOAT64,
+      fwd_return_20d FLOAT64,
+      fwd_benchmark_return_20d FLOAT64,
+      fwd_excess_return_20d FLOAT64,
+      fwd_mdd_20d FLOAT64,
+      label_ready BOOL NOT NULL
+    )
+    PARTITION BY as_of_date
+    CLUSTER BY market, ticker
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS `{project}.{dataset}.signal_daily_ic` (
+      as_of_date DATE NOT NULL,
+      created_at TIMESTAMP NOT NULL,
+      signal_name STRING NOT NULL,
+      horizon_days INT64 NOT NULL,
+      ic_20d FLOAT64,
+      rank_ic_20d FLOAT64,
+      sample_size INT64,
+      market STRING
+    )
+    PARTITION BY as_of_date
+    CLUSTER BY signal_name, market
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS `{project}.{dataset}.regime_daily_features` (
+      as_of_date DATE NOT NULL,
+      created_at TIMESTAMP NOT NULL,
+      market STRING,
+      regime_vol_level FLOAT64,
+      regime_vol_dispersion FLOAT64,
+      regime_trend FLOAT64,
+      regime_short_reversal FLOAT64,
+      regime_dispersion FLOAT64,
+      regime_sentiment FLOAT64,
+      sample_size INT64
+    )
+    PARTITION BY as_of_date
+    CLUSTER BY market
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS `{project}.{dataset}.fundamentals_history_raw` (
+      ticker STRING NOT NULL,
+      market STRING NOT NULL,
+      fiscal_year INT64 NOT NULL,
+      fiscal_quarter INT64 NOT NULL,
+      fiscal_period_end DATE NOT NULL,
+      announcement_date DATE NOT NULL,
+      announcement_date_source STRING NOT NULL,
+      currency STRING,
+      revenue FLOAT64,
+      gross_profit FLOAT64,
+      operating_income FLOAT64,
+      net_income FLOAT64,
+      eps_basic FLOAT64,
+      eps_diluted FLOAT64,
+      total_assets FLOAT64,
+      total_equity FLOAT64,
+      total_debt FLOAT64,
+      book_value_per_share FLOAT64,
+      operating_cashflow FLOAT64,
+      free_cashflow FLOAT64,
+      ebitda FLOAT64,
+      ev_ebitda FLOAT64,
+      payout_ratio FLOAT64,
+      revenue_growth_yoy FLOAT64,
+      operating_income_growth_yoy FLOAT64,
+      equity_growth_yoy FLOAT64,
+      total_assets_growth_yoy FLOAT64,
+      source STRING NOT NULL,
+      retrieved_at TIMESTAMP NOT NULL,
+      restated BOOL
+    )
+    PARTITION BY announcement_date
+    CLUSTER BY market, ticker, fiscal_year
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS `{project}.{dataset}.fundamentals_derived_daily` (
+      as_of_date DATE NOT NULL,
+      created_at TIMESTAMP NOT NULL,
+      ticker STRING NOT NULL,
+      market STRING,
+      latest_fiscal_period_end DATE,
+      latest_announcement_date DATE,
+      days_since_announcement INT64,
+      price_native FLOAT64,
+      price_krw FLOAT64,
+      pe FLOAT64,
+      pb FLOAT64,
+      ps FLOAT64,
+      ep FLOAT64,
+      bp FLOAT64,
+      sp FLOAT64,
+      ev_ebitda FLOAT64,
+      roe FLOAT64,
+      roa FLOAT64,
+      gross_margin FLOAT64,
+      operating_margin FLOAT64,
+      revenue_growth_yoy FLOAT64,
+      eps_growth_yoy FLOAT64,
+      debt_to_equity FLOAT64,
+      coverage_confidence STRING
+    )
+    PARTITION BY as_of_date
+    CLUSTER BY market, ticker
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS `{project}.{dataset}.fundamentals_ingest_runs` (
+      run_id STRING NOT NULL,
+      source STRING NOT NULL,
+      market STRING,
+      started_at TIMESTAMP NOT NULL,
+      finished_at TIMESTAMP,
+      status STRING NOT NULL,
+      tickers_attempted INT64,
+      tickers_succeeded INT64,
+      quarters_inserted INT64,
+      error_note STRING,
+      detail_json JSON
+    )
+    PARTITION BY DATE(started_at)
+    CLUSTER BY source, status
+    """,
+    """
     CREATE TABLE IF NOT EXISTS `{project}.{dataset}.universe_candidates` (
       run_id STRING NOT NULL,
       created_at TIMESTAMP NOT NULL,

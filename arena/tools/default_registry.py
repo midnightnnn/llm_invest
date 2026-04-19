@@ -112,17 +112,36 @@ def _base_entries(
             sort_order=55,
         ),
         _tool(
+            tool_id="recommend_opportunities",
+            description=(
+                "Signal-IC meta-learned opportunity recommender for the runtime universe. "
+                "Reads opportunity_ranker_scores_latest populated by shared prep, which trains "
+                "regime → next-IC Ridge models per Layer 1 signal (momentum, pullback, meanrev, "
+                "lowvol, sentiment, forecast, RSI/MA/Bollinger, EP/BP/SP/ROE/growth/safety). "
+                "Today's score = sum(predicted_IC_i × signal_i). Returns aggressive/balanced/"
+                "defensive/value/tactical groups with per-signal contributions and model "
+                "confidence. Surfaces status='unusable' when prep is stale — no silent fallback."
+            ),
+            category="quant",
+            tier="optional",
+            callable=qt.recommend_opportunities,
+            label_ko="통합 기회 추천",
+            description_ko="런타임 유니버스의 핵심 discovery 도구입니다. shared prep에서 signal별 IC 예측 모델을 학습(regime → 다음 IC)하고 오늘 regime에 맞춘 가중치로 signal을 합산해 점수를 냅니다. 가격/변동성/forecast/센티먼트/RSI·MACD·볼린저/가치·성장·안정성 fundamentals 17개 signal의 기여도를 포함해 공격형/균형형/방어형/가치형/전술형 추천을 반환합니다. 데이터가 오래되면 조용히 fallback하지 않고 status='unusable'로 명시합니다.",
+            sort_order=105,
+        ),
+        _tool(
             tool_id="screen_market",
             description=(
-                "Single discovery entry point for the runtime universe. "
-                "Surfaces opportunities across multiple styles including momentum, pullback, recovery, defensive, and value. "
-                "Use bucket='...' to focus on one style or leave it empty for a balanced mix."
+                "Low-level diagnostic candidate generator used by recommend_opportunities. "
+                "Surfaces raw screen-only rows across momentum, pullback, recovery, defensive, and value buckets. "
+                "Prefer recommend_opportunities for agent decisions because it validates screen hits with forecasts, technicals, fundamentals, and optimization."
             ),
             category="quant",
             tier="optional",
             callable=qt.screen_market,
             label_ko="시장 스크리닝",
-            description_ko="런타임 유니버스에서 여러 스타일의 기회를 탐색하는 핵심 discovery 도구입니다. 모멘텀, 눌림목, 회복, 방어주, 가치주 버킷을 지원하며, bucket을 비워두면 균형 잡힌 mixed 결과를 반환합니다. 기존 보유 종목 외 대안을 넓게 탐색한 뒤 기술 지표, 예측, 펀더멘털 분석으로 이어갈 때 사용합니다.",
+            description_ko="recommend_opportunities가 내부에서 사용하는 저수준 후보 생성기입니다. 모멘텀, 눌림목, 회복, 방어주, 가치주 버킷의 screen-only 결과를 반환합니다. 에이전트의 신규 매수 판단에는 수익률 예측·기술 지표·펀더멘털·최적화 검증을 함께 수행하는 recommend_opportunities를 우선 사용하세요.",
+            enabled=False,
             sort_order=110,
         ),
         _tool(
@@ -365,7 +384,7 @@ def _load_tools_config(repo: BigQueryRepository, tenant_id: str) -> dict[str, di
 def _apply_overlay(entry: ToolEntry, overlay: dict[str, Any]) -> ToolEntry:
     enabled = bool(entry.enabled)
     if "enabled" in overlay:
-        enabled = enabled and bool(overlay["enabled"])
+        enabled = bool(overlay["enabled"])
     return replace(
         entry,
         description=str(overlay.get("description") or entry.description),

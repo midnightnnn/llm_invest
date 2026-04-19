@@ -797,6 +797,39 @@ def test_candidate_ledger_records_screen_market_momentum_bucket_source() -> None
     assert runner._current_context["candidate_cases"][0]["ticker"] == "PBR"
 
 
+def test_candidate_ledger_records_recommend_opportunities_profile_source() -> None:
+    runner = _ADKDecisionRunner.__new__(_ADKDecisionRunner)
+    runner._candidate_ledger = {}
+    runner._held_tickers_cache = set()
+    runner._current_phase = "draft"
+    runner._current_context = {}
+    runner._tool_events = []
+
+    runner._update_candidate_ledger(
+        "recommend_opportunities",
+        {},
+        {
+            "rows": [
+                {
+                    "ticker": "MSFT",
+                    "profile": "defensive",
+                    "bucket": "defensive",
+                    "buckets": ["defensive"],
+                    "recommendation_score": 1.4,
+                    "confidence": "medium",
+                    "reason_for": "Validated defensive candidate",
+                    "reason_risk": "No major gaps.",
+                    "evidence_level": "validated",
+                }
+            ]
+        },
+    )
+
+    assert runner._candidate_ledger["MSFT"]["source_tools"] == {"recommend_opportunities:defensive"}
+    assert runner._current_context["opportunity_working_set"][0]["discovery_buckets"] == ["defensive"]
+    assert runner._current_context["candidate_cases"][0]["case_for"] == "Validated defensive candidate"
+
+
 def test_funnel_metrics_counts_held_analysis_from_result_tickers() -> None:
     runner = _ADKDecisionRunner.__new__(_ADKDecisionRunner)
     runner._candidate_ledger = {
@@ -1424,6 +1457,64 @@ def test_build_memory_query_screen_market_mentions_buckets_and_tickers() -> None
     )
 
     assert query == "market screening value momentum defensive PBR MRVL DUK"
+
+
+def test_compact_tool_result_recommend_opportunities_keeps_validation_fields() -> None:
+    out = _compact_tool_result_for_prompt(
+        "recommend_opportunities",
+        {
+            "status": "ok",
+            "recommendations": [
+                {
+                    "ticker": "PBR",
+                    "profile": "value",
+                    "bucket": "value",
+                    "recommendation_rank": 1,
+                    "recommendation_score": 1.7,
+                    "score_components": {"forecast": 0.5, "technical": 0.2},
+                    "signal_contributions": [{"signal": "ep", "contribution": 0.4}],
+                    "confidence": "high",
+                    "action": "candidate",
+                    "reason_for": "Validated value candidate",
+                    "reason_risk": "valuation risk",
+                    "optimizer_weight": 0.18,
+                    "evidence_level": "validated",
+                }
+            ],
+            "optimizer": {"status": "ok", "strategy": "forecast_max_sharpe", "weights": {"PBR": 0.18}},
+            "diagnostics": {
+                "score_policy": {
+                    "version": "heuristic_ranker_v1",
+                    "score_formula": "0.40*screen_rank_score + ...",
+                }
+            },
+        },
+    )
+
+    assert out["status"] == "ok"
+    assert out["recommendations"][0]["ticker"] == "PBR"
+    assert out["recommendations"][0]["profile"] == "value"
+    assert out["recommendations"][0]["signal_contributions"] == [{"signal": "ep", "contribution": 0.4}]
+    assert out["recommendations"][0]["optimizer_weight"] == 0.18
+    assert out["recommendations"][0]["score_components"]["forecast"] == 0.5
+    assert out["optimizer"]["weights"] == {"PBR": 0.18}
+    assert out["score_policy"]["version"] == "heuristic_ranker_v1"
+
+
+def test_build_memory_query_recommend_opportunities_mentions_profiles_and_tickers() -> None:
+    query = build_memory_query(
+        "recommend_opportunities",
+        {},
+        {
+            "recommendations": [
+                {"ticker": "PBR", "profile": "value"},
+                {"ticker": "MRVL", "profile": "aggressive"},
+                {"ticker": "DUK", "profile": "defensive"},
+            ],
+        },
+    )
+
+    assert query == "validated opportunities value aggressive defensive PBR MRVL DUK"
 
 
 def test_compact_tool_result_get_fundamentals_reduces_meta_lists() -> None:

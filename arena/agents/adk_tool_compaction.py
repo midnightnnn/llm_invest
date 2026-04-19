@@ -69,7 +69,61 @@ def _compact_tool_result_for_prompt(
 
     compacted: Any = core
 
-    if token == "screen_market":
+    if token == "recommend_opportunities" and isinstance(core, dict):
+        rows = core.get("recommendations") or core.get("rows") or []
+        compacted = {
+            "status": core.get("status"),
+            "recommendations": _compact_rows(
+                rows,
+                fields=(
+                    "ticker",
+                    "profile",
+                    "tactical_kind",
+                    "bucket",
+                    "recommendation_rank",
+                    "recommendation_score",
+                    "score_source",
+                    "ranker_version",
+                    "score_components",
+                    "predicted_excess_return_20d",
+                    "prob_outperform_20d",
+                    "predicted_drawdown_20d",
+                    "confidence",
+                    "model_confidence",
+                    "action",
+                    "reason_for",
+                    "reason_risk",
+                    "ret_20d",
+                    "ret_5d",
+                    "volatility_20d",
+                    "optimizer_weight",
+                    "optimizer_raw_weight",
+                    "evidence_level",
+                    "signal_contributions",
+                ),
+                limit=12,
+                text_fields=("reason_for", "reason_risk"),
+                max_text=160,
+            ),
+        }
+        optimizer = core.get("optimizer")
+        if isinstance(optimizer, dict):
+            compacted["optimizer"] = {
+                key: optimizer.get(key)
+                for key in ("status", "strategy", "strategy_requested", "weights", "raw_weights", "tactical_caps", "forecast_coverage", "degraded_reasons")
+                if optimizer.get(key) is not None
+            }
+        diagnostics = core.get("diagnostics")
+        if isinstance(diagnostics, dict) and isinstance(diagnostics.get("score_policy"), dict):
+            policy = diagnostics.get("score_policy") or {}
+            compacted["score_policy"] = {
+                key: policy.get(key)
+                for key in ("version", "score_formula")
+                if policy.get(key) is not None
+            }
+        if isinstance(diagnostics, dict) and diagnostics.get("warnings"):
+            compacted["warnings"] = list(diagnostics.get("warnings") or [])[:5]
+    elif token == "screen_market":
         compacted = _compact_rows(
             core,
             fields=(

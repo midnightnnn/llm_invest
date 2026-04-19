@@ -91,7 +91,15 @@ from arena.cli_commands.sync import (
     _build_forecast_tickers,
     _prepare_kis_command_repo,
     cmd_build_forecasts,
+    cmd_build_opportunity_ranker,
+    cmd_fundamentals_backfill_kr,
+    cmd_fundamentals_backfill_us,
+    cmd_fundamentals_coverage,
     cmd_init_bq,
+    cmd_refresh_fundamentals_derived,
+    cmd_refresh_regime_features,
+    cmd_refresh_signal_ic,
+    cmd_refresh_signals,
     cmd_list_strategies,
     cmd_recover_sleeves,
     cmd_seed_demo_market,
@@ -154,6 +162,36 @@ def build_parser() -> argparse.ArgumentParser:
     build_fc.add_argument("--min-series-length", type=int, default=160, help="Minimum observations per ticker")
     build_fc.add_argument("--max-steps", type=int, default=200, help="Max training steps for neuralforecast models")
     build_fc.add_argument("--top-n", type=int, default=50, help="Approximate discovery-candidate budget to forecast before adding holdings")
+    build_ranker = sub.add_parser("build-opportunity-ranker", help="Build learned opportunity ranker scores (signal-IC meta-learner)")
+    build_ranker.add_argument("--lookback-days", type=int, default=540, help="Historical window for IC training")
+    build_ranker.add_argument("--horizon", type=int, default=20, help="IC horizon in trading rows")
+    build_ranker.add_argument("--max-scoring-rows", type=int, default=500, help="Maximum latest candidates to score")
+    build_ranker.add_argument("--min-ic-dates", type=int, default=60, help="Minimum distinct IC dates required")
+    build_ranker.add_argument("--min-valid-signals", type=int, default=3, help="Minimum signals with trained IC models")
+    refresh_signals = sub.add_parser("refresh-signals", help="Recompute signal_daily_values only (debugging)")
+    refresh_signals.add_argument("--lookback-days", type=int, default=540)
+    refresh_signals.add_argument("--horizon", type=int, default=20)
+    refresh_ic = sub.add_parser("refresh-signal-ic", help="Recompute signal_daily_ic only (debugging)")
+    refresh_ic.add_argument("--lookback-days", type=int, default=540)
+    refresh_ic.add_argument("--horizon", type=int, default=20)
+    refresh_regime = sub.add_parser("refresh-regime-features", help="Recompute regime_daily_features only (debugging)")
+    refresh_regime.add_argument("--lookback-days", type=int, default=540)
+    refresh_derived = sub.add_parser("refresh-fundamentals-derived", help="Recompute fundamentals_derived_daily")
+    refresh_derived.add_argument("--lookback-days", type=int, default=600)
+    fund_kr = sub.add_parser("fundamentals-backfill-kr", help="KIS-based KR fundamentals backfill into fundamentals_history_raw")
+    fund_kr.add_argument("--tickers", type=str, default="", help="Comma-separated tickers; empty → use universe")
+    fund_kr.add_argument("--tickers-file", type=str, default="", help="Optional path to a newline-delimited ticker file")
+    fund_kr.add_argument("--period", type=str, default="quarter", choices=["quarter", "annual"])
+    fund_us = sub.add_parser("fundamentals-backfill-us", help="SEC/FMP-based US fundamentals backfill into fundamentals_history_raw")
+    fund_us.add_argument("--tickers", type=str, default="")
+    fund_us.add_argument("--tickers-file", type=str, default="")
+    fund_us.add_argument("--source", type=str, default="sec", choices=["sec", "fmp"], help="US fundamentals source; SEC is keyless and default")
+    fund_us.add_argument("--api-key", type=str, default="", help="FMP API key; only used with --source fmp")
+    fund_us.add_argument("--sec-user-agent", type=str, default="", help="SEC declared User-Agent; if omitted uses SEC_USER_AGENT or ARENA_OPERATOR_EMAILS")
+    fund_us.add_argument("--period", type=str, default="quarter", choices=["quarter", "annual"])
+    fund_us.add_argument("--limit", type=int, default=40, help="Periods per ticker")
+    fund_us.add_argument("--sleep-seconds", type=float, default=0.15, help="SEC sleep between companyfacts requests")
+    sub.add_parser("fundamentals-coverage", help="Print fundamentals_history_raw coverage report")
     sub.add_parser("list-strategies", help="Print strategy reference cards")
 
     run_cycle = sub.add_parser("run-cycle", help="Run one arena cycle (deprecated; use run-agent-cycle or run-pipeline)")
@@ -253,6 +291,14 @@ def _dispatch_command(args: argparse.Namespace, parser: argparse.ArgumentParser)
         "recover-sleeves": lambda ns: cmd_recover_sleeves(live=bool(getattr(ns, "live", False))),
         "sync-dividends": lambda ns: cmd_sync_dividends(),
         "build-forecasts": lambda ns: cmd_build_forecasts(ns),
+        "build-opportunity-ranker": lambda ns: cmd_build_opportunity_ranker(ns),
+        "refresh-signals": lambda ns: cmd_refresh_signals(ns),
+        "refresh-signal-ic": lambda ns: cmd_refresh_signal_ic(ns),
+        "refresh-regime-features": lambda ns: cmd_refresh_regime_features(ns),
+        "refresh-fundamentals-derived": lambda ns: cmd_refresh_fundamentals_derived(ns),
+        "fundamentals-backfill-kr": lambda ns: cmd_fundamentals_backfill_kr(ns),
+        "fundamentals-backfill-us": lambda ns: cmd_fundamentals_backfill_us(ns),
+        "fundamentals-coverage": lambda ns: cmd_fundamentals_coverage(ns),
         "list-strategies": lambda ns: cmd_list_strategies(),
         "run-cycle": lambda ns: cmd_run_cycle(live=bool(ns.live)),
         "run-batch": lambda ns: cmd_run_batch(

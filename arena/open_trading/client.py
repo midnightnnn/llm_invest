@@ -1112,6 +1112,110 @@ class OpenTradingClient:
             rows = [rows]
         return [dict(row) for row in rows if isinstance(row, dict)]
 
+    def get_domestic_balance_sheet(
+        self,
+        ticker: str,
+        *,
+        market_div_code: str = "J",
+        div_cls_code: str = "1",
+    ) -> list[dict[str, Any]]:
+        """Returns domestic stock balance sheet rows (multi-period)."""
+        symbol = ticker.strip().upper()
+        if not symbol:
+            raise ValueError("ticker is required")
+        body, _ = self._request(
+            method="GET",
+            path="/uapi/domestic-stock/v1/finance/balance-sheet",
+            tr_id="FHKST66430100",
+            params={
+                "FID_DIV_CLS_CODE": div_cls_code,
+                "FID_COND_MRKT_DIV_CODE": market_div_code,
+                "FID_INPUT_ISCD": symbol,
+            },
+        )
+        rows = body.get("output") or []
+        if isinstance(rows, dict):
+            rows = [rows]
+        return [dict(row) for row in rows if isinstance(row, dict)]
+
+    def get_domestic_income_statement(
+        self,
+        ticker: str,
+        *,
+        market_div_code: str = "J",
+        div_cls_code: str = "1",
+    ) -> list[dict[str, Any]]:
+        """Returns domestic stock income statement rows (multi-period)."""
+        symbol = ticker.strip().upper()
+        if not symbol:
+            raise ValueError("ticker is required")
+        body, _ = self._request(
+            method="GET",
+            path="/uapi/domestic-stock/v1/finance/income-statement",
+            tr_id="FHKST66430200",
+            params={
+                "FID_DIV_CLS_CODE": div_cls_code,
+                "FID_COND_MRKT_DIV_CODE": market_div_code,
+                "FID_INPUT_ISCD": symbol,
+            },
+        )
+        rows = body.get("output") or []
+        if isinstance(rows, dict):
+            rows = [rows]
+        return [dict(row) for row in rows if isinstance(row, dict)]
+
+    def get_domestic_growth_ratio(
+        self,
+        ticker: str,
+        *,
+        market_div_code: str = "J",
+        div_cls_code: str = "1",
+    ) -> list[dict[str, Any]]:
+        """Returns domestic stock growth ratio rows (revenue/operating/equity/assets YoY)."""
+        symbol = ticker.strip().upper()
+        if not symbol:
+            raise ValueError("ticker is required")
+        body, _ = self._request(
+            method="GET",
+            path="/uapi/domestic-stock/v1/finance/growth-ratio",
+            tr_id="FHKST66430800",
+            params={
+                "FID_DIV_CLS_CODE": div_cls_code,
+                "FID_COND_MRKT_DIV_CODE": market_div_code,
+                "FID_INPUT_ISCD": symbol,
+            },
+        )
+        rows = body.get("output") or []
+        if isinstance(rows, dict):
+            rows = [rows]
+        return [dict(row) for row in rows if isinstance(row, dict)]
+
+    def get_domestic_other_major_ratios(
+        self,
+        ticker: str,
+        *,
+        market_div_code: str = "J",
+        div_cls_code: str = "1",
+    ) -> list[dict[str, Any]]:
+        """Returns domestic stock misc ratios (EVA, EBITDA, EV/EBITDA, payout)."""
+        symbol = ticker.strip().upper()
+        if not symbol:
+            raise ValueError("ticker is required")
+        body, _ = self._request(
+            method="GET",
+            path="/uapi/domestic-stock/v1/finance/other-major-ratios",
+            tr_id="FHKST66430500",
+            params={
+                "FID_DIV_CLS_CODE": div_cls_code,
+                "FID_COND_MRKT_DIV_CODE": market_div_code,
+                "FID_INPUT_ISCD": symbol,
+            },
+        )
+        rows = body.get("output") or []
+        if isinstance(rows, dict):
+            rows = [rows]
+        return [dict(row) for row in rows if isinstance(row, dict)]
+
     def get_domestic_market_cap_ranking(
         self,
         *,

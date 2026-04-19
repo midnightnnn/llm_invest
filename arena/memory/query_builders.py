@@ -5,6 +5,7 @@ from typing import Any
 
 MEMORY_INJECTABLE_TOOLS: set[str] = {
     "technical_signals",
+    "recommend_opportunities",
     "screen_market",
     "forecast_returns",
     "get_fundamentals",
@@ -87,6 +88,31 @@ def _screen_market(args: dict, result: Any) -> str | None:
     query = " ".join(part for part in parts if part).strip()
     return query or None
 
+
+def _recommend_opportunities(args: dict, result: Any) -> str | None:
+    if not isinstance(result, dict):
+        return None
+    rows = result.get("recommendations") or result.get("rows") or []
+    if not isinstance(rows, list) or not rows:
+        return None
+    tickers = _top_tickers(rows)
+    profiles: list[str] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        profile = str(row.get("profile") or "").strip().lower()
+        if profile and profile not in profiles:
+            profiles.append(profile)
+        if len(profiles) >= 3:
+            break
+    parts = ["validated opportunities"]
+    if profiles:
+        parts.append(" ".join(profiles[:3]))
+    if tickers:
+        parts.append(tickers)
+    query = " ".join(part for part in parts if part).strip()
+    return query or None
+
 def _forecast_returns(args: dict, result: Any) -> str | None:
     rows = result if isinstance(result, list) else []
     if not rows:
@@ -132,6 +158,7 @@ def _optimize_portfolio(args: dict, result: Any) -> str | None:
 
 _BUILDERS: dict[str, Any] = {
     "technical_signals": _technical_signals,
+    "recommend_opportunities": _recommend_opportunities,
     "screen_market": _screen_market,
     "forecast_returns": _forecast_returns,
     "get_fundamentals": _get_fundamentals,

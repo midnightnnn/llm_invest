@@ -1122,6 +1122,7 @@ def test_cmd_run_shared_prep_dispatches_agent_job(monkeypatch) -> None:
     monkeypatch.setattr(cli, "_batch_phase", lambda *args, **kwargs: ("open_cycle", None))
     monkeypatch.setattr(cli, "_batch_market_sync", lambda *args, **kwargs: calls.append(("sync", None)))
     monkeypatch.setattr(cli, "cmd_build_forecasts", lambda args: calls.append(("forecast", args.horizon)))
+    monkeypatch.setattr(cli, "cmd_build_opportunity_ranker", lambda args: calls.append(("ranker", args.horizon)))
     monkeypatch.setattr(cli, "_dispatch_agent_job", lambda settings, job_name: calls.append(("dispatch", job_name)))
     monkeypatch.setattr(
         cli,
@@ -1137,6 +1138,7 @@ def test_cmd_run_shared_prep_dispatches_agent_job(monkeypatch) -> None:
 
     assert ("sync", None) in calls
     assert ("forecast", 20) in calls
+    assert ("ranker", 20) in calls
     assert ("dispatch", "agent-us") in calls
 
 

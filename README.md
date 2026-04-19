@@ -301,7 +301,8 @@ Agents autonomously select which tools to call at each reasoning step.
 
 | Tool | Description |
 |:-----|:------------|
-| `screen_market` | Filter-based universe screening |
+| `recommend_opportunities` | Learned opportunity recommendations from precomputed point-in-time ranker scores, with separate tactical ETP handling |
+| `screen_market` | Low-level screen-only candidate generator used internally |
 | `optimize_portfolio` | Portfolio optimization + rebalancing |
 | `forecast_returns` | Neural + foundation model stacking forecasts |
 | `technical_signals` | RSI / MACD / Bollinger / SMA |

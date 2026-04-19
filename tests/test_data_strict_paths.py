@@ -531,6 +531,67 @@ def test_screen_latest_features_does_not_retry_legacy_on_empty_rows() -> None:
     assert "volatility_20d IS NOT NULL" in store.session.calls[0]
 
 
+def test_refresh_signal_daily_values_uses_point_in_time_sources() -> None:
+    store = _make_market_store([])
+
+    out = store.refresh_signal_daily_values(
+        lookback_days=180,
+        horizon_days=20,
+        sources=["open_trading_us"],
+        market="us",
+    )
+
+    assert out == 0
+    sql, params = store.session.call_pairs[-1]
+    assert "signal_daily_values" in sql
+    assert "market_features" in sql
+    assert "predicted_expected_returns" in sql
+    assert "f.run_date <= c.as_of_date" in sql
+    assert "fundamentals_derived_daily" in sql
+    assert "d.latest_announcement_date <= w.as_of_date" in sql
+    assert params["sources"] == ["open_trading_us"]
+    assert params["market"] == "us"
+
+
+def test_latest_opportunity_ranker_scores_reads_fresh_latest_batch() -> None:
+    store = _make_market_store([[{"ticker": "AAPL", "recommendation_score": 0.2}]])
+
+    rows = store.latest_opportunity_ranker_scores(tickers=["AAPL"], profiles=["aggressive"], limit=3, max_age_hours=12)
+
+    assert rows[0]["ticker"] == "AAPL"
+    sql, params = store.session.call_pairs[-1]
+    assert "opportunity_ranker_scores_latest" in sql
+    assert "latest_batch" in sql
+    assert "s.ticker IN UNNEST(@tickers)" in sql
+    assert "s.profile IN UNNEST(@profiles)" in sql
+    assert params["max_age_hours"] == 12
+
+
+def test_insert_opportunity_ranker_scores_latest_appends_json_rows() -> None:
+    store = _make_market_write_store()
+
+    inserted = store.insert_opportunity_ranker_scores_latest(
+        [
+            {
+                "as_of_date": "2026-04-17",
+                "computed_at": "2026-04-18T00:00:00+00:00",
+                "ranker_version": "ranker",
+                "score_source": "learned",
+                "ticker": "aapl",
+                "recommendation_score": 0.12,
+                "feature_json": '{"ret_20d": 0.1}',
+                "explanation_json": {"top_features": ["ret_20d"]},
+            }
+        ]
+    )
+
+    assert inserted == 1
+    table_id, rows = store.session.client.loads[-1]
+    assert table_id == "proj.ds.opportunity_ranker_scores_latest"
+    assert rows[0]["ticker"] == "AAPL"
+    assert rows[0]["feature_json"] == {"ret_20d": 0.1}
+
+
 def test_latest_fundamentals_snapshot_does_not_retry_on_empty_rows() -> None:
     store = _make_market_store([[]])
 

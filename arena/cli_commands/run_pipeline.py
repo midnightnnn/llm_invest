@@ -176,13 +176,13 @@ def cmd_run_shared_prep(
             logger.info("[yellow]Shared prep: not a scheduled cycle time — skipping[/yellow]")
             return
 
-        logger.info("[bold cyan]Shared prep step 1/2: sync-market[/bold cyan]")
+        logger.info("[bold cyan]Shared prep step 1/4: sync-market[/bold cyan]")
         cli._batch_market_sync(phase, bootstrap_settings, repo, window)
         if phase == "seed":
             logger.info("[bold green]Shared prep done[/bold green] mode=seed")
             return
 
-        logger.info("[bold cyan]Shared prep step 2/2: build-forecasts[/bold cyan]")
+        logger.info("[bold cyan]Shared prep step 2/4: build-forecasts[/bold cyan]")
         fc_args = type(
             "Args",
             (),
@@ -195,6 +195,31 @@ def cmd_run_shared_prep(
             },
         )()
         cli.cmd_build_forecasts(fc_args)
+
+        logger.info("[bold cyan]Shared prep step 3/4: refresh-fundamentals-derived[/bold cyan]")
+        fund_args = type(
+            "Args",
+            (),
+            {"lookback_days": 600},
+        )()
+        try:
+            cli.cmd_refresh_fundamentals_derived(fund_args)
+        except Exception as exc:
+            logger.warning("[yellow]fundamentals derived refresh skipped (non-fatal)[/yellow] err=%s", exc)
+
+        logger.info("[bold cyan]Shared prep step 4/4: build-opportunity-ranker[/bold cyan]")
+        ranker_args = type(
+            "Args",
+            (),
+            {
+                "lookback_days": 540,
+                "horizon": 20,
+                "max_scoring_rows": 500,
+                "min_ic_dates": 60,
+                "min_valid_signals": 3,
+            },
+        )()
+        cli.cmd_build_opportunity_ranker(ranker_args)
 
         if dispatch_job.strip():
             cli._dispatch_agent_job(bootstrap_settings, job_name=dispatch_job.strip())
@@ -209,18 +234,13 @@ def cmd_run_shared_prep(
 
 
 def cmd_run_pipeline(live: bool, *, all_tenants: bool = False, market_override: str = "") -> None:
-    """Runs sync → forecast → agent cycle sequentially."""
+    """Runs sync → forecast → opportunity-ranker → agent cycle sequentially."""
     cli = _cli()
     bootstrap_settings = cli.load_settings()
     cli.configure_logging(bootstrap_settings.log_level, bootstrap_settings.log_format)
     cli._validate_or_exit(bootstrap_settings)
     logger.info("[bold]Pipeline start[/bold] live=%s all_tenants=%s market=%s", live, all_tenants, market_override or "all")
     fallback = cli._tenant_id() or "local"
-    bootstrap_repo = cli._repo_or_exit(bootstrap_settings, tenant_id=fallback)
-    bootstrap_repo.ensure_dataset()
-    bootstrap_repo.ensure_tables()
-    pipeline_targets = cli._resolve_batch_tenants(bootstrap_repo, fallback=fallback) if all_tenants else [fallback]
-    pipeline_run_ids = {tenant: cli._new_run_id("pipeline") for tenant in pipeline_targets}
 
     settings_peek = bootstrap_settings
     cli._apply_market_override(settings_peek, market_override)
@@ -243,26 +263,22 @@ def cmd_run_pipeline(live: bool, *, all_tenants: bool = False, market_override: 
 
     if not us_open and not kr_open:
         logger.info("[yellow]All markets closed (holiday/weekend)[/yellow] — skipping pipeline")
-        now = cli.utc_now()
-        cli._append_tenant_run_status_many(
-            bootstrap_repo,
-            bootstrap_settings,
-            tenants=pipeline_targets,
-            run_ids=pipeline_run_ids,
-            run_type="pipeline",
-            status="skipped",
-            reason_code="market_closed",
-            stage="market_guard",
-            started_at=now,
-            finished_at=now,
-            message="휴장일 또는 주말이라 배치를 건너뛰었습니다.",
-            detail={"live": bool(live), "market_override": market_override or None},
-        )
+        if market_override.strip():
+            if original_market_env is not None:
+                os.environ["KIS_TARGET_MARKET"] = original_market_env
+            else:
+                os.environ.pop("KIS_TARGET_MARKET", None)
         return
+
+    bootstrap_repo = cli._repo_or_exit(bootstrap_settings, tenant_id=fallback)
+    bootstrap_repo.ensure_dataset()
+    bootstrap_repo.ensure_tables()
+    pipeline_targets = cli._resolve_batch_tenants(bootstrap_repo, fallback=fallback) if all_tenants else [fallback]
+    pipeline_run_ids = {tenant: cli._new_run_id("pipeline") for tenant in pipeline_targets}
 
     current_stage = "sync"
     try:
-        logger.info("[bold cyan]Pipeline step 1/5: sync-market[/bold cyan]")
+        logger.info("[bold cyan]Pipeline step 1/7: sync-market[/bold cyan]")
         pipeline_repo = bootstrap_repo
         cli._apply_tenant_runtime_credentials(bootstrap_settings, pipeline_repo)
         pipeline_phase, pipeline_window = cli._batch_phase(live, settings_peek, pipeline_repo)
@@ -291,7 +307,7 @@ def cmd_run_pipeline(live: bool, *, all_tenants: bool = False, market_override: 
             return
 
         current_stage = "forecast"
-        logger.info("[bold cyan]Pipeline step 2/5: build-forecasts[/bold cyan]")
+        logger.info("[bold cyan]Pipeline step 2/7: build-forecasts[/bold cyan]")
         fc_args = type(
             "Args",
             (),
@@ -305,6 +321,29 @@ def cmd_run_pipeline(live: bool, *, all_tenants: bool = False, market_override: 
         )()
         cli.cmd_build_forecasts(fc_args)
 
+        current_stage = "fundamentals_derived"
+        logger.info("[bold cyan]Pipeline step 3/7: refresh-fundamentals-derived[/bold cyan]")
+        fund_args = type("Args", (), {"lookback_days": 600})()
+        try:
+            cli.cmd_refresh_fundamentals_derived(fund_args)
+        except Exception as exc:
+            logger.warning("[yellow]fundamentals derived refresh skipped[/yellow] err=%s", exc)
+
+        current_stage = "opportunity_ranker"
+        logger.info("[bold cyan]Pipeline step 4/7: build-opportunity-ranker[/bold cyan]")
+        ranker_args = type(
+            "Args",
+            (),
+            {
+                "lookback_days": 540,
+                "horizon": 20,
+                "max_scoring_rows": 500,
+                "min_ic_dates": 60,
+                "min_valid_signals": 3,
+            },
+        )()
+        cli.cmd_build_opportunity_ranker(ranker_args)
+
         if market_override.strip():
             if original_market_env is not None:
                 os.environ["KIS_TARGET_MARKET"] = original_market_env
@@ -312,10 +351,10 @@ def cmd_run_pipeline(live: bool, *, all_tenants: bool = False, market_override: 
                 os.environ.pop("KIS_TARGET_MARKET", None)
 
         current_stage = "agent_cycle"
-        logger.info("[bold cyan]Pipeline step 3/5: run-agent-cycle[/bold cyan]")
+        logger.info("[bold cyan]Pipeline step 5/7: run-agent-cycle[/bold cyan]")
         cli.cmd_run_agent_cycle(live=live, all_tenants=all_tenants, market_override=market_override)
 
-        logger.info("[bold cyan]Pipeline step 4/5: mtm-score-update[/bold cyan]")
+        logger.info("[bold cyan]Pipeline step 6/7: mtm-score-update[/bold cyan]")
         try:
             cli._run_mtm_score_update(bootstrap_settings)
         except Exception as exc:
@@ -323,13 +362,13 @@ def cmd_run_pipeline(live: bool, *, all_tenants: bool = False, market_override: 
 
         now_utc = cli.utc_now()
         if now_utc.weekday() == 0:
-            logger.info("[bold cyan]Pipeline step 5/5: memory-cleanup[/bold cyan]")
+            logger.info("[bold cyan]Pipeline step 7/7: memory-cleanup[/bold cyan]")
             try:
                 cli._run_memory_cleanup(bootstrap_settings)
             except Exception as exc:
                 logger.warning("[yellow]Memory cleanup failed (non-fatal): %s[/yellow]", exc)
         else:
-            logger.info("[dim]Pipeline step 5/5: memory-cleanup — skipped (not Monday)[/dim]")
+            logger.info("[dim]Pipeline step 7/7: memory-cleanup — skipped (not Monday)[/dim]")
 
         logger.info("[bold green]Pipeline done[/bold green]")
     except Exception as exc:

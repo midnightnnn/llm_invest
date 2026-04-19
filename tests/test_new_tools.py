@@ -101,7 +101,9 @@ def test_default_registry_contains_new_tools() -> None:
     assert "portfolio_diagnosis" in ids
     assert "fear_greed_index" in ids
     assert "earnings_calendar" in ids
+    assert "recommend_opportunities" in ids
     assert "technical_signals" in ids
+    assert "screen_market" not in ids
     assert "correlation_matrix" not in ids
     assert "fetch_reddit_sentiment" not in ids
     assert "get_overseas_fundamentals" not in ids
@@ -142,6 +144,7 @@ def test_default_registry_applies_tools_config_overlay() -> None:
 
     assert "screen_market" not in visible_ids
     assert entries["screen_market"].enabled is False
+    assert entries["recommend_opportunities"].enabled is True
     assert entries["portfolio_diagnosis"].label_ko == "포트 진단 오버라이드"
     assert entries["portfolio_diagnosis"].description_ko == "오버라이드 설명"
     assert entries["portfolio_diagnosis"].description == "Override model description."

@@ -829,6 +829,799 @@ class MarketStore:
                     out[-1]["consensus"] = val
         return out
 
+    def refresh_signal_daily_values(
+        self,
+        *,
+        lookback_days: int = 540,
+        horizon_days: int = 20,
+        sources: list[str] | None = None,
+        market: str | None = None,
+    ) -> int:
+        """Materializes Layer 1 signals + forward labels into signal_daily_values.
+
+        All signals are deterministic functions of market_features, predicted
+        forecasts, and fundamentals_derived_daily. Forecast and fundamentals
+        joins enforce ``table.effective_date <= base.as_of_date`` to block
+        look-ahead.
+
+        Returns 0 because BigQuery INSERT does not report row counts here;
+        callers observe the resulting table partition instead.
+        """
+        horizon = max(5, min(int(horizon_days), 60))
+        lookback = max(horizon + 40, min(int(lookback_days), 1500))
+        filters = [
+            "DATE(as_of_ts) >= DATE_SUB(CURRENT_DATE(), INTERVAL @lookback_days DAY)",
+            "close_price_krw IS NOT NULL",
+            "close_price_krw > 0",
+            _DAILY_FILTER_SQL,
+        ]
+        params: dict[str, Any] = {
+            "lookback_days": lookback + horizon + 30,
+            "horizon": horizon,
+            "market": str(market or "").strip().lower() or None,
+        }
+        if sources:
+            tokens = [str(source or "").strip() for source in sources if str(source or "").strip()]
+            if tokens:
+                filters.append("source IN UNNEST(@sources)")
+                params["sources"] = tokens
+
+        where = "WHERE " + " AND ".join(filters)
+        dataset = self.session.dataset_fqn
+        sql = f"""
+        INSERT INTO `{dataset}.signal_daily_values`
+        WITH raw AS (
+          SELECT
+            DATE(as_of_ts) AS as_of_date,
+            as_of_ts,
+            ticker,
+            exchange_code,
+            instrument_id,
+            source,
+            close_price_krw,
+            sentiment_score,
+            ingested_at,
+            ROW_NUMBER() OVER (
+              PARTITION BY DATE(as_of_ts), ticker
+              ORDER BY as_of_ts DESC, ingested_at DESC, source DESC
+            ) AS rn
+          FROM `{dataset}.market_features`
+          {where}
+        ),
+        daily AS (
+          SELECT * EXCEPT(rn)
+          FROM raw
+          WHERE rn = 1
+        ),
+        price_ctx AS (
+          SELECT
+            *,
+            SAFE_DIVIDE(close_price_krw, LAG(close_price_krw, 1) OVER w) - 1.0 AS daily_return,
+            SAFE_DIVIDE(close_price_krw, LAG(close_price_krw, 5) OVER w) - 1.0 AS ret_5d,
+            SAFE_DIVIDE(close_price_krw, LAG(close_price_krw, 20) OVER w) - 1.0 AS ret_20d,
+            AVG(close_price_krw) OVER (
+              PARTITION BY ticker ORDER BY as_of_date ROWS BETWEEN 19 PRECEDING AND CURRENT ROW
+            ) AS sma_20,
+            AVG(close_price_krw) OVER (
+              PARTITION BY ticker ORDER BY as_of_date ROWS BETWEEN 59 PRECEDING AND CURRENT ROW
+            ) AS sma_60,
+            STDDEV_SAMP(close_price_krw) OVER (
+              PARTITION BY ticker ORDER BY as_of_date ROWS BETWEEN 19 PRECEDING AND CURRENT ROW
+            ) AS std_px_20,
+            SAFE_DIVIDE(LEAD(close_price_krw, @horizon) OVER w, close_price_krw) - 1.0 AS fwd_return_20d,
+            SAFE_DIVIDE(MIN(close_price_krw) OVER (
+              PARTITION BY ticker ORDER BY as_of_date ROWS BETWEEN 1 FOLLOWING AND @horizon FOLLOWING
+            ), close_price_krw) - 1.0 AS fwd_mdd_20d
+          FROM daily
+          WINDOW w AS (PARTITION BY ticker ORDER BY as_of_date)
+        ),
+        returns AS (
+          SELECT
+            *,
+            STDDEV_SAMP(daily_return) OVER (
+              PARTITION BY ticker ORDER BY as_of_date ROWS BETWEEN 19 PRECEDING AND CURRENT ROW
+            ) AS volatility_20d,
+            AVG(GREATEST(daily_return, 0)) OVER (
+              PARTITION BY ticker ORDER BY as_of_date ROWS BETWEEN 13 PRECEDING AND CURRENT ROW
+            ) AS rsi_up_14,
+            AVG(GREATEST(-daily_return, 0)) OVER (
+              PARTITION BY ticker ORDER BY as_of_date ROWS BETWEEN 13 PRECEDING AND CURRENT ROW
+            ) AS rsi_dn_14
+          FROM price_ctx
+        ),
+        complete AS (
+          SELECT
+            *,
+            CASE
+              WHEN rsi_up_14 IS NULL OR rsi_dn_14 IS NULL THEN NULL
+              WHEN (rsi_up_14 + rsi_dn_14) = 0 THEN 50.0
+              ELSE 100.0 * SAFE_DIVIDE(rsi_up_14, rsi_up_14 + rsi_dn_14)
+            END AS rsi_14
+          FROM returns
+          WHERE ret_5d IS NOT NULL
+            AND ret_20d IS NOT NULL
+            AND volatility_20d IS NOT NULL
+        ),
+        with_forecast AS (
+          SELECT
+            c.*,
+            f.exp_return_period AS forecast_exp_return,
+            f.prob_up AS forecast_prob_up,
+            ROW_NUMBER() OVER (
+              PARTITION BY c.as_of_date, c.ticker
+              ORDER BY f.run_date DESC, f.created_at DESC
+            ) AS forecast_rn
+          FROM complete c
+          LEFT JOIN `{dataset}.predicted_expected_returns` f
+            ON f.ticker = c.ticker
+           AND f.run_date <= c.as_of_date
+           AND IFNULL(f.is_stacked, FALSE)
+        ),
+        with_fundamentals AS (
+          SELECT
+            w.* EXCEPT(forecast_rn),
+            d.ep AS fund_ep,
+            d.bp AS fund_bp,
+            d.sp AS fund_sp,
+            d.roe AS fund_roe,
+            d.revenue_growth_yoy AS fund_rev_growth,
+            d.eps_growth_yoy AS fund_eps_growth,
+            d.debt_to_equity AS fund_debt_equity,
+            ROW_NUMBER() OVER (
+              PARTITION BY w.as_of_date, w.ticker
+              ORDER BY d.latest_announcement_date DESC, d.created_at DESC
+            ) AS fund_rn
+          FROM with_forecast w
+          LEFT JOIN `{dataset}.fundamentals_derived_daily` d
+            ON d.ticker = w.ticker
+           AND d.as_of_date <= w.as_of_date
+           AND d.latest_announcement_date <= w.as_of_date
+          WHERE w.forecast_rn = 1
+        ),
+        cross_section AS (
+          SELECT
+            * EXCEPT(fund_rn),
+            AVG(ret_20d) OVER (PARTITION BY as_of_date) AS cs_ret20_mean,
+            STDDEV_SAMP(ret_20d) OVER (PARTITION BY as_of_date) AS cs_ret20_std,
+            AVG(ret_5d) OVER (PARTITION BY as_of_date) AS cs_ret5_mean,
+            STDDEV_SAMP(ret_5d) OVER (PARTITION BY as_of_date) AS cs_ret5_std,
+            AVG(volatility_20d) OVER (PARTITION BY as_of_date) AS cs_vol_mean,
+            STDDEV_SAMP(volatility_20d) OVER (PARTITION BY as_of_date) AS cs_vol_std,
+            AVG(IFNULL(sentiment_score, 0.0)) OVER (PARTITION BY as_of_date) AS cs_sent_mean,
+            STDDEV_SAMP(IFNULL(sentiment_score, 0.0)) OVER (PARTITION BY as_of_date) AS cs_sent_std,
+            AVG(fund_ep) OVER (PARTITION BY as_of_date) AS cs_ep_mean,
+            STDDEV_SAMP(fund_ep) OVER (PARTITION BY as_of_date) AS cs_ep_std,
+            AVG(fund_bp) OVER (PARTITION BY as_of_date) AS cs_bp_mean,
+            STDDEV_SAMP(fund_bp) OVER (PARTITION BY as_of_date) AS cs_bp_std,
+            AVG(fund_sp) OVER (PARTITION BY as_of_date) AS cs_sp_mean,
+            STDDEV_SAMP(fund_sp) OVER (PARTITION BY as_of_date) AS cs_sp_std,
+            AVG(fund_roe) OVER (PARTITION BY as_of_date) AS cs_roe_mean,
+            STDDEV_SAMP(fund_roe) OVER (PARTITION BY as_of_date) AS cs_roe_std,
+            AVG(fund_rev_growth) OVER (PARTITION BY as_of_date) AS cs_rev_mean,
+            STDDEV_SAMP(fund_rev_growth) OVER (PARTITION BY as_of_date) AS cs_rev_std,
+            AVG(fund_eps_growth) OVER (PARTITION BY as_of_date) AS cs_epsg_mean,
+            STDDEV_SAMP(fund_eps_growth) OVER (PARTITION BY as_of_date) AS cs_epsg_std,
+            AVG(fund_debt_equity) OVER (PARTITION BY as_of_date) AS cs_debt_mean,
+            STDDEV_SAMP(fund_debt_equity) OVER (PARTITION BY as_of_date) AS cs_debt_std,
+            AVG(fwd_return_20d) OVER (PARTITION BY as_of_date) AS fwd_benchmark_return_20d
+          FROM with_fundamentals
+          WHERE fund_rn = 1 OR fund_rn IS NULL
+        ),
+        signaled AS (
+          SELECT
+            *,
+            SAFE_DIVIDE(ret_20d - cs_ret20_mean, NULLIF(cs_ret20_std, 0.0)) AS z_ret20,
+            SAFE_DIVIDE(ret_5d - cs_ret5_mean, NULLIF(cs_ret5_std, 0.0)) AS z_ret5,
+            SAFE_DIVIDE(volatility_20d - cs_vol_mean, NULLIF(cs_vol_std, 0.0)) AS z_vol,
+            SAFE_DIVIDE(IFNULL(sentiment_score, 0.0) - cs_sent_mean, NULLIF(cs_sent_std, 0.0)) AS z_sent,
+            SAFE_DIVIDE(fund_ep - cs_ep_mean, NULLIF(cs_ep_std, 0.0)) AS z_ep,
+            SAFE_DIVIDE(fund_bp - cs_bp_mean, NULLIF(cs_bp_std, 0.0)) AS z_bp,
+            SAFE_DIVIDE(fund_sp - cs_sp_mean, NULLIF(cs_sp_std, 0.0)) AS z_sp,
+            SAFE_DIVIDE(fund_roe - cs_roe_mean, NULLIF(cs_roe_std, 0.0)) AS z_roe,
+            SAFE_DIVIDE(fund_rev_growth - cs_rev_mean, NULLIF(cs_rev_std, 0.0)) AS z_rev,
+            SAFE_DIVIDE(fund_eps_growth - cs_epsg_mean, NULLIF(cs_epsg_std, 0.0)) AS z_epsg,
+            SAFE_DIVIDE(fund_debt_equity - cs_debt_mean, NULLIF(cs_debt_std, 0.0)) AS z_debt,
+            CASE
+              WHEN ret_20d > 0 AND ret_5d < 0 THEN 'pullback'
+              WHEN ret_20d < 0 AND ret_5d > 0 THEN 'recovery'
+              WHEN SAFE_DIVIDE(volatility_20d - cs_vol_mean, NULLIF(cs_vol_std, 0.0)) <= -0.65 THEN 'defensive'
+              ELSE 'momentum'
+            END AS bucket_calc
+          FROM cross_section
+        ),
+        profiled AS (
+          SELECT
+            *,
+            CASE
+              WHEN bucket_calc IN ('momentum', 'recovery') THEN 'aggressive'
+              WHEN bucket_calc = 'pullback' THEN 'balanced'
+              WHEN bucket_calc = 'defensive' THEN 'defensive'
+              ELSE 'balanced'
+            END AS profile_calc
+          FROM signaled
+        )
+        SELECT
+          as_of_date,
+          CURRENT_TIMESTAMP() AS created_at,
+          ticker,
+          @market AS market,
+          exchange_code,
+          instrument_id,
+          source,
+          bucket_calc AS bucket,
+          profile_calc AS profile,
+          z_ret20 AS signal_momentum_20d,
+          CASE
+            WHEN z_ret20 IS NULL OR z_ret5 IS NULL THEN NULL
+            WHEN z_ret20 > 0 THEN -z_ret5
+            ELSE 0.0
+          END AS signal_pullback,
+          -z_ret5 AS signal_meanrev_5d,
+          -z_vol AS signal_lowvol,
+          z_sent AS signal_sentiment,
+          forecast_exp_return AS signal_forecast_er,
+          forecast_prob_up - 0.5 AS signal_forecast_prob,
+          CASE
+            WHEN rsi_14 IS NULL THEN NULL
+            WHEN rsi_14 < 30 THEN 1.0
+            WHEN rsi_14 > 70 THEN -1.0
+            ELSE 0.0
+          END AS signal_rsi_reversal,
+          CASE
+            WHEN sma_20 IS NULL OR sma_60 IS NULL THEN NULL
+            WHEN sma_20 > sma_60 THEN 1.0
+            ELSE -1.0
+          END AS signal_ma_crossover,
+          CASE
+            WHEN sma_20 IS NULL OR std_px_20 IS NULL OR std_px_20 = 0 THEN NULL
+            ELSE SAFE_DIVIDE(close_price_krw - sma_20, 2.0 * std_px_20)
+          END AS signal_bollinger_position,
+          z_ep AS signal_ep,
+          z_bp AS signal_bp,
+          z_sp AS signal_sp,
+          z_roe AS signal_roe,
+          z_rev AS signal_revenue_growth,
+          z_epsg AS signal_eps_growth,
+          -z_debt AS signal_low_debt,
+          ret_5d,
+          ret_20d,
+          volatility_20d,
+          sentiment_score,
+          close_price_krw,
+          fwd_return_20d,
+          fwd_benchmark_return_20d,
+          fwd_return_20d - fwd_benchmark_return_20d AS fwd_excess_return_20d,
+          fwd_mdd_20d,
+          fwd_return_20d IS NOT NULL
+            AND as_of_date <= DATE_SUB(CURRENT_DATE(), INTERVAL @horizon DAY) AS label_ready
+        FROM profiled
+        WHERE as_of_date >= DATE_SUB(CURRENT_DATE(), INTERVAL @lookback_days DAY)
+        """
+        self.session.execute(sql, params)
+        return 0
+
+    def refresh_signal_daily_ic(
+        self,
+        *,
+        lookback_days: int = 540,
+        horizon_days: int = 20,
+        market: str | None = None,
+    ) -> int:
+        """Computes per-signal cross-section IC and Rank-IC time series.
+
+        IC at date t measures how well signal_i at (t - horizon) predicts the
+        realized excess return between (t - horizon) and t. Rows with
+        ``label_ready = FALSE`` are skipped.
+        """
+        dataset = self.session.dataset_fqn
+        signal_columns = [
+            "signal_momentum_20d",
+            "signal_pullback",
+            "signal_meanrev_5d",
+            "signal_lowvol",
+            "signal_sentiment",
+            "signal_forecast_er",
+            "signal_forecast_prob",
+            "signal_rsi_reversal",
+            "signal_ma_crossover",
+            "signal_bollinger_position",
+            "signal_ep",
+            "signal_bp",
+            "signal_sp",
+            "signal_roe",
+            "signal_revenue_growth",
+            "signal_eps_growth",
+            "signal_low_debt",
+        ]
+        params: dict[str, Any] = {
+            "lookback_days": max(40, min(int(lookback_days), 1500)),
+            "horizon": max(5, min(int(horizon_days), 60)),
+            "market": str(market or "").strip().lower() or None,
+        }
+        unions: list[str] = []
+        for col in signal_columns:
+            signal_name = col.removeprefix("signal_")
+            unions.append(
+                f"""
+              SELECT
+                as_of_date,
+                CURRENT_TIMESTAMP() AS created_at,
+                '{signal_name}' AS signal_name,
+                @horizon AS horizon_days,
+                CORR(signal_val, fwd_excess_return_20d) AS ic_20d,
+                CORR(signal_rank, return_rank) AS rank_ic_20d,
+                COUNT(*) AS sample_size,
+                @market AS market
+              FROM (
+                SELECT
+                  as_of_date,
+                  {col} AS signal_val,
+                  fwd_excess_return_20d,
+                  PERCENT_RANK() OVER (PARTITION BY as_of_date ORDER BY {col}) AS signal_rank,
+                  PERCENT_RANK() OVER (PARTITION BY as_of_date ORDER BY fwd_excess_return_20d) AS return_rank
+                FROM `{dataset}.signal_daily_values`
+                WHERE label_ready
+                  AND as_of_date >= DATE_SUB(CURRENT_DATE(), INTERVAL @lookback_days DAY)
+                  AND {col} IS NOT NULL
+                  AND fwd_excess_return_20d IS NOT NULL
+                  AND (@market IS NULL OR market = @market)
+              )
+              GROUP BY as_of_date
+                """
+            )
+        sql = f"INSERT INTO `{dataset}.signal_daily_ic`\n" + "\nUNION ALL\n".join(unions)
+        self.session.execute(sql, params)
+        return 0
+
+    def refresh_regime_daily_features(
+        self,
+        *,
+        lookback_days: int = 540,
+        market: str | None = None,
+    ) -> int:
+        """Computes per-date regime features from signal_daily_values."""
+        dataset = self.session.dataset_fqn
+        params = {
+            "lookback_days": max(40, min(int(lookback_days), 1500)),
+            "market": str(market or "").strip().lower() or None,
+        }
+        sql = f"""
+        INSERT INTO `{dataset}.regime_daily_features`
+        SELECT
+          as_of_date,
+          CURRENT_TIMESTAMP() AS created_at,
+          @market AS market,
+          APPROX_QUANTILES(volatility_20d, 101)[OFFSET(50)] AS regime_vol_level,
+          STDDEV_SAMP(volatility_20d) AS regime_vol_dispersion,
+          AVG(ret_20d) AS regime_trend,
+          AVG(ret_5d) AS regime_short_reversal,
+          STDDEV_SAMP(ret_20d) AS regime_dispersion,
+          AVG(IFNULL(sentiment_score, 0.0)) AS regime_sentiment,
+          COUNT(*) AS sample_size
+        FROM `{dataset}.signal_daily_values`
+        WHERE as_of_date >= DATE_SUB(CURRENT_DATE(), INTERVAL @lookback_days DAY)
+          AND (@market IS NULL OR market = @market)
+        GROUP BY as_of_date
+        """
+        self.session.execute(sql, params)
+        return 0
+
+    def load_signal_daily_ic(
+        self,
+        *,
+        lookback_days: int = 540,
+        market: str | None = None,
+    ) -> list[dict[str, Any]]:
+        dataset = self.session.dataset_fqn
+        params = {
+            "lookback_days": max(40, min(int(lookback_days), 1500)),
+            "market": str(market or "").strip().lower() or None,
+        }
+        sql = f"""
+        WITH dedup AS (
+          SELECT *, ROW_NUMBER() OVER (
+            PARTITION BY as_of_date, signal_name
+            ORDER BY created_at DESC
+          ) AS rn
+          FROM `{dataset}.signal_daily_ic`
+          WHERE as_of_date >= DATE_SUB(CURRENT_DATE(), INTERVAL @lookback_days DAY)
+            AND (@market IS NULL OR market = @market OR market IS NULL)
+        )
+        SELECT * EXCEPT(rn)
+        FROM dedup
+        WHERE rn = 1
+        ORDER BY as_of_date, signal_name
+        """
+        return self.session.fetch_rows(sql, params)
+
+    def load_regime_daily_features(
+        self,
+        *,
+        lookback_days: int = 540,
+        market: str | None = None,
+    ) -> list[dict[str, Any]]:
+        dataset = self.session.dataset_fqn
+        params = {
+            "lookback_days": max(40, min(int(lookback_days), 1500)),
+            "market": str(market or "").strip().lower() or None,
+        }
+        sql = f"""
+        WITH dedup AS (
+          SELECT *, ROW_NUMBER() OVER (
+            PARTITION BY as_of_date
+            ORDER BY created_at DESC
+          ) AS rn
+          FROM `{dataset}.regime_daily_features`
+          WHERE as_of_date >= DATE_SUB(CURRENT_DATE(), INTERVAL @lookback_days DAY)
+            AND (@market IS NULL OR market = @market OR market IS NULL)
+        )
+        SELECT * EXCEPT(rn)
+        FROM dedup
+        WHERE rn = 1
+        ORDER BY as_of_date
+        """
+        return self.session.fetch_rows(sql, params)
+
+    def load_signal_scoring_rows(
+        self,
+        *,
+        limit: int = 500,
+        market: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Returns latest-date signal rows used for today's scoring."""
+        dataset = self.session.dataset_fqn
+        params = {
+            "limit": max(1, min(int(limit), 5000)),
+            "market": str(market or "").strip().lower() or None,
+        }
+        sql = f"""
+        WITH dedup AS (
+          SELECT *, ROW_NUMBER() OVER (
+            PARTITION BY as_of_date, ticker
+            ORDER BY created_at DESC
+          ) AS rn
+          FROM `{dataset}.signal_daily_values`
+          WHERE (@market IS NULL OR market = @market OR market IS NULL)
+        ),
+        latest AS (
+          SELECT MAX(as_of_date) AS as_of_date
+          FROM dedup
+          WHERE rn = 1
+        )
+        SELECT d.* EXCEPT(rn)
+        FROM dedup d
+        JOIN latest l USING (as_of_date)
+        WHERE d.rn = 1
+        ORDER BY d.signal_momentum_20d DESC NULLS LAST, d.ticker
+        LIMIT @limit
+        """
+        return self.session.fetch_rows(sql, params)
+
+    def insert_opportunity_ranker_scores_latest(self, rows: list[dict[str, Any]]) -> int:
+        if not rows:
+            return 0
+        table_id = f"{self.session.dataset_fqn}.opportunity_ranker_scores_latest"
+        payloads: list[dict[str, Any]] = []
+        for row in rows:
+            data = dict(row)
+            ticker = str(data.get("ticker") or "").strip().upper()
+            if not ticker:
+                continue
+            data["ticker"] = ticker
+            for key in ("feature_json", "explanation_json"):
+                value = data.get(key)
+                if isinstance(value, str):
+                    try:
+                        data[key] = json.loads(value)
+                    except json.JSONDecodeError:
+                        data[key] = {"raw": value}
+            payloads.append(data)
+        return self._append_json_rows_via_load_job(table_id, payloads)
+
+    def append_opportunity_ranker_run(self, row: dict[str, Any]) -> int:
+        if not row:
+            return 0
+        table_id = f"{self.session.dataset_fqn}.opportunity_ranker_runs"
+        data = dict(row)
+        for key in ("detail_json", "feature_columns"):
+            value = data.get(key)
+            if isinstance(value, str):
+                try:
+                    data[key] = json.loads(value)
+                except json.JSONDecodeError:
+                    data[key] = {"raw": value} if key == "detail_json" else [value]
+        return self._append_json_rows_via_load_job(table_id, [data])
+
+    def insert_fundamentals_history_raw(self, rows: list[dict[str, Any]]) -> int:
+        if not rows:
+            return 0
+        table_id = f"{self.session.dataset_fqn}.fundamentals_history_raw"
+        payloads: list[dict[str, Any]] = []
+        for row in rows:
+            data = dict(row)
+            ticker = str(data.get("ticker") or "").strip().upper()
+            if not ticker:
+                continue
+            data["ticker"] = ticker
+            payloads.append(data)
+        return self._append_json_rows_via_load_job(table_id, payloads)
+
+    def append_fundamentals_ingest_run(self, row: dict[str, Any]) -> int:
+        if not row:
+            return 0
+        table_id = f"{self.session.dataset_fqn}.fundamentals_ingest_runs"
+        data = dict(row)
+        value = data.get("detail_json")
+        if isinstance(value, str):
+            try:
+                data["detail_json"] = json.loads(value)
+            except json.JSONDecodeError:
+                data["detail_json"] = {"raw": value}
+        return self._append_json_rows_via_load_job(table_id, [data])
+
+    def refresh_fundamentals_derived_daily(
+        self,
+        *,
+        lookback_days: int = 600,
+        market: str | None = None,
+    ) -> int:
+        """Materializes PIT-safe fundamentals ratios per (as_of_date, ticker).
+
+        For each market_features date in the lookback window, joins the
+        latest announcement whose ``announcement_date`` is on or before
+        ``as_of_date`` and computes daily ratios using close price. TTM
+        aggregates use the trailing 4 quarters of announcements.
+        """
+        dataset = self.session.dataset_fqn
+        params = {
+            "lookback_days": max(40, min(int(lookback_days), 1500)),
+            "market": str(market or "").strip().lower() or None,
+        }
+        sql = f"""
+        INSERT INTO `{dataset}.fundamentals_derived_daily`
+        WITH price_days AS (
+          SELECT
+            DATE(as_of_ts) AS as_of_date,
+            ticker,
+            CASE
+              WHEN SAFE_CAST(ticker AS INT64) IS NOT NULL AND LENGTH(ticker) = 6 THEN 'kospi'
+              ELSE 'us'
+            END AS market,
+            close_price_krw,
+            ROW_NUMBER() OVER (
+              PARTITION BY DATE(as_of_ts), ticker
+              ORDER BY as_of_ts DESC, ingested_at DESC
+            ) AS rn
+          FROM `{dataset}.market_features`
+          WHERE DATE(as_of_ts) >= DATE_SUB(CURRENT_DATE(), INTERVAL @lookback_days DAY)
+            AND close_price_krw IS NOT NULL
+            AND close_price_krw > 0
+            AND (
+              @market IS NULL
+              OR (@market = 'kospi' AND SAFE_CAST(ticker AS INT64) IS NOT NULL AND LENGTH(ticker) = 6)
+              OR (@market = 'us' AND (SAFE_CAST(ticker AS INT64) IS NULL OR LENGTH(ticker) != 6))
+            )
+            AND {_DAILY_FILTER_SQL}
+        ),
+        daily_price AS (
+          SELECT * EXCEPT(rn) FROM price_days WHERE rn = 1
+        ),
+        history_dedup AS (
+          SELECT
+            *,
+            ROW_NUMBER() OVER (
+              PARTITION BY ticker, fiscal_year, fiscal_quarter
+              ORDER BY retrieved_at DESC
+            ) AS rn
+          FROM `{dataset}.fundamentals_history_raw`
+        ),
+        history AS (
+          SELECT * EXCEPT(rn) FROM history_dedup WHERE rn = 1
+        ),
+        ttm AS (
+          SELECT
+            ticker,
+            fiscal_year,
+            fiscal_quarter,
+            fiscal_period_end,
+            announcement_date,
+            currency,
+            net_income,
+            revenue,
+            gross_profit,
+            operating_income,
+            ebitda,
+            total_equity,
+            total_assets,
+            total_debt,
+            book_value_per_share,
+            eps_diluted,
+            SUM(net_income) OVER ttm_w AS ni_ttm,
+            SUM(revenue) OVER ttm_w AS revenue_ttm,
+            SUM(gross_profit) OVER ttm_w AS gross_ttm,
+            SUM(operating_income) OVER ttm_w AS op_income_ttm,
+            SUM(ebitda) OVER ttm_w AS ebitda_ttm,
+            SUM(eps_diluted) OVER ttm_w AS eps_ttm,
+            LAG(revenue, 4) OVER lag_w AS revenue_yoy,
+            LAG(eps_diluted, 4) OVER lag_w AS eps_yoy
+          FROM history
+          WINDOW
+            ttm_w AS (
+              PARTITION BY ticker
+              ORDER BY fiscal_period_end
+              ROWS BETWEEN 3 PRECEDING AND CURRENT ROW
+            ),
+            lag_w AS (
+              PARTITION BY ticker
+              ORDER BY fiscal_period_end
+            )
+        ),
+        joined AS (
+          SELECT
+            p.as_of_date,
+            p.ticker,
+            p.market,
+            p.close_price_krw,
+            t.announcement_date,
+            t.fiscal_period_end,
+            t.currency,
+            t.eps_ttm,
+            t.revenue_ttm,
+            t.gross_ttm,
+            t.op_income_ttm,
+            t.ebitda_ttm,
+            t.ni_ttm,
+            t.total_equity,
+            t.total_assets,
+            t.total_debt,
+            t.book_value_per_share,
+            t.revenue_yoy,
+            t.eps_yoy,
+            ROW_NUMBER() OVER (
+              PARTITION BY p.as_of_date, p.ticker
+              ORDER BY t.announcement_date DESC, t.fiscal_period_end DESC
+            ) AS rn
+          FROM daily_price p
+          LEFT JOIN ttm t
+            ON t.ticker = p.ticker
+           AND t.announcement_date <= p.as_of_date
+        )
+        SELECT
+          as_of_date,
+          CURRENT_TIMESTAMP() AS created_at,
+          ticker,
+          market,
+          fiscal_period_end AS latest_fiscal_period_end,
+          announcement_date AS latest_announcement_date,
+          DATE_DIFF(as_of_date, announcement_date, DAY) AS days_since_announcement,
+          close_price_krw AS price_native,
+          close_price_krw AS price_krw,
+          SAFE_DIVIDE(close_price_krw, NULLIF(eps_ttm, 0)) AS pe,
+          SAFE_DIVIDE(close_price_krw, NULLIF(book_value_per_share, 0)) AS pb,
+          SAFE_DIVIDE(close_price_krw, NULLIF(SAFE_DIVIDE(revenue_ttm, NULLIF(total_equity, 0)), 0)) AS ps,
+          SAFE_DIVIDE(eps_ttm, NULLIF(close_price_krw, 0)) AS ep,
+          SAFE_DIVIDE(book_value_per_share, NULLIF(close_price_krw, 0)) AS bp,
+          SAFE_DIVIDE(revenue_ttm, NULLIF(close_price_krw * NULLIF(total_equity, 0), 0)) AS sp,
+          SAFE_DIVIDE(NULLIF(total_assets, 0) + NULLIF(total_debt, 0) - total_equity, NULLIF(ebitda_ttm, 0)) AS ev_ebitda,
+          SAFE_DIVIDE(ni_ttm, NULLIF(total_equity, 0)) AS roe,
+          SAFE_DIVIDE(ni_ttm, NULLIF(total_assets, 0)) AS roa,
+          SAFE_DIVIDE(gross_ttm, NULLIF(revenue_ttm, 0)) AS gross_margin,
+          SAFE_DIVIDE(op_income_ttm, NULLIF(revenue_ttm, 0)) AS operating_margin,
+          SAFE_DIVIDE(revenue_ttm, NULLIF(revenue_yoy, 0)) - 1.0 AS revenue_growth_yoy,
+          SAFE_DIVIDE(eps_ttm, NULLIF(eps_yoy, 0)) - 1.0 AS eps_growth_yoy,
+          SAFE_DIVIDE(total_debt, NULLIF(total_equity, 0)) AS debt_to_equity,
+          CASE
+            WHEN announcement_date IS NULL THEN 'missing'
+            WHEN DATE_DIFF(as_of_date, announcement_date, DAY) > 200 THEN 'stale'
+            WHEN DATE_DIFF(as_of_date, announcement_date, DAY) > 120 THEN 'aging'
+            ELSE 'fresh'
+          END AS coverage_confidence
+        FROM joined
+        WHERE rn = 1
+        """
+        self.session.execute(sql, params)
+        return 0
+
+    def load_fundamentals_history_raw(
+        self,
+        *,
+        tickers: list[str] | None = None,
+        market: str | None = None,
+        limit: int = 20000,
+    ) -> list[dict[str, Any]]:
+        dataset = self.session.dataset_fqn
+        params: dict[str, Any] = {
+            "limit": max(1, min(int(limit), 200000)),
+            "market": str(market or "").strip().lower() or None,
+        }
+        filters = [
+            "(@market IS NULL OR market = @market)",
+        ]
+        if tickers:
+            tokens = [str(t).strip().upper() for t in tickers if str(t).strip()]
+            if tokens:
+                filters.append("ticker IN UNNEST(@tickers)")
+                params["tickers"] = list(dict.fromkeys(tokens))
+        where = " AND ".join(filters)
+        sql = f"""
+        WITH dedup AS (
+          SELECT *,
+                 ROW_NUMBER() OVER (
+                   PARTITION BY ticker, fiscal_year, fiscal_quarter
+                   ORDER BY retrieved_at DESC
+                 ) AS rn
+          FROM `{dataset}.fundamentals_history_raw`
+          WHERE {where}
+        )
+        SELECT * EXCEPT(rn)
+        FROM dedup
+        WHERE rn = 1
+        ORDER BY ticker, fiscal_year, fiscal_quarter
+        LIMIT @limit
+        """
+        return self.session.fetch_rows(sql, params)
+
+    def latest_opportunity_ranker_scores(
+        self,
+        *,
+        tickers: list[str] | None = None,
+        profiles: list[str] | None = None,
+        limit: int = 50,
+        max_age_hours: int = 30,
+    ) -> list[dict[str, Any]]:
+        batch_filters = [
+            "computed_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @max_age_hours HOUR)",
+        ]
+        row_filters = [
+            "s.computed_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @max_age_hours HOUR)",
+        ]
+        params: dict[str, Any] = {
+            "limit": max(1, min(int(limit), 500)),
+            "max_age_hours": max(1, min(int(max_age_hours), 24 * 14)),
+        }
+        if tickers:
+            tokens = [str(t).strip().upper() for t in tickers if str(t).strip()]
+            if tokens:
+                batch_filters.append("ticker IN UNNEST(@tickers)")
+                row_filters.append("s.ticker IN UNNEST(@tickers)")
+                params["tickers"] = list(dict.fromkeys(tokens))
+        if profiles:
+            profile_tokens = [str(p).strip().lower() for p in profiles if str(p).strip()]
+            if profile_tokens:
+                batch_filters.append("profile IN UNNEST(@profiles)")
+                row_filters.append("s.profile IN UNNEST(@profiles)")
+                params["profiles"] = list(dict.fromkeys(profile_tokens))
+
+        batch_where = "WHERE " + " AND ".join(batch_filters)
+        row_where = "WHERE " + " AND ".join(row_filters)
+        sql = f"""
+        WITH latest_batch AS (
+          SELECT ranker_version, computed_at
+          FROM `{self.session.dataset_fqn}.opportunity_ranker_scores_latest`
+          {batch_where}
+          QUALIFY ROW_NUMBER() OVER (
+            ORDER BY computed_at DESC, ranker_version DESC
+          ) = 1
+        ),
+        dedup AS (
+          SELECT s.*
+          FROM `{self.session.dataset_fqn}.opportunity_ranker_scores_latest` s
+          JOIN latest_batch b
+            ON s.ranker_version = b.ranker_version
+           AND s.computed_at = b.computed_at
+          {row_where}
+          QUALIFY ROW_NUMBER() OVER (
+            PARTITION BY s.ticker
+            ORDER BY s.recommendation_rank ASC, s.recommendation_score DESC
+          ) = 1
+        )
+        SELECT *
+        FROM dedup
+        ORDER BY recommendation_rank ASC, recommendation_score DESC, ticker
+        LIMIT @limit
+        """
+        return self.session.fetch_rows(sql, params)
+
     def _normalize_forecast_mode(self, mode: str | None) -> str:
         token = str(mode or "").strip().lower()
         if not token:

@@ -7,5 +7,5 @@
 
 유니버스 가이드라인:
 도구를 사용하여 런타임에 제공되는 유니버스 안에서 기회를 발굴하십시오.
-핵심 discovery 도구는 `screen_market`이며, 모멘텀·눌림목·회복·방어·가치 버킷을 지원합니다. bucket을 비워두면 균형 잡힌 mixed 결과가 나옵니다.
+핵심 discovery 도구는 `recommend_opportunities`입니다. 이 도구는 shared prep에서 미리 계산한 learned opportunity ranker 결과를 읽어 예측 초과수익, outperform 확률, 예상 drawdown, model confidence 기준으로 공격형·균형형·방어형·가치형·전술형 추천을 정리합니다. 레버리지/인버스/변동성 ETP는 일반 주식과 섞지 말고 tactical 프로필을 확인하세요.
 시장은 NASDAQ 및 NYSE 종목 각각 200개 수준으로 구성되며, 도구를 통해 어떤 서브셋이든 자유롭게 탐색할 수 있습니다.

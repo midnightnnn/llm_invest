@@ -48,6 +48,8 @@ from .sector_map import SECTOR_BY_TICKER
 logger = logging.getLogger(__name__)
 
 
+
+
 def _to_float(value: Any, default: float | None = 0.0) -> float | None:
     """Safely parses mixed API payload values into float."""
     try:
@@ -887,6 +889,219 @@ class QuantTools:
         )
         self._log_tool_result("screen_market", out, key_fields=["ticker", "bucket", "score", "ret_20d", "volatility_20d"])
         return out
+
+    def _json_dict(self, value: Any) -> dict[str, Any]:
+        if isinstance(value, dict):
+            return dict(value)
+        if isinstance(value, str) and value.strip():
+            try:
+                import json
+
+                parsed = json.loads(value)
+                return dict(parsed) if isinstance(parsed, dict) else {}
+            except Exception:
+                return {}
+        return {}
+
+    def _recommend_opportunities_from_learned_rows(
+        self,
+        learned_rows: list[dict[str, Any]],
+        *,
+        top_n: int,
+        buckets: list[str] | None,
+        include_watchlist: bool,
+        diagnostics: dict[str, Any],
+    ) -> dict[str, Any]:
+        allowed_buckets = {
+            str(bucket or "").strip().lower()
+            for bucket in (buckets or [])
+            if str(bucket or "").strip()
+        }
+        rows: list[dict[str, Any]] = []
+        for raw in learned_rows:
+            if not isinstance(raw, dict):
+                continue
+            ticker = str(raw.get("ticker") or "").strip().upper()
+            if not ticker:
+                continue
+            bucket = str(raw.get("bucket") or "").strip().lower()
+            if allowed_buckets and bucket not in allowed_buckets:
+                continue
+            feature_json = self._json_dict(raw.get("feature_json"))
+            explanation_json = self._json_dict(raw.get("explanation_json"))
+            score = _to_float(raw.get("recommendation_score"), default=0.0) or 0.0
+            pred_excess = _to_float(raw.get("predicted_excess_return_20d"), default=None)
+            prob_outperform = _to_float(raw.get("prob_outperform_20d"), default=None)
+            pred_drawdown = _to_float(raw.get("predicted_drawdown_20d"), default=None)
+            action = str(raw.get("action") or "watchlist").strip().lower()
+            confidence = str(raw.get("model_confidence") or "low").strip().lower()
+            ranker_version = str(raw.get("ranker_version") or "").strip()
+            reasons_for = [
+                f"Learned IC ranker score={score:+.4f}",
+            ]
+            top_contribs = list(explanation_json.get("top_contributions") or [])
+            if top_contribs:
+                parts = []
+                for item in top_contribs[:4]:
+                    if isinstance(item, dict):
+                        name = str(item.get("signal") or "")
+                        contrib = _to_float(item.get("contribution"), default=0.0) or 0.0
+                        if name:
+                            parts.append(f"{name}({contrib:+.4f})")
+                if parts:
+                    reasons_for.append("contribs: " + " ".join(parts))
+            if prob_outperform is not None:
+                reasons_for.append(f"prob_up={float(prob_outperform):.1%}")
+            risk_notes: list[str] = []
+            blended = _to_float(explanation_json.get("blended_oos_ic_accuracy"), default=None)
+            if blended is not None:
+                risk_notes.append(f"blended_oos_ic={float(blended):+.3f}")
+            scored_count = explanation_json.get("scored_signal_count")
+            if scored_count is not None:
+                risk_notes.append(f"signals_scored={int(scored_count)}")
+            if confidence == "low":
+                risk_notes.append("model_confidence=low")
+            if explanation_json.get("days_since_regime") and int(explanation_json.get("days_since_regime") or 0) > 3:
+                risk_notes.append("regime_stale")
+            rows.append(
+                {
+                    "ticker": ticker,
+                    "profile": str(raw.get("profile") or "balanced").strip().lower() or "balanced",
+                    "tactical_kind": explanation_json.get("tactical_kind"),
+                    "bucket": bucket,
+                    "buckets": [bucket] if bucket else [],
+                    "recommendation_rank": raw.get("recommendation_rank"),
+                    "score": round(float(score), 6),
+                    "recommendation_score": round(float(score), 6),
+                    "score_source": str(raw.get("score_source") or "learned_ic"),
+                    "ranker_version": ranker_version,
+                    "predicted_excess_return_20d": pred_excess,
+                    "prob_outperform_20d": prob_outperform,
+                    "predicted_drawdown_20d": pred_drawdown,
+                    "confidence": confidence,
+                    "model_confidence": confidence,
+                    "action": action,
+                    "evidence_level": str(raw.get("evidence_level") or "validated"),
+                    "reason": "; ".join(reasons_for),
+                    "reason_for": "; ".join(reasons_for),
+                    "reason_risk": "; ".join(risk_notes) or "Learned IC ranker output; inspect per-signal IC freshness.",
+                    "signal_contributions": top_contribs,
+                    "predicted_ic": explanation_json.get("predicted_ic"),
+                    "forecast": {
+                        "exp_return_period": feature_json.get("forecast_er"),
+                        "prob_up": (0.5 + feature_json["forecast_prob"]) if feature_json.get("forecast_prob") is not None else None,
+                    },
+                    "optimizer_weight": raw.get("optimizer_weight"),
+                    "optimizer_raw_weight": raw.get("optimizer_raw_weight"),
+                    "validation": {
+                        "ranker": "ok",
+                        "features": "ok" if feature_json else "missing",
+                        "optimizer": "ok" if raw.get("optimizer_weight") is not None else "not_applicable",
+                    },
+                    "evidence_gaps": [] if confidence != "low" else ["model_confidence_low"],
+                    "feature_json": feature_json,
+                    "explanation_json": explanation_json,
+                }
+            )
+
+        rows.sort(
+            key=lambda row: (
+                int(row.get("recommendation_rank") or 9999),
+                -float(row.get("recommendation_score") or 0.0),
+                str(row.get("ticker") or ""),
+            )
+        )
+        for idx, row in enumerate(rows, start=1):
+            row["recommendation_rank"] = idx
+
+        candidate_actions = {"candidate", "tactical_candidate"}
+        watchlist_actions = {"watchlist", "tactical_watchlist"}
+        recommendations = [row for row in rows if row.get("action") in candidate_actions]
+        if include_watchlist and len(recommendations) < int(top_n):
+            recommendations.extend(row for row in rows if row.get("action") in watchlist_actions)
+        recommendations = recommendations[: max(1, min(int(top_n), 20))]
+
+        by_profile: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            profile = str(row.get("profile") or "balanced")
+            by_profile.setdefault(profile, []).append(row)
+        by_profile = {profile: items[: max(1, min(int(top_n), 10))] for profile, items in by_profile.items()}
+        first_explanation = self._json_dict(rows[0].get("explanation_json")) if rows else {}
+        ranker = {
+            "mode": "learned",
+            "score_source": str(rows[0].get("score_source") or "learned_ic") if rows else "learned_ic",
+            "model_family": first_explanation.get("model_family", "signal_ic_meta_learner"),
+            "version": str(rows[0].get("ranker_version") or "") if rows else "",
+            "rows": len(rows),
+            "blended_oos_ic_accuracy": first_explanation.get("blended_oos_ic_accuracy"),
+            "predicted_ic": first_explanation.get("predicted_ic"),
+        }
+        return {
+            "status": "ok" if recommendations else "degraded",
+            "recommendations": recommendations,
+            "rows": rows,
+            "by_profile": by_profile,
+            "optimizer": {},
+            "ranker": ranker,
+            "diagnostics": diagnostics,
+        }
+
+    def recommend_opportunities(
+        self,
+        top_n: int = 8,
+        *,
+        buckets: list[str] | None = None,
+        max_candidates: int = 20,
+        include_watchlist: bool = True,
+        max_score_age_hours: int = 30,
+    ) -> dict[str, Any]:
+        """Returns precomputed signal-IC-weighted opportunities from BigQuery.
+
+        Reads ``opportunity_ranker_scores_latest``; when rows are missing or
+        stale, surfaces an explicit ``status='unusable'`` so the agent knows
+        shared prep must be rerun. There is no heuristic fallback by design —
+        silently substituting a different algorithm would hide failures.
+        """
+        diagnostics: dict[str, Any] = {
+            "pipeline": ["signal_ic_meta_learner", "opportunity_ranker_scores_latest"],
+            "max_score_age_hours": max_score_age_hours,
+            "warnings": [],
+        }
+        learned_rows: list[dict[str, Any]] = []
+        loader = getattr(self.repo, "latest_opportunity_ranker_scores", None)
+        if callable(loader):
+            try:
+                learned_rows = loader(
+                    limit=max(1, min(int(max_candidates), 500)),
+                    max_age_hours=max(1, min(int(max_score_age_hours), 24 * 14)),
+                ) or []
+            except Exception as exc:
+                diagnostics["warnings"].append(f"latest_opportunity_ranker_scores failed: {str(exc)[:160]}")
+        else:
+            diagnostics["warnings"].append("latest_opportunity_ranker_scores unavailable")
+
+        if learned_rows:
+            out = self._recommend_opportunities_from_learned_rows(
+                learned_rows,
+                top_n=top_n,
+                buckets=buckets,
+                include_watchlist=include_watchlist,
+                diagnostics=diagnostics,
+            )
+            self._log_tool_result("recommend_opportunities", out.get("rows") or [], key_fields=["ticker", "profile", "recommendation_score", "confidence", "action"])
+            return out
+
+        return {
+            "status": "unusable",
+            "error": "learned opportunity ranker scores are missing or stale; run build-opportunity-ranker in shared prep",
+            "recommendations": [],
+            "rows": [],
+            "by_profile": {},
+            "optimizer": {},
+            "ranker": {"score_source": "missing"},
+            "diagnostics": diagnostics,
+        }
+
 
     def optimize_portfolio(
         self,

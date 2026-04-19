@@ -50,6 +50,12 @@ fi
 if [[ -n "${ECOS_API_KEY:-}" ]]; then
   RUN_ENV_VARS="${RUN_ENV_VARS}@ECOS_API_KEY=${ECOS_API_KEY}"
 fi
+if [[ -n "${SEC_USER_AGENT:-}" ]]; then
+  RUN_ENV_VARS="${RUN_ENV_VARS}@SEC_USER_AGENT=${SEC_USER_AGENT}"
+elif [[ -n "${ARENA_OPERATOR_EMAILS:-}" ]]; then
+  _SEC_CONTACT="${ARENA_OPERATOR_EMAILS%%,*}"
+  RUN_ENV_VARS="${RUN_ENV_VARS}@SEC_USER_AGENT=LLM Arena ${_SEC_CONTACT}"
+fi
 # Multi-tenant runtime loads model/KIS secrets from runtime_credentials per tenant.
 # Keep this empty by default; set explicitly only for single-tenant fallback operation.
 RUN_SECRETS="${RUN_SECRETS:-}"

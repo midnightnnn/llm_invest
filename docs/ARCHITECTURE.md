@@ -136,8 +136,8 @@ arena/                           Core business logic
 ├── cli_commands/                 Modular CLI command handlers
 │   ├── run.py                   Command dispatch routing (45L)
 │   ├── run_agent.py             Agent cycle execution (510L)
-│   ├── run_pipeline.py          Full sync→forecast→agent pipeline (472L)
-│   ├── run_shared.py            Shared sync/forecast operations (460L)
+│   ├── run_pipeline.py          Full sync→forecast→ranker→agent pipeline
+│   ├── run_shared.py            Shared sync/forecast/ranker operations
 │   ├── run_reconcile.py         Reconciliation operations (227L)
 │   ├── serve.py                 UI and MCP server startup (265L)
 │   ├── sync.py                  Market/account data sync (343L)
@@ -285,6 +285,16 @@ BigQueryRepository (bq.py, 141L)  ← 얇은 facade
 | `predicted_expected_returns` | 예측 수익률 (7-모델 앙상블) |
 | `research_briefings` | 리서치 브리핑 |
 | `dividend_events` | 배당 이벤트 |
+| `signal_daily_values` | Layer 1 signal + forward label 재료 (point-in-time) |
+| `signal_daily_ic` | 각 signal의 cross-section IC 시계열 |
+| `regime_daily_features` | 시장 regime 스냅샷 (vol/trend/dispersion/sentiment) |
+| `fundamentals_history_raw` | 분기 발표값 원본, `announcement_date` PIT key, 출처 구분 태그 |
+| `fundamentals_derived_daily` | 매일 가격과 결합한 PIT-safe ratio (pe/pb/ep/bp/roe/growth/d2e) |
+| `fundamentals_ingest_runs` | KIS/SEC/FMP ingest job metadata (status, tickers_attempted, quarters_inserted) |
+| `opportunity_ranker_scores_latest` | signal-IC 합산 점수 (런타임 `recommend_opportunities` 소스) |
+| `opportunity_ranker_runs` | ranker 학습 run metadata (per-signal OOS accuracy, predicted_IC) |
+
+Fundamentals 초기 백필 절차는 [`fundamentals_backfill_runbook.md`](fundamentals_backfill_runbook.md) 참고.
 
 ### 3.3 Ledger — Append-Only Foundation (`ledger_store.py`)
 
@@ -522,11 +532,12 @@ decay_multiplier = max(decay_factor ^ (staleness_days × tier_weight / access_bo
 | `portfolio_diagnosis` | 집중도/팩터/스트레스 진단 |
 | `save_memory` | observation/reflection 저장 |
 
-### 6.3 Quant Tools (8개) — `quant_tools.py`
+### 6.3 Quant Tools (9개) — `quant_tools.py`
 
 | Tool | Function |
 |------|----------|
-| `screen_market` | Momentum/volatility/return 필터 → top 20 |
+| `recommend_opportunities` | signal-IC meta-learner 기반 추천. prep 단계에서 signal-IC 학습 → `opportunity_ranker_scores_latest`에 predict_IC × signal 합산 점수 저장, runtime은 읽기만. Tactical ETP 프로필 자동 분리 |
+| `screen_market` | 내부 후보 생성용 Momentum/volatility/return 필터 |
 | `optimize_portfolio` | Max-Sharpe, HRP, forecast-enhanced |
 | `forecast_returns` | 7-model ensemble → prob_up |
 | `momentum_rank` | Multi-window (20/60/126일) momentum |
@@ -799,10 +810,11 @@ llm-arena sync-dividends                    # 배당 귀속
 
 # Forecasting
 llm-arena build-forecasts                   # 7-model ensemble
+llm-arena build-opportunity-ranker          # point-in-time ML ranker + latest scores
 
 # Trading
-llm-arena run-pipeline --live --market us         # Full: sync → forecast → agents
-llm-arena run-shared-prep --live --market us      # Shared sync/forecast only
+llm-arena run-pipeline --live --market us         # Full: sync → forecast → ranker → agents
+llm-arena run-shared-prep --live --market us      # Shared sync/forecast/ranker prep only
 llm-arena run-agent-cycle --live --all-tenants    # Agent cycle only
 llm-arena run-batch --live --all-tenants          # Manual sync + cycle shortcut
 
@@ -821,9 +833,9 @@ llm-arena set-tenant-simulated --tenant <id>     # simulated-only onboarding
 
 | Module | Lines | Purpose |
 |--------|-------|---------|
-| `run_pipeline.py` | 472 | sync → forecast → agent |
+| `run_pipeline.py` | 472 | sync → forecast → ranker → agent |
 | `run_agent.py` | 510 | agent cycle only |
-| `run_shared.py` | 460 | shared sync/forecast |
+| `run_shared.py` | 460 | shared sync/forecast/ranker |
 | `sync.py` | 343 | market/account sync |
 | `admin.py` | 336 | tenant/memory admin |
 | `serve.py` | 265 | UI + MCP server |

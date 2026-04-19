@@ -1343,20 +1343,21 @@ def test_admin_tools_lists_core_and_optional(monkeypatch) -> None:
     tool_ids = {str(entry["tool_id"]) for entry in entries}
     assert len(tool_ids) >= 17
     assert "portfolio_diagnosis" in tool_ids
-    assert "screen_market" in tool_ids
+    assert "recommend_opportunities" in tool_ids
+    assert "screen_market" not in tool_ids
     assert "correlation_matrix" not in tool_ids
     assert "momentum_rank" not in tool_ids
     assert "fetch_reddit_sentiment" in tool_ids
     core_entry = next(entry for entry in entries if str(entry["tool_id"]) == "portfolio_diagnosis")
-    optional_entry = next(entry for entry in entries if str(entry["tool_id"]) == "screen_market")
+    optional_entry = next(entry for entry in entries if str(entry["tool_id"]) == "recommend_opportunities")
     forecast_entry = next(entry for entry in entries if str(entry["tool_id"]) == "forecast_returns")
     assert core_entry["configurable"] is True
     assert core_entry["tier"] == "core"
     assert core_entry["label_ko"] == "포트폴리오 진단"
     assert optional_entry["configurable"] is True
     assert optional_entry["tier"] == "optional"
-    assert optional_entry["label_ko"] == "시장 스크리닝"
-    assert "가치주 버킷" in str(optional_entry["description_ko"])
+    assert optional_entry["label_ko"] == "통합 기회 추천"
+    assert "ML ranker" in str(optional_entry["description_ko"])
     assert forecast_entry["label_ko"] == "수익률 예측"
     assert "self-discovered 후보 바스켓" in str(forecast_entry["description_ko"])
 

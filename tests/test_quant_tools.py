@@ -510,6 +510,53 @@ def test_screen_market_value_bucket_prefers_snapshot_valuation() -> None:
     assert repo.last_fundamentals_kwargs is not None
 
 
+def test_recommend_opportunities_uses_precomputed_learned_scores() -> None:
+    class _Repo(FakeRepo):
+        def latest_opportunity_ranker_scores(self, *, limit=50, max_age_hours=30, tickers=None, profiles=None):
+            _ = (limit, max_age_hours, tickers, profiles)
+            return [
+                {
+                    "as_of_date": "2026-04-17",
+                    "computed_at": "2026-04-18T00:00:00+00:00",
+                    "ranker_version": "opportunity_ranker_20260417_test",
+                    "score_source": "learned",
+                    "ticker": "MSFT",
+                    "profile": "defensive",
+                    "bucket": "defensive",
+                    "recommendation_rank": 1,
+                    "recommendation_score": 0.041,
+                    "predicted_excess_return_20d": 0.032,
+                    "prob_outperform_20d": 0.61,
+                    "predicted_drawdown_20d": -0.045,
+                    "model_confidence": "medium",
+                    "action": "candidate",
+                    "evidence_level": "validated",
+                    "feature_json": {"ret_20d": 0.08, "forecast_exp_return": 0.03},
+                    "explanation_json": {"top_features": ["forecast_exp_return", "screen_score"]},
+                }
+            ]
+
+    qt = QuantTools(repo=_Repo(), settings=_settings())
+
+    out = qt.recommend_opportunities(top_n=3)
+
+    assert out["status"] == "ok"
+    assert out["ranker"]["score_source"] == "learned"
+    assert out["recommendations"][0]["ticker"] == "MSFT"
+    assert out["recommendations"][0]["score_source"] == "learned"
+    assert out["recommendations"][0]["predicted_excess_return_20d"] == 0.032
+
+
+def test_recommend_opportunities_learned_missing_is_not_silent_heuristic_fallback() -> None:
+    qt = QuantTools(repo=FakeRepo(), settings=_settings())
+
+    out = qt.recommend_opportunities(top_n=3)
+
+    assert out["status"] == "unusable"
+    assert out["recommendations"] == []
+    assert out["ranker"]["score_source"] == "missing"
+
+
 def test_optimize_portfolio_sharpe() -> None:
     qt = QuantTools(repo=FakeRepo(), settings=_settings())
     out = qt.optimize_portfolio(["AAPL", "MSFT"], strategy="sharpe", lookback_days=20)

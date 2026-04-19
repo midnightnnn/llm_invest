@@ -301,7 +301,8 @@ scripts/           # 배포 스크립트
 
 | 도구 | 설명 |
 |:-----|:-----|
-| `screen_market` | 필터 기반 유니버스 스크리닝 |
+| `recommend_opportunities` | point-in-time ML ranker가 미리 계산한 기회 추천, 전술형 ETP 분리 처리 |
+| `screen_market` | 내부 후보 생성용 screen-only 스크리너 |
 | `optimize_portfolio` | 포트폴리오 최적화 + 리밸런스 |
 | `forecast_returns` | 뉴럴 + 파운데이션 모델 스태킹 예측 |
 | `technical_signals` | RSI / MACD / 볼린저 / SMA |

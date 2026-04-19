@@ -284,6 +284,293 @@ def cmd_build_forecasts(args: object) -> None:
     )
 
 
+def cmd_build_opportunity_ranker(args: object) -> None:
+    """Builds the learned opportunity ranker and writes precomputed scores."""
+    cli = _cli()
+    settings = cli.load_settings()
+    cli.configure_logging(settings.log_level, settings.log_format)
+    cli._validate_or_exit(settings)
+
+    repo = cli._repo_or_exit(settings)
+    repo.ensure_dataset()
+    repo.ensure_tables()
+
+    from arena.recommendation import build_and_store_opportunity_ranker
+
+    result = build_and_store_opportunity_ranker(
+        repo,
+        settings,
+        lookback_days=max(120, int(getattr(args, "lookback_days", 540))),
+        horizon_days=max(5, int(getattr(args, "horizon", 20))),
+        max_scoring_rows=max(50, int(getattr(args, "max_scoring_rows", 500))),
+        min_ic_dates=max(20, int(getattr(args, "min_ic_dates", 60))),
+        min_valid_signals=max(1, int(getattr(args, "min_valid_signals", 3))),
+    )
+    log_fn = logger.info if result.status == "ok" else logger.warning
+    log_fn(
+        "[bold %s]Opportunity ranker build %s[/bold %s] version=%s status=%s training=%d validation=%d scoring=%d written=%d ic=%s hit=%s note=%s",
+        "green" if result.status == "ok" else "yellow",
+        "finished" if result.status == "ok" else "degraded",
+        "green" if result.status == "ok" else "yellow",
+        result.ranker_version or "-",
+        result.status,
+        int(result.training_rows),
+        int(result.validation_rows),
+        int(result.scoring_rows),
+        int(result.scores_written),
+        "-" if result.oos_ic_20d is None else f"{result.oos_ic_20d:.4f}",
+        "-" if result.oos_hit_rate_20d is None else f"{result.oos_hit_rate_20d:.4f}",
+        result.note or "-",
+    )
+
+
+def _signal_refresh_bootstrap() -> tuple[object, object, object]:
+    """Loads settings/repo/market for signal-refresh debug CLIs."""
+    cli = _cli()
+    settings = cli.load_settings()
+    cli.configure_logging(settings.log_level, settings.log_format)
+    cli._validate_or_exit(settings)
+    repo = cli._repo_or_exit(settings)
+    repo.ensure_dataset()
+    repo.ensure_tables()
+    return cli, settings, repo
+
+
+def cmd_refresh_signals(args: object) -> None:
+    """Recomputes signal_daily_values (debug)."""
+    from arena.market_sources import live_market_sources_for_markets, parse_markets
+
+    _, settings, repo = _signal_refresh_bootstrap()
+    market = str(settings.kis_target_market or "").strip().lower()
+    sources = live_market_sources_for_markets(parse_markets(settings.kis_target_market)) or None
+    repo.refresh_signal_daily_values(
+        lookback_days=max(40, int(getattr(args, "lookback_days", 540))),
+        horizon_days=max(5, int(getattr(args, "horizon", 20))),
+        sources=sources,
+        market=market,
+    )
+    logger.info("[bold green]refresh-signals done[/bold green] market=%s", market)
+
+
+def cmd_refresh_signal_ic(args: object) -> None:
+    """Recomputes signal_daily_ic (debug)."""
+    _, settings, repo = _signal_refresh_bootstrap()
+    market = str(settings.kis_target_market or "").strip().lower()
+    repo.refresh_signal_daily_ic(
+        lookback_days=max(40, int(getattr(args, "lookback_days", 540))),
+        horizon_days=max(5, int(getattr(args, "horizon", 20))),
+        market=market,
+    )
+    logger.info("[bold green]refresh-signal-ic done[/bold green] market=%s", market)
+
+
+def cmd_refresh_regime_features(args: object) -> None:
+    """Recomputes regime_daily_features (debug)."""
+    _, settings, repo = _signal_refresh_bootstrap()
+    market = str(settings.kis_target_market or "").strip().lower()
+    repo.refresh_regime_daily_features(
+        lookback_days=max(40, int(getattr(args, "lookback_days", 540))),
+        market=market,
+    )
+    logger.info("[bold green]refresh-regime-features done[/bold green] market=%s", market)
+
+
+def _load_backfill_tickers(args: object) -> list[str]:
+    raw = getattr(args, "tickers", None)
+    if raw:
+        text = str(raw).strip()
+        if text:
+            return [t.strip().upper() for t in text.split(",") if t.strip()]
+    path_val = getattr(args, "tickers_file", None)
+    if path_val:
+        try:
+            with open(str(path_val), encoding="utf-8") as fh:
+                return [line.strip().upper() for line in fh if line.strip()]
+        except OSError as exc:
+            logger.warning("ticker file read failed path=%s err=%s", path_val, exc)
+    return []
+
+
+def cmd_fundamentals_backfill_kr(args: object) -> None:
+    """Runs the KIS-based fundamentals backfill for Korean tickers."""
+    cli = _cli()
+    settings = cli.load_settings()
+    cli.configure_logging(settings.log_level, settings.log_format)
+    cli._validate_or_exit(settings)
+    repo = cli._repo_or_exit(settings)
+    repo.ensure_dataset()
+    repo.ensure_tables()
+    from arena.open_trading.client import OpenTradingClient
+    from arena.open_trading.kis_fundamentals_ingestor import KISFundamentalsIngestor
+
+    tickers = _load_backfill_tickers(args)
+    if not tickers:
+        session = getattr(repo, "session", None)
+        if session is not None and hasattr(session, "fetch_rows"):
+            try:
+                rows = session.fetch_rows(
+                    f"""
+                    SELECT DISTINCT ticker
+                    FROM `{session.dataset_fqn}.universe_candidates`
+                    WHERE SAFE_CAST(ticker AS INT64) IS NOT NULL
+                      AND LENGTH(ticker) = 6
+                      AND created_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @days DAY)
+                    """,
+                    {"days": 14},
+                ) or []
+                tickers = sorted({str(r.get("ticker") or "").strip() for r in rows if r.get("ticker")})
+            except Exception as exc:
+                logger.warning("KR universe query failed err=%s", exc)
+    if not tickers:
+        logger.warning("[yellow]no tickers supplied for KR backfill[/yellow]")
+        return
+
+    client = OpenTradingClient(settings=settings)
+    ingestor = KISFundamentalsIngestor(
+        client=client,
+        repo=repo,
+        div_cls_code=str(getattr(args, "period", "quarter") or "quarter").lower() == "annual" and "0" or "1",
+    )
+    logger.info("[cyan]KR fundamentals backfill start[/cyan] tickers=%d period=%s", len(tickers), getattr(args, "period", "quarter"))
+    result = ingestor.run(tickers=tickers, market="kospi")
+    logger.info(
+        "[bold green]KR fundamentals backfill %s[/bold green] run=%s attempted=%d succeeded=%d quarters=%d",
+        result.status,
+        result.run_id,
+        result.tickers_attempted,
+        result.tickers_succeeded,
+        result.quarters_inserted,
+    )
+
+
+def cmd_fundamentals_backfill_us(args: object) -> None:
+    """Runs the SEC/FMP-based fundamentals backfill for US tickers."""
+    cli = _cli()
+    settings = cli.load_settings()
+    cli.configure_logging(settings.log_level, settings.log_format)
+    cli._validate_or_exit(settings)
+    import os
+    repo = cli._repo_or_exit(settings)
+    repo.ensure_dataset()
+    repo.ensure_tables()
+
+    tickers = _load_backfill_tickers(args)
+    if not tickers:
+        session = getattr(repo, "session", None)
+        if session is not None and hasattr(session, "fetch_rows"):
+            try:
+                rows = session.fetch_rows(
+                    f"""
+                    SELECT DISTINCT ticker
+                    FROM `{session.dataset_fqn}.universe_candidates`
+                    WHERE SAFE_CAST(ticker AS INT64) IS NULL
+                      AND created_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @days DAY)
+                    """,
+                    {"days": 14},
+                ) or []
+                tickers = sorted({str(r.get("ticker") or "").strip().upper() for r in rows if r.get("ticker")})
+            except Exception as exc:
+                logger.warning("US universe query failed err=%s", exc)
+    if not tickers:
+        logger.warning("[yellow]no tickers supplied for US backfill[/yellow]")
+        return
+
+    source = str(getattr(args, "source", "sec") or "sec").strip().lower()
+    logger.info("[cyan]US fundamentals backfill start[/cyan] source=%s tickers=%d period=%s", source, len(tickers), getattr(args, "period", "quarter"))
+    if source == "fmp":
+        api_key = str(getattr(args, "api_key", "") or os.environ.get("FMP_API_KEY", "") or "").strip()
+        if not api_key:
+            logger.error("[red]FMP_API_KEY env var or --api-key required for --source fmp[/red]")
+            raise SystemExit(2)
+        from arena.open_trading.fmp_fundamentals_ingestor import FMPFundamentalsIngestor
+
+        ingestor = FMPFundamentalsIngestor(
+            api_key=api_key,
+            repo=repo,
+            period=str(getattr(args, "period", "quarter") or "quarter"),
+            limit=int(getattr(args, "limit", 40) or 40),
+        )
+    else:
+        from arena.open_trading.sec_fundamentals_ingestor import SECFundamentalsIngestor
+
+        sec_user_agent = str(getattr(args, "sec_user_agent", "") or os.environ.get("SEC_USER_AGENT", "") or "").strip()
+        if not sec_user_agent:
+            contact = str(os.environ.get("ARENA_OPERATOR_EMAILS", "") or "").split(",")[0].strip()
+            if contact:
+                sec_user_agent = f"LLM Arena {contact}"
+        if not sec_user_agent:
+            logger.error("[red]SEC_USER_AGENT or ARENA_OPERATOR_EMAILS required for --source sec[/red]")
+            raise SystemExit(2)
+        ingestor = SECFundamentalsIngestor(
+            repo=repo,
+            user_agent=sec_user_agent,
+            sleep_seconds=float(getattr(args, "sleep_seconds", 0.15) or 0.15),
+        )
+    result = ingestor.run(tickers=tickers, market="us")
+    logger.info(
+        "[bold green]US fundamentals backfill %s[/bold green] run=%s attempted=%d succeeded=%d quarters=%d",
+        result.status,
+        result.run_id,
+        result.tickers_attempted,
+        result.tickers_succeeded,
+        result.quarters_inserted,
+    )
+
+
+def cmd_fundamentals_coverage(args: object) -> None:
+    """Prints a fundamentals coverage report by market/year."""
+    cli = _cli()
+    settings = cli.load_settings()
+    cli.configure_logging(settings.log_level, settings.log_format)
+    cli._validate_or_exit(settings)
+    repo = cli._repo_or_exit(settings)
+    session = getattr(repo, "session", None)
+    if session is None or not hasattr(session, "fetch_rows"):
+        logger.error("repo does not expose BigQuery session for coverage report")
+        return
+    sql = f"""
+    SELECT
+      market,
+      MIN(fiscal_year) AS min_year,
+      MAX(fiscal_year) AS max_year,
+      COUNT(DISTINCT ticker) AS tickers,
+      COUNT(*) AS rows,
+      COUNT(DISTINCT CONCAT(CAST(fiscal_year AS STRING), '-Q', CAST(fiscal_quarter AS STRING))) AS distinct_periods
+    FROM `{session.dataset_fqn}.fundamentals_history_raw`
+    GROUP BY market
+    ORDER BY market
+    """
+    rows = session.fetch_rows(sql, {}) or []
+    logger.info("[bold]Fundamentals coverage[/bold]")
+    for row in rows:
+        logger.info(
+            "  market=%s years=%s~%s tickers=%s rows=%s periods=%s",
+            row.get("market"),
+            row.get("min_year"),
+            row.get("max_year"),
+            row.get("tickers"),
+            row.get("rows"),
+            row.get("distinct_periods"),
+        )
+
+
+def cmd_refresh_fundamentals_derived(args: object) -> None:
+    """Recomputes fundamentals_derived_daily for a lookback window."""
+    cli = _cli()
+    settings = cli.load_settings()
+    cli.configure_logging(settings.log_level, settings.log_format)
+    cli._validate_or_exit(settings)
+    repo = cli._repo_or_exit(settings)
+    repo.ensure_dataset()
+    repo.ensure_tables()
+    market = str(settings.kis_target_market or "").strip().lower()
+    repo.refresh_fundamentals_derived_daily(
+        lookback_days=max(40, int(getattr(args, "lookback_days", 600))),
+        market=market,
+    )
+    logger.info("[bold green]refresh-fundamentals-derived done[/bold green] market=%s", market)
+
+
 def cmd_list_strategies() -> None:
     """Prints strategy reference cards for quick inspection."""
     cli = _cli()

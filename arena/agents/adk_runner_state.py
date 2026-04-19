@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-DISCOVERY_TOOLS: frozenset[str] = frozenset({"screen_market"})
+DISCOVERY_TOOLS: frozenset[str] = frozenset({"recommend_opportunities", "screen_market"})
 ANALYSIS_TOOLS: frozenset[str] = frozenset(
     {
         "forecast_returns",
@@ -73,8 +73,15 @@ def discovery_rows_from_tool_result(tool_name: str, result: Any) -> list[dict[st
     seen: set[str] = set()
     token = str(tool_name or "").strip().lower()
 
-    def _source_tool(bucket: str | None) -> str:
+    def _source_tool(bucket: str | None, profile: str | None = None) -> str:
         bucket_token = str(bucket or "").strip().lower()
+        profile_token = str(profile or "").strip().lower()
+        if token == "recommend_opportunities":
+            if profile_token:
+                return f"recommend_opportunities:{profile_token}"
+            if bucket_token:
+                return f"recommend_opportunities:{bucket_token}"
+            return "recommend_opportunities"
         if bucket_token:
             return f"screen_market:{bucket_token}"
         return token or "screen_market"
@@ -85,11 +92,26 @@ def discovery_rows_from_tool_result(tool_name: str, result: Any) -> list[dict[st
             return
         seen.add(ticker)
         bucket = str(row.get("bucket") or "").strip().lower() or None
+        profile = str(row.get("profile") or "").strip().lower() or None
         evidence: dict[str, Any] = {}
         for field in (
+            "profile",
+            "tactical_kind",
             "bucket",
+            "buckets",
             "bucket_rank",
             "score",
+            "recommendation_score",
+            "recommendation_rank",
+            "score_source",
+            "ranker_version",
+            "score_components",
+            "predicted_excess_return_20d",
+            "prob_outperform_20d",
+            "predicted_drawdown_20d",
+            "confidence",
+            "model_confidence",
+            "action",
             "reason",
             "reason_for",
             "reason_risk",
@@ -110,7 +132,7 @@ def discovery_rows_from_tool_result(tool_name: str, result: Any) -> list[dict[st
             {
                 "ticker": ticker,
                 "rank": rank,
-                "source_tool": _source_tool(bucket),
+                "source_tool": _source_tool(bucket, profile),
                 "bucket": bucket,
                 "evidence": evidence,
             }
@@ -270,6 +292,14 @@ def opportunity_working_set(
                 if tool.startswith("screen_market:") and ":" in tool
             }
         )
+        evidence = raw_entry.get("discovery_evidence") if isinstance(raw_entry.get("discovery_evidence"), dict) else {}
+        for bucket in evidence.get("buckets") or []:
+            bucket_token = str(bucket or "").strip().lower()
+            if bucket_token and bucket_token not in discovery_buckets:
+                discovery_buckets.append(bucket_token)
+        bucket_token = str(evidence.get("bucket") or "").strip().lower()
+        if bucket_token and bucket_token not in discovery_buckets:
+            discovery_buckets.append(bucket_token)
         analyzed_by = sorted(str(tool).strip() for tool in raw_entry.get("analyzed_by", set()) if str(tool).strip())
         workflow_status = _workflow_status(raw_entry)
         row: dict[str, Any] = {
@@ -335,7 +365,7 @@ def candidate_cases(
         if not case_for:
             buckets = row.get("discovery_buckets") if isinstance(row.get("discovery_buckets"), list) else []
             if buckets:
-                case_for = "Discovered by screen_market buckets: " + ", ".join(str(bucket) for bucket in buckets)
+                case_for = "Discovered by recommendation buckets: " + ", ".join(str(bucket) for bucket in buckets)
             elif source_tools:
                 case_for = "Discovered by " + ", ".join(source_tools[:3])
             else:
