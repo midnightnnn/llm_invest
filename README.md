@@ -190,9 +190,9 @@ flowchart TB
         CLD["Claude\nAnthropic"]
     end
 
-    subgraph TOOLS["18 Autonomous Tools + MCP"]
+    subgraph TOOLS["19 Autonomous Tools + MCP"]
         direction LR
-        TQ["Quant\nScreening / Optimization / Forecasting / Technicals"]
+        TQ["Quant\nRecommender / Optimization / Forecasting / Technicals"]
         TS["Sentiment\nReddit / SEC / Earnings / F&G"]
         TM["Macro\nFRED / ECOS / Indices"]
         TC["Memory\nVector Search / Peer Lessons / Relation Graph"]
@@ -241,21 +241,28 @@ flowchart TB
 
 ```
 arena/
-  agents/          # ADK ReAct agents + research + memory compaction
+  agents/          # ADK ReAct agents + research + memory compaction + prompt files
   memory/          # Long-term memory (storage, vectors, policies, queries, cleanup, semantic relations)
   ui/              # Admin UI (FastAPI + Jinja2 + HTMX)
   tools/           # Tool registry (quant, sentiment, macro, context)
-  data/            # BigQuery storage + schemas
+  recommendation/  # Signal-IC meta-learner that feeds recommend_opportunities
+  data/            # BigQuery storage + schemas (modular per-domain stores)
   broker/          # Paper / live (KIS) broker adapters
   execution/       # Central order gateway
-  open_trading/    # KIS client + account sync
+  open_trading/    # KIS client + account/dividend sync + fundamentals ingestors
   forecasting/     # Multi-model stacking forecasts
+  providers/       # LLM provider registry + credential parsing
+  cli_commands/    # Modular CLI handlers (pipeline, sync, admin, reconcile, serve)
+  strategy/        # Strategy reference catalog + MCP server
+  backtest/        # Walk-forward testing
+  board/           # Inter-agent bulletin board
   security/        # Secret Manager integration
   config.py        # Configuration + runtime overrides
   context.py       # Context builder + memory re-ranking
   orchestrator.py  # Cycle orchestration
+  reconciliation.py # State reconciliation + auto-recovery
   risk.py          # Risk engine
-tests/             # 600+ test cases (pytest)
+tests/             # 61 test files (pytest)
 scripts/           # Deployment scripts
 ```
 
@@ -292,6 +299,7 @@ Agents autonomously select which tools to call at each reasoning step.
 | `search_past_experiences` | Semantic search over past memories |
 | `search_peer_lessons` | Lessons from other agents |
 | `portfolio_diagnosis` | Holdings diagnostics + HRP rebalancing |
+| `trade_performance` | Closed round-trip stats + current unrealised P&L |
 | `save_memory` | Manual memory save |
 
 </details>

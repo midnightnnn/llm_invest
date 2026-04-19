@@ -229,7 +229,7 @@ def register_showcase_routes(app: FastAPI, *, deps: ShowcaseRouteDeps) -> None:
 
         try:
             nav_registry = deps.get_default_registry(t)
-            nav_tool_label_map = {e.tool_id: e.label_ko or e.tool_id for e in nav_registry.list_entries(include_disabled=True)}
+            nav_tool_label_map = {e.tool_id: e.label_ko or e.tool_id for e in nav_registry.list_entries()}
         except Exception:
             nav_tool_label_map = {}
 

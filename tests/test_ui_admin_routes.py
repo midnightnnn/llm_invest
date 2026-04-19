@@ -1357,7 +1357,8 @@ def test_admin_tools_lists_core_and_optional(monkeypatch) -> None:
     assert optional_entry["configurable"] is True
     assert optional_entry["tier"] == "optional"
     assert optional_entry["label_ko"] == "통합 기회 추천"
-    assert "ML ranker" in str(optional_entry["description_ko"])
+    assert "신규 매수 후보" in str(optional_entry["description_ko"])
+    assert "signal-IC" in str(optional_entry["description_ko"])
     assert forecast_entry["label_ko"] == "수익률 예측"
     assert "self-discovered 후보 바스켓" in str(forecast_entry["description_ko"])
 
@@ -1569,7 +1570,7 @@ def test_api_board_prompt_returns_prompt_bundle(monkeypatch) -> None:
                         {
                             "phase": "board",
                             "analysis_funnel": {"pending_nonheld": 1},
-                            "tool_events": [{"tool": "screen_market", "phase": "draft"}],
+                            "tool_events": [{"tool": "recommend_opportunities", "phase": "draft"}],
                             "tool_mix": {"quant": 1, "macro": 0, "sentiment": 0, "performance": 0, "context": 0, "other": 0},
                             "prompt_bundle": {
                                 "system_prompt": "system body",
@@ -1603,7 +1604,7 @@ def test_api_board_prompt_returns_prompt_bundle(monkeypatch) -> None:
     assert payload["prompt_bundle"]["system_prompt"] == "system body"
     assert payload["prompt_bundle"]["phases"][0]["prompt"] == "draft body"
     assert payload["analysis_funnel"]["pending_nonheld"] == 1
-    assert payload["tool_events"][0]["tool"] == "screen_market"
+    assert payload["tool_events"][0]["tool"] == "recommend_opportunities"
 
 
 def test_board_page_includes_prompt_and_memory_panels(monkeypatch) -> None:
@@ -1703,8 +1704,8 @@ def test_api_tool_frequency_returns_llm_tool_matrix(monkeypatch) -> None:
                     "payload_json": json.dumps(
                         {
                             "tool_events": [
-                                {"tool": "screen_market"},
-                                {"tool": "screen_market"},
+                                {"tool": "recommend_opportunities"},
+                                {"tool": "recommend_opportunities"},
                                 {"tool": "legacy_old_tool"},
                             ]
                         }
@@ -1715,7 +1716,7 @@ def test_api_tool_frequency_returns_llm_tool_matrix(monkeypatch) -> None:
                     "payload_json": json.dumps(
                         {
                             "tool_events": [
-                                {"tool": "screen_market"},
+                                {"tool": "recommend_opportunities"},
                                 {"tool": "optimize_portfolio"},
                             ]
                         }
@@ -1733,9 +1734,9 @@ def test_api_tool_frequency_returns_llm_tool_matrix(monkeypatch) -> None:
     assert response.status_code == 200
     payload = response.json()
 
-    assert payload["tools"] == ["screen_market", "optimize_portfolio"]
+    assert payload["tools"] == ["recommend_opportunities", "optimize_portfolio"]
     assert set(payload["agents"]) == {"gpt", "gemini"}
-    assert payload["matrix"]["screen_market"] == {"gpt": 2, "gemini": 1}
+    assert payload["matrix"]["recommend_opportunities"] == {"gpt": 2, "gemini": 1}
     assert payload["matrix"]["optimize_portfolio"] == {"gpt": 0, "gemini": 1}
     assert "legacy_old_tool" not in payload["tools"]
 

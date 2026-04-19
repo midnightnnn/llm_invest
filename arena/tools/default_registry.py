@@ -114,22 +114,22 @@ def _base_entries(
         _tool(
             tool_id="recommend_opportunities",
             description=(
-                "Signal-IC meta-learned opportunity recommender for the runtime universe. "
-                "Reads opportunity_ranker_scores_latest populated by shared prep, which trains "
-                "regime → next-IC Ridge models per Layer 1 signal (momentum, pullback, meanrev, "
-                "lowvol, sentiment, forecast, RSI/MA/Bollinger, EP/BP/SP/ROE/growth/safety). "
-                "Today's score = sum(predicted_IC_i × signal_i). Returns aggressive/balanced/"
-                "defensive/value/tactical groups with per-signal contributions and model "
-                "confidence. Final recommendations are global top_n by learned rank; profile "
-                "context is fetched separately with per-profile rank windows. Pass "
-                "max_candidates only when manually widening the global read. Surfaces "
-                "status='unusable' when prep is stale — no silent fallback."
+                "Finds fresh buy and replacement ideas across the runtime universe. "
+                "Uses the latest signal-IC meta-learner scores from shared prep, combining "
+                "momentum, pullback, mean reversion, low volatility, sentiment, forecasts, "
+                "RSI/MA/Bollinger technicals, and EP/BP/SP/ROE/growth/debt fundamentals. "
+                "Returns global top_n recommendations plus aggressive/balanced/defensive/"
+                "value/tactical profile context, with action, model confidence, risk notes, "
+                "and per-signal contributions explaining why each ticker surfaced. "
+                "Useful when looking for new positions, portfolio rotation candidates, "
+                "or replacements for weaker holdings. Stale data returns status='unusable' "
+                "instead of silently falling back."
             ),
             category="quant",
             tier="optional",
             callable=qt.recommend_opportunities,
             label_ko="통합 기회 추천",
-            description_ko="런타임 유니버스의 핵심 discovery 도구입니다. shared prep에서 signal별 IC 예측 모델을 학습(regime → 다음 IC)하고 오늘 regime에 맞춘 가중치로 signal을 합산해 점수를 냅니다. 가격/변동성/forecast/센티먼트/RSI·MACD·볼린저/가치·성장·안정성 fundamentals 17개 signal의 기여도를 포함해 공격형/균형형/방어형/가치형/전술형 추천을 반환합니다. 데이터가 오래되면 조용히 fallback하지 않고 status='unusable'로 명시합니다.",
+            description_ko="런타임 유니버스에서 신규 매수 후보, 포트폴리오 교체 후보, 약한 보유종목의 대체 아이디어를 찾는 고수준 discovery 도구입니다. shared prep에서 계산한 signal-IC meta-learner 점수를 사용해 모멘텀·눌림목·평균회귀·저변동성·센티먼트·forecast·RSI/MA/볼린저·EP/BP/SP/ROE/성장/부채 signal을 조합합니다. 전체 top_n 추천과 공격형/균형형/방어형/가치형/전술형 profile 문맥을 함께 반환하며, action·model confidence·risk note·signal별 기여도로 왜 해당 종목이 올라왔는지 설명합니다. 데이터가 오래되면 조용히 fallback하지 않고 status='unusable'로 명시합니다.",
             sort_order=105,
         ),
         _tool(
@@ -137,13 +137,13 @@ def _base_entries(
             description=(
                 "Low-level diagnostic candidate generator used by recommend_opportunities. "
                 "Surfaces raw screen-only rows across momentum, pullback, recovery, defensive, and value buckets. "
-                "Prefer recommend_opportunities for agent decisions because it validates screen hits with forecasts, technicals, fundamentals, and optimization."
+                "Use when inspecting raw bucket screens; it is screen-only and does not provide learned confidence or per-signal IC contributions."
             ),
             category="quant",
             tier="optional",
             callable=qt.screen_market,
             label_ko="시장 스크리닝",
-            description_ko="recommend_opportunities가 내부에서 사용하는 저수준 후보 생성기입니다. 모멘텀, 눌림목, 회복, 방어주, 가치주 버킷의 screen-only 결과를 반환합니다. 에이전트의 신규 매수 판단에는 수익률 예측·기술 지표·펀더멘털·최적화 검증을 함께 수행하는 recommend_opportunities를 우선 사용하세요.",
+            description_ko="원시 버킷 스크린을 점검하는 저수준 진단 도구입니다. 모멘텀, 눌림목, 회복, 방어주, 가치주 버킷의 screen-only 결과를 반환하며 learned confidence나 signal-IC 기여도는 제공하지 않습니다.",
             enabled=False,
             sort_order=110,
         ),

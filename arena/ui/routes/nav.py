@@ -40,7 +40,7 @@ def register_nav_routes(app: FastAPI, *, deps: ViewerRouteDeps) -> None:
 
         try:
             nav_registry = deps.get_default_registry(tenant)
-            nav_tool_label_map = {entry.tool_id: entry.label_ko or entry.tool_id for entry in nav_registry.list_entries(include_disabled=True)}
+            nav_tool_label_map = {entry.tool_id: entry.label_ko or entry.tool_id for entry in nav_registry.list_entries()}
         except Exception:
             nav_tool_label_map = {}
 
@@ -97,7 +97,7 @@ def register_nav_routes(app: FastAPI, *, deps: ViewerRouteDeps) -> None:
 
         try:
             reg = deps.get_default_registry(tenant)
-            reg_entries = reg.list_entries(include_disabled=True)
+            reg_entries = reg.list_entries()
             current_tools = {
                 str(entry.tool_id).strip().lower()
                 for entry in reg_entries
