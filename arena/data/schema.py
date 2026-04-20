@@ -9,6 +9,8 @@ TABLE_DDLS: tuple[str, ...] = (
     CREATE TABLE IF NOT EXISTS `{project}.{dataset}.agent_order_intents` (
       tenant_id STRING NOT NULL,
       intent_id STRING NOT NULL,
+      cycle_id STRING,
+      llm_call_id STRING,
       created_at TIMESTAMP NOT NULL,
       trading_mode STRING NOT NULL,
       agent_id STRING NOT NULL,
@@ -65,6 +67,8 @@ TABLE_DDLS: tuple[str, ...] = (
       event_type STRING NOT NULL,
       summary STRING NOT NULL,
       trading_mode STRING NOT NULL,
+      cycle_id STRING,
+      llm_call_id STRING,
       payload_json STRING,
       importance_score FLOAT64,
       outcome_score FLOAT64,
@@ -105,6 +109,98 @@ TABLE_DDLS: tuple[str, ...] = (
     )
     PARTITION BY DATE(accessed_at)
     CLUSTER BY tenant_id, event_id, access_type
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS `{project}.{dataset}.agent_llm_interactions` (
+      tenant_id STRING NOT NULL,
+      llm_call_id STRING NOT NULL,
+      cycle_id STRING,
+      created_at TIMESTAMP NOT NULL,
+      completed_at TIMESTAMP,
+      agent_id STRING NOT NULL,
+      provider STRING,
+      model STRING,
+      phase STRING NOT NULL,
+      session_id STRING,
+      resume_session BOOL,
+      trading_mode STRING NOT NULL,
+      status STRING NOT NULL,
+      system_prompt STRING,
+      user_prompt STRING,
+      context_payload_json JSON,
+      context_sections_json JSON,
+      available_tools_json JSON,
+      response_text STRING,
+      response_json JSON,
+      token_usage_json JSON,
+      request_hash STRING,
+      prompt_version STRING,
+      context_builder_version STRING,
+      settings_hash STRING,
+      latency_ms INT64,
+      error_message STRING
+    )
+    PARTITION BY DATE(created_at)
+    CLUSTER BY tenant_id, cycle_id, agent_id, phase
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS `{project}.{dataset}.agent_llm_tool_events` (
+      tenant_id STRING NOT NULL,
+      llm_call_id STRING NOT NULL,
+      tool_event_id STRING NOT NULL,
+      cycle_id STRING,
+      created_at TIMESTAMP NOT NULL,
+      agent_id STRING NOT NULL,
+      phase STRING,
+      tool_name STRING NOT NULL,
+      source STRING,
+      args_json JSON,
+      model_visible_result_json JSON,
+      raw_result_hash STRING,
+      elapsed_ms INT64,
+      error STRING
+    )
+    PARTITION BY DATE(created_at)
+    CLUSTER BY tenant_id, cycle_id, agent_id, tool_name
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS `{project}.{dataset}.agent_llm_context_refs` (
+      tenant_id STRING NOT NULL,
+      llm_call_id STRING NOT NULL,
+      context_ref_id STRING NOT NULL,
+      cycle_id STRING,
+      created_at TIMESTAMP NOT NULL,
+      agent_id STRING NOT NULL,
+      phase STRING,
+      source_table STRING NOT NULL,
+      source_id STRING NOT NULL,
+      source_ts TIMESTAMP,
+      source_hash STRING,
+      context_role STRING,
+      prompt_section STRING,
+      rank INT64,
+      used_in_prompt BOOL,
+      detail_json JSON
+    )
+    PARTITION BY DATE(created_at)
+    CLUSTER BY tenant_id, cycle_id, agent_id, source_table
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS `{project}.{dataset}.agent_llm_artifact_links` (
+      tenant_id STRING NOT NULL,
+      llm_call_id STRING NOT NULL,
+      artifact_link_id STRING NOT NULL,
+      cycle_id STRING,
+      created_at TIMESTAMP NOT NULL,
+      agent_id STRING NOT NULL,
+      phase STRING,
+      artifact_table STRING NOT NULL,
+      artifact_id STRING NOT NULL,
+      artifact_role STRING,
+      detail_json JSON
+    )
+    PARTITION BY DATE(created_at)
+    CLUSTER BY tenant_id, cycle_id, agent_id, artifact_table
     """,
     """
     CREATE TABLE IF NOT EXISTS `{project}.{dataset}.memory_graph_nodes` (
@@ -238,6 +334,7 @@ TABLE_DDLS: tuple[str, ...] = (
       tenant_id STRING NOT NULL,
       post_id STRING NOT NULL,
       cycle_id STRING,
+      llm_call_id STRING,
       created_at TIMESTAMP NOT NULL,
       agent_id STRING NOT NULL,
       title STRING NOT NULL,

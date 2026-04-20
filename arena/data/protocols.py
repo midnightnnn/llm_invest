@@ -138,6 +138,24 @@ class MemoryWriter(Protocol):
 
 
 # ---------------------------------------------------------------------------
+# LLM audit
+# ---------------------------------------------------------------------------
+
+
+@runtime_checkable
+class LlmAuditWriter(Protocol):
+    """Append-only writer for model-visible prompt/tool audit rows."""
+
+    def append_llm_interactions(self, rows: list[dict[str, Any]], *, tenant_id: str | None = None) -> None: ...
+
+    def append_llm_tool_events(self, rows: list[dict[str, Any]], *, tenant_id: str | None = None) -> None: ...
+
+    def append_llm_context_refs(self, rows: list[dict[str, Any]], *, tenant_id: str | None = None) -> None: ...
+
+    def append_llm_artifact_links(self, rows: list[dict[str, Any]], *, tenant_id: str | None = None) -> None: ...
+
+
+# ---------------------------------------------------------------------------
 # Config / Runtime
 # ---------------------------------------------------------------------------
 

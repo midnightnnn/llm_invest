@@ -174,15 +174,17 @@ class ExecutionStore:
         tenant = self._tenant_token()
         sql = f"""
         INSERT INTO `{self.session.dataset_fqn}.agent_order_intents`
-        (tenant_id, intent_id, created_at, trading_mode, agent_id, ticker, exchange_code, instrument_id, side, quantity, price_krw, price_native, quote_currency, fx_rate, notional_krw, rationale, strategy_refs, allowed, risk_reason, policy_hits)
+        (tenant_id, intent_id, cycle_id, llm_call_id, created_at, trading_mode, agent_id, ticker, exchange_code, instrument_id, side, quantity, price_krw, price_native, quote_currency, fx_rate, notional_krw, rationale, strategy_refs, allowed, risk_reason, policy_hits)
         VALUES
-        (@tenant_id, @intent_id, @created_at, @trading_mode, @agent_id, @ticker, @exchange_code, @instrument_id, @side, @quantity, @price_krw, @price_native, @quote_currency, @fx_rate, @notional_krw, @rationale, @strategy_refs, @allowed, @risk_reason, @policy_hits)
+        (@tenant_id, @intent_id, @cycle_id, @llm_call_id, @created_at, @trading_mode, @agent_id, @ticker, @exchange_code, @instrument_id, @side, @quantity, @price_krw, @price_native, @quote_currency, @fx_rate, @notional_krw, @rationale, @strategy_refs, @allowed, @risk_reason, @policy_hits)
         """
         self.session.execute(
             sql,
             {
                 "tenant_id": tenant,
                 "intent_id": intent.intent_id,
+                "cycle_id": str(intent.cycle_id or "").strip() or None,
+                "llm_call_id": str(intent.llm_call_id or "").strip() or None,
                 "created_at": intent.created_at,
                 "trading_mode": self._normalize_trading_mode_token(intent.trading_mode) or "paper",
                 "agent_id": intent.agent_id,

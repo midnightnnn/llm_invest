@@ -174,7 +174,7 @@ def test_memory_compaction_agent_prefers_direct_key_provider_over_non_direct_fal
     assert agent.model == "openai/gpt-5.2"
 
 
-def test_memory_compaction_agent_calls_litellm_direct(monkeypatch) -> None:
+def test_memory_compaction_agent_calls_litellm_direct_without_claude_temperature(monkeypatch) -> None:
     repo = _FakeRepo()
     memory_store = _FakeMemoryStore()
     settings = _settings()
@@ -205,7 +205,7 @@ def test_memory_compaction_agent_calls_litellm_direct(monkeypatch) -> None:
     assert out == '{"reflections":[]}'
     assert captured["model"] == "anthropic/claude-sonnet-4-6"
     assert captured["api_key"] == "tenant-anthropic-key"
-    assert captured["temperature"] == 0.1
+    assert "temperature" not in captured
 
 
 def test_memory_compaction_agent_omits_temperature_for_gpt5_models(monkeypatch) -> None:

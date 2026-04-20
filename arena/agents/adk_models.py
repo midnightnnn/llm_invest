@@ -75,6 +75,37 @@ def _normalize_gemini_model(model_id: str) -> str:
     return token
 
 
+def _anthropic_model_tier(model_id: str) -> tuple[bool, bool]:
+    """Returns (is_opus_4_7_plus, supports_effort_param) for an Anthropic model id."""
+    token = str(model_id or "").strip().lower()
+    if token.startswith("anthropic/") or token.startswith("vertex_ai/"):
+        token = token.split("/", 1)[1]
+    is_opus_4_7 = token.startswith("claude-opus-4-7")
+    # effort param supported on Opus 4.5+ and Sonnet 4.6+
+    supports_effort = (
+        token.startswith("claude-opus-4-")
+        or token.startswith("claude-sonnet-4-6")
+    )
+    return is_opus_4_7, supports_effort
+
+
+def _anthropic_runtime_kwargs(model_id: str) -> dict[str, Any]:
+    """Builds per-model LiteLLM runtime kwargs for Anthropic (effort, thinking).
+
+    On Opus 4.7+: inject output_config={effort: xhigh} + adaptive thinking.
+    Docs note "fewer tool calls by default" — higher effort restores tool usage.
+    """
+    is_opus_4_7, supports_effort = _anthropic_model_tier(model_id)
+    extra: dict[str, Any] = {}
+    if supports_effort:
+        effort_value = "xhigh" if is_opus_4_7 else "high"
+        extra["output_config"] = {"effort": effort_value}
+        extra["allowed_openai_params"] = ["output_config"]
+    if is_opus_4_7:
+        extra["thinking"] = {"type": "adaptive"}
+    return extra
+
+
 def _is_gemini_quota_error(exc: Exception) -> bool:
     """Returns True for Gemini quota/rate-limit style transient errors."""
     text = f"{type(exc).__name__}: {exc}".strip().lower()
@@ -134,6 +165,7 @@ def _resolve_model(provider: str, settings: Settings, *, model_override: str = "
                 {"location": "message", "role": "system"},
             ],
         }
+        kwargs.update(_anthropic_runtime_kwargs(model_id))
         if settings.anthropic_use_vertexai:
             model_id = _normalize_vertex_anthropic_model(model_id)
             if settings.google_cloud_project and not os.getenv("VERTEX_PROJECT"):

@@ -1607,6 +1607,103 @@ def test_api_board_prompt_returns_prompt_bundle(monkeypatch) -> None:
     assert payload["tool_events"][0]["tool"] == "recommend_opportunities"
 
 
+def test_api_board_prompt_prefers_llm_audit_tables(monkeypatch) -> None:
+    class _BoardPromptAuditRepo(_DummyRepo):
+        def fetch_rows(self, sql: str, params: dict | None = None) -> list[dict]:
+            self.fetch_calls.append((sql, params))
+            if "FROM `proj.ds.agent_llm_interactions`" in sql and "phase = 'board'" in sql and "LIMIT 1" in sql:
+                return [
+                    {
+                        "llm_call_id": "llm_board_1",
+                        "cycle_id": "cycle_1",
+                        "created_at": "2026-03-29T01:02:00Z",
+                        "agent_id": "gpt",
+                        "phase": "board",
+                        "session_id": "sid_1",
+                        "resume_session": True,
+                        "system_prompt": "system body",
+                        "user_prompt": "board body",
+                        "available_tools_json": json.dumps([{"tool_id": "recommend_opportunities"}]),
+                        "context_payload_json": json.dumps({"analysis_funnel": {"fully_analyzed_candidates": 1}}),
+                        "context_sections_json": json.dumps({"memory_context": "Memory"}),
+                        "token_usage_json": json.dumps({"prompt_tokens": 100}),
+                    }
+                ]
+            if "FROM `proj.ds.agent_llm_interactions`" in sql and "CASE phase" in sql:
+                return [
+                    {
+                        "llm_call_id": "llm_draft_1",
+                        "cycle_id": "cycle_1",
+                        "created_at": "2026-03-29T01:00:00Z",
+                        "agent_id": "gpt",
+                        "phase": "draft",
+                        "session_id": "sid_1",
+                        "resume_session": False,
+                        "system_prompt": "system body",
+                        "user_prompt": "draft body",
+                        "available_tools_json": json.dumps([{"tool_id": "recommend_opportunities"}]),
+                        "context_payload_json": json.dumps({"analysis_funnel": {"screened_only_candidates": 1}}),
+                        "context_sections_json": json.dumps({"market_context": [{"ticker": "AAPL"}]}),
+                        "token_usage_json": json.dumps({"prompt_tokens": 80}),
+                    },
+                    {
+                        "llm_call_id": "llm_board_1",
+                        "cycle_id": "cycle_1",
+                        "created_at": "2026-03-29T01:02:00Z",
+                        "agent_id": "gpt",
+                        "phase": "board",
+                        "session_id": "sid_1",
+                        "resume_session": True,
+                        "system_prompt": "system body",
+                        "user_prompt": "board body",
+                        "available_tools_json": json.dumps([{"tool_id": "recommend_opportunities"}]),
+                        "context_payload_json": json.dumps({"analysis_funnel": {"fully_analyzed_candidates": 1}}),
+                        "context_sections_json": json.dumps({"memory_context": "Memory"}),
+                        "token_usage_json": json.dumps({"prompt_tokens": 100}),
+                    },
+                ]
+            if "FROM `proj.ds.agent_llm_tool_events`" in sql:
+                return [
+                    {
+                        "llm_call_id": "llm_draft_1",
+                        "tool_event_id": "tool_1",
+                        "created_at": "2026-03-29T01:01:00Z",
+                        "phase": "draft",
+                        "tool_name": "recommend_opportunities",
+                        "source": "builtin",
+                        "args_json": json.dumps({"limit": 3}),
+                        "model_visible_result_json": json.dumps({"rows": [{"ticker": "AAPL"}]}),
+                        "elapsed_ms": 12,
+                        "error": None,
+                    }
+                ]
+            return []
+
+    monkeypatch.setenv("ARENA_UI_SETTINGS_ENABLED", "true")
+    monkeypatch.setenv("ARENA_UI_AUTH_ENABLED", "false")
+    repo = _BoardPromptAuditRepo()
+    client = DirectRouteClient(_build_app(repo=repo, settings=load_settings()))
+
+    response = client.get(
+        "/api/board/prompt",
+        params={
+            "tenant_id": "local",
+            "agent_id": "gpt",
+            "ts": "2026-03-29T01:02:00+00:00",
+            "cycle_id": "cycle_1",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["prompt_bundle"]["system_prompt"] == "system body"
+    assert [row["phase"] for row in payload["prompt_bundle"]["phases"]] == ["draft", "board"]
+    assert payload["prompt_bundle"]["phases"][0]["context_sections"]["market_context"][0]["ticker"] == "AAPL"
+    assert payload["tool_events"][0]["tool"] == "recommend_opportunities"
+    assert payload["analysis_funnel"]["screened_only_candidates"] == 1
+    assert not any("react_tools_summary" in sql for sql, _ in repo.fetch_calls)
+
+
 def test_board_page_includes_prompt_and_memory_panels(monkeypatch) -> None:
     class _BoardRepo(_DummyRepo):
         def fetch_rows(self, sql: str, params: dict | None = None) -> list[dict]:

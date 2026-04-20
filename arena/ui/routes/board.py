@@ -75,6 +75,7 @@ def register_board_routes(app: FastAPI, *, deps: ViewerRouteDeps) -> None:
 
         posts = [
             {
+                "post_id": str(row.get("post_id") or ""),
                 "agent_id": str(row.get("agent_id") or ""),
                 "ts_iso": _post_ts_iso(row),
                 "cycle_id": str(row.get("cycle_id") or ""),
@@ -180,6 +181,8 @@ def register_board_routes(app: FastAPI, *, deps: ViewerRouteDeps) -> None:
         tenant_id: str = Query(default="", description="tenant id"),
         agent_id: str = Query(..., description="agent id"),
         ts: str = Query(..., description="ISO timestamp of the board post"),
+        cycle_id: str = Query(default="", description="cycle id from board post"),
+        post_id: str = Query(default="", description="board post id"),
     ) -> JSONResponse:
         tenant, _, _, redirect = deps.resolve_viewer_context(
             request,
@@ -192,6 +195,8 @@ def register_board_routes(app: FastAPI, *, deps: ViewerRouteDeps) -> None:
             tenant_id=tenant,
             agent_id=agent_id.strip().lower(),
             ts_iso=ts,
+            cycle_id=cycle_id.strip() or None,
+            post_id=post_id.strip() or None,
         )
         return deps.json_response(data, max_age=60)
 
@@ -201,6 +206,8 @@ def register_board_routes(app: FastAPI, *, deps: ViewerRouteDeps) -> None:
         tenant_id: str = Query(default="", description="tenant id"),
         agent_id: str = Query(..., description="agent id"),
         ts: str = Query(..., description="ISO timestamp of the board post"),
+        cycle_id: str = Query(default="", description="cycle id from board post"),
+        post_id: str = Query(default="", description="board post id"),
     ) -> JSONResponse:
         tenant, _, _, redirect = deps.resolve_viewer_context(
             request,
@@ -213,6 +220,8 @@ def register_board_routes(app: FastAPI, *, deps: ViewerRouteDeps) -> None:
             tenant_id=tenant,
             agent_id=agent_id.strip().lower(),
             ts_iso=ts,
+            cycle_id=cycle_id.strip() or None,
+            post_id=post_id.strip() or None,
         )
         return deps.json_response(data, max_age=60)
 

@@ -212,6 +212,29 @@ def test_semantic_relation_extractor_runs_pending_and_writes_shadow_rows(monkeyp
     assert "temperature" not in captured
 
 
+def test_semantic_relation_extractor_omits_temperature_for_claude(monkeypatch) -> None:
+    repo = _FakeRepo()
+    settings = _settings()
+    settings.agent_ids = ["claude"]
+    settings.openai_api_key = ""
+    settings.anthropic_api_key = "test-anthropic-key"
+    captured = {}
+
+    async def _fake_acompletion(**kwargs):
+        captured.update(kwargs)
+        return {"choices": [{"message": {"content": '{"triples":[]}'}}]}
+
+    monkeypatch.setattr(semantic_module.litellm, "acompletion", _fake_acompletion)
+    extractor = SemanticRelationExtractor(settings=settings, repo=repo)
+
+    rows = asyncio.run(extractor.run_pending(tenant_id="tenant-a", limit=1, dry_run=False))
+
+    assert rows[0]["status"] == "success"
+    assert captured["model"] == "anthropic/claude-sonnet-4-6"
+    assert captured["api_key"] == "test-anthropic-key"
+    assert "temperature" not in captured
+
+
 def test_semantic_relation_extractor_dry_run_skips_writes(monkeypatch) -> None:
     repo = _FakeRepo()
 

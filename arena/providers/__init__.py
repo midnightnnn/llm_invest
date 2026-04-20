@@ -1,5 +1,6 @@
 """Provider registry and transport metadata."""
 
+from arena.providers.anthropic_patches import apply_anthropic_effort_patch
 from arena.providers.credentials import (
     apply_model_secret_payload,
     build_model_secret_payload,
@@ -23,7 +24,11 @@ from arena.providers.registry import (
     provider_has_direct_api_key,
 )
 
+apply_anthropic_effort_patch()
+
+
 __all__ = [
+    "apply_anthropic_effort_patch",
     "apply_model_secret_payload",
     "build_model_secret_payload",
     "normalize_provider_token",

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import json
+import logging
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -9,6 +10,8 @@ from typing import Any, Callable
 
 from arena.config import Settings
 from arena.ui.viewer_analytics import render_pnl_badge
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -50,6 +53,18 @@ def build_viewer_data_helpers(
         except (json.JSONDecodeError, TypeError):
             return {}
         return parsed if isinstance(parsed, dict) else {}
+
+    def _json_any(raw: object) -> Any:
+        if isinstance(raw, (dict, list)):
+            return raw
+        try:
+            return json.loads(raw) if isinstance(raw, str) else raw
+        except (json.JSONDecodeError, TypeError):
+            return None
+
+    def _json_list(raw: object) -> list[Any]:
+        parsed = _json_any(raw)
+        return parsed if isinstance(parsed, list) else []
 
     def _iso_ts(value: object) -> str:
         if isinstance(value, datetime):
@@ -93,12 +108,241 @@ def build_viewer_data_helpers(
         """
         return repo.fetch_rows(sql, params)
 
+    def _fetch_audit_prompt_bundle_for_post(
+        *,
+        tenant_id: str,
+        agent_id: str,
+        ts_iso: str,
+        cycle_id: str | None = None,
+        post_id: str | None = None,
+    ) -> dict[str, Any]:
+        try:
+            return _fetch_audit_prompt_bundle_for_post_unchecked(
+                tenant_id=tenant_id,
+                agent_id=agent_id,
+                ts_iso=ts_iso,
+                cycle_id=cycle_id,
+                post_id=post_id,
+            )
+        except Exception as exc:
+            logger.warning("LLM audit prompt bundle lookup skipped: %s", str(exc))
+            return {}
+
+    def _fetch_audit_prompt_bundle_for_post_unchecked(
+        *,
+        tenant_id: str,
+        agent_id: str,
+        ts_iso: str,
+        cycle_id: str | None = None,
+        post_id: str | None = None,
+    ) -> dict[str, Any]:
+        tenant = str(tenant_id or "").strip().lower() or "local"
+        agent_token = str(agent_id or "").strip().lower()
+        cycle_token = str(cycle_id or "").strip()
+        post_token = str(post_id or "").strip()
+        try:
+            ts_dt = datetime.fromisoformat(ts_iso.replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            ts_dt = None
+        if ts_dt is not None and ts_dt.tzinfo is None:
+            ts_dt = ts_dt.replace(tzinfo=timezone.utc)
+        if post_token:
+            board_sql = f"""
+            SELECT i.*
+            FROM `{repo.dataset_fqn}.agent_llm_artifact_links` l
+            JOIN `{repo.dataset_fqn}.agent_llm_interactions` i
+              ON i.tenant_id = l.tenant_id
+             AND i.llm_call_id = l.llm_call_id
+            WHERE l.tenant_id = @tenant_id
+              AND l.artifact_table = 'board_posts'
+              AND l.artifact_id = @post_id
+              AND i.agent_id = @agent_id
+              AND i.phase = 'board'
+            ORDER BY i.created_at DESC
+            LIMIT 1
+            """
+            board_rows = repo.fetch_rows(
+                board_sql,
+                {"tenant_id": tenant, "agent_id": agent_token, "post_id": post_token},
+            )
+        elif cycle_token:
+            board_sql = f"""
+            SELECT *
+            FROM `{repo.dataset_fqn}.agent_llm_interactions`
+            WHERE tenant_id = @tenant_id
+              AND agent_id = @agent_id
+              AND cycle_id = @cycle_id
+              AND phase = 'board'
+              AND status = 'ok'
+            ORDER BY created_at DESC
+            LIMIT 1
+            """
+            board_rows = repo.fetch_rows(
+                board_sql,
+                {"tenant_id": tenant, "agent_id": agent_token, "cycle_id": cycle_token},
+            )
+        elif ts_dt is not None:
+            board_sql = f"""
+            SELECT *
+            FROM `{repo.dataset_fqn}.agent_llm_interactions`
+            WHERE tenant_id = @tenant_id
+              AND agent_id = @agent_id
+              AND phase = 'board'
+              AND status = 'ok'
+              AND created_at BETWEEN TIMESTAMP_SUB(@ts, INTERVAL 10 MINUTE)
+                                  AND TIMESTAMP_ADD(@ts, INTERVAL 10 MINUTE)
+            ORDER BY ABS(TIMESTAMP_DIFF(created_at, @ts, SECOND)) ASC
+            LIMIT 1
+            """
+            board_rows = repo.fetch_rows(
+                board_sql,
+                {"tenant_id": tenant, "agent_id": agent_token, "ts": ts_dt},
+            )
+        else:
+            return {}
+        if not board_rows:
+            return {}
+
+        board_row = board_rows[0]
+        cycle_token = str(board_row.get("cycle_id") or cycle_token).strip()
+        session_token = str(board_row.get("session_id") or "").strip()
+        if cycle_token:
+            interaction_filters = [
+                "tenant_id = @tenant_id",
+                "agent_id = @agent_id",
+                "cycle_id = @cycle_id",
+                "status = 'ok'",
+            ]
+            interaction_params: dict[str, Any] = {
+                "tenant_id": tenant,
+                "agent_id": agent_token,
+                "cycle_id": cycle_token,
+            }
+        elif session_token:
+            interaction_filters = [
+                "tenant_id = @tenant_id",
+                "agent_id = @agent_id",
+                "session_id = @session_id",
+                "status = 'ok'",
+            ]
+            interaction_params = {
+                "tenant_id": tenant,
+                "agent_id": agent_token,
+                "session_id": session_token,
+            }
+        else:
+            interaction_filters = ["tenant_id = @tenant_id", "llm_call_id = @llm_call_id"]
+            interaction_params = {
+                "tenant_id": tenant,
+                "llm_call_id": str(board_row.get("llm_call_id") or ""),
+            }
+        interaction_sql = f"""
+        SELECT *
+        FROM `{repo.dataset_fqn}.agent_llm_interactions`
+        WHERE {' AND '.join(interaction_filters)}
+        ORDER BY
+          CASE phase WHEN 'draft' THEN 1 WHEN 'execution' THEN 2 WHEN 'board' THEN 3 ELSE 9 END,
+          created_at ASC
+        """
+        interaction_rows = repo.fetch_rows(interaction_sql, interaction_params)
+        if not interaction_rows:
+            interaction_rows = [board_row]
+
+        llm_call_ids = [
+            str(row.get("llm_call_id") or "").strip()
+            for row in interaction_rows
+            if str(row.get("llm_call_id") or "").strip()
+        ]
+        tool_events: list[dict[str, Any]] = []
+        if llm_call_ids:
+            tool_rows = repo.fetch_rows(
+                f"""
+                SELECT llm_call_id, tool_event_id, created_at, phase, tool_name, source,
+                       args_json, model_visible_result_json, elapsed_ms, error
+                FROM `{repo.dataset_fqn}.agent_llm_tool_events`
+                WHERE tenant_id = @tenant_id
+                  AND llm_call_id IN UNNEST(@llm_call_ids)
+                ORDER BY created_at ASC, tool_event_id ASC
+                """,
+                {"tenant_id": tenant, "llm_call_ids": llm_call_ids},
+            )
+            for row in tool_rows:
+                result = _json_any(row.get("model_visible_result_json"))
+                tool_events.append(
+                    {
+                        "tool": str(row.get("tool_name") or ""),
+                        "args": _json_any(row.get("args_json")) or {},
+                        "elapsed_ms": safe_int(row.get("elapsed_ms"), 0),
+                        "result": result,
+                        "error": str(row.get("error") or "") or None,
+                        "source": str(row.get("source") or "") or None,
+                        "phase": str(row.get("phase") or "") or None,
+                    }
+                )
+
+        phases: list[dict[str, Any]] = []
+        system_prompt = ""
+        available_tools: list[Any] = []
+        analysis_funnel: dict[str, Any] = {}
+        token_usage: dict[str, Any] = {}
+        for row in interaction_rows:
+            if not system_prompt and str(row.get("system_prompt") or "").strip():
+                system_prompt = str(row.get("system_prompt") or "")
+            if not available_tools:
+                available_tools = _json_list(row.get("available_tools_json"))
+            context_payload = _json_dict(row.get("context_payload_json"))
+            if not analysis_funnel and isinstance(context_payload.get("analysis_funnel"), dict):
+                analysis_funnel = context_payload.get("analysis_funnel") or {}
+            if not token_usage:
+                token_usage = _json_dict(row.get("token_usage_json"))
+            phase_payload = {
+                "phase": str(row.get("phase") or ""),
+                "session_id": str(row.get("session_id") or ""),
+                "resume_session": bool(row.get("resume_session")),
+                "llm_call_id": str(row.get("llm_call_id") or ""),
+                "prompt": str(row.get("user_prompt") or ""),
+            }
+            context_sections = _json_dict(row.get("context_sections_json"))
+            if context_sections:
+                phase_payload["context_sections"] = context_sections
+            phases.append(phase_payload)
+
+        return {
+            "created_at": _iso_ts(board_row.get("created_at")),
+            "summary": "LLM audit prompt bundle.",
+            "phase": "board",
+            "prompt_bundle": {
+                "system_prompt": system_prompt,
+                "available_tools": available_tools,
+                "phases": phases,
+                "note": "Prompt bundle reconstructed from agent_llm_interactions and agent_llm_tool_events.",
+            },
+            "tool_events": tool_events,
+            "tool_mix": {"other": len(tool_events)},
+            "analysis_funnel": analysis_funnel,
+            "token_usage": token_usage,
+        }
+
     def fetch_tool_events_for_post(
         *,
         tenant_id: str,
         agent_id: str,
         ts_iso: str,
+        cycle_id: str | None = None,
+        post_id: str | None = None,
     ) -> dict[str, Any]:
+        audit_payload = _fetch_audit_prompt_bundle_for_post(
+            tenant_id=tenant_id,
+            agent_id=agent_id,
+            ts_iso=ts_iso,
+            cycle_id=cycle_id,
+            post_id=post_id,
+        )
+        if audit_payload:
+            return {
+                "tool_events": audit_payload.get("tool_events", []),
+                "tool_mix": audit_payload.get("tool_mix", {}),
+            }
         tenant = str(tenant_id or "").strip().lower() or "local"
         try:
             ts_dt = datetime.fromisoformat(ts_iso.replace("Z", "+00:00"))
@@ -137,7 +381,18 @@ def build_viewer_data_helpers(
         tenant_id: str,
         agent_id: str,
         ts_iso: str,
+        cycle_id: str | None = None,
+        post_id: str | None = None,
     ) -> dict[str, Any]:
+        audit_payload = _fetch_audit_prompt_bundle_for_post(
+            tenant_id=tenant_id,
+            agent_id=agent_id,
+            ts_iso=ts_iso,
+            cycle_id=cycle_id,
+            post_id=post_id,
+        )
+        if audit_payload:
+            return audit_payload
         tenant = str(tenant_id or "").strip().lower() or "local"
         try:
             ts_dt = datetime.fromisoformat(ts_iso.replace("Z", "+00:00"))

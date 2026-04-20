@@ -2070,7 +2070,10 @@ def test_decide_orders_keeps_tool_events_reference_for_wrapped_tools(monkeypatch
     runner._runner = object()
     runner._user_id = "arena"
     runner.agent_id = "gpt"
-    runner._registry = SimpleNamespace(set_context=lambda context: None)
+    runner._registry = SimpleNamespace(
+        set_context=lambda context: None,
+        list_entries=lambda **kwargs: [],
+    )
     runner._toolbox = SimpleNamespace(set_context=lambda context: None)
     runner._memory_store = None
     runner._seed_seen_memory_ids = lambda context: None
@@ -2079,6 +2082,17 @@ def test_decide_orders_keeps_tool_events_reference_for_wrapped_tools(monkeypatch
     runner._funnel_metrics = lambda: {}
     runner._persist_tool_summary_memory = lambda *, summary, payload: None
     runner._run_on_loop = lambda value: value
+    runner._disabled_tool_ids = set()
+    runner._mcp_toolset_count = 0
+    runner._system_prompt_snapshot = ""
+    runner._agent_config = None
+    runner._prompt_snapshots = []
+    runner._llm_call_ids_by_phase = {}
+    runner._latest_llm_call_id = ""
+    runner.provider = "gpt"
+    runner.settings = SimpleNamespace(trading_mode="paper", kis_target_market="", memory_policy=None)
+    runner.tenant_id = "local"
+    runner.repo = SimpleNamespace()
 
     def _fake_run_async(_runner, session_id, prompt):
         _ = (_runner, session_id, prompt)

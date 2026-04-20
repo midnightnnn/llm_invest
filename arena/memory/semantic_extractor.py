@@ -125,7 +125,11 @@ def _is_retryable_extractor_error(exc: Exception) -> bool:
 
 def _request_temperature(model: str) -> float | None:
     token = str(model or "").strip().lower()
+    if not token:
+        return 0.0
     if "gpt-5" in token:
+        return None
+    if token.startswith("anthropic/") or token.startswith("claude-") or "/claude-" in token:
         return None
     return 0.0
 

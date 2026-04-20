@@ -232,7 +232,7 @@ function buildPromptBundleHTML(data){
   h+='<p class="text-xs font-bold uppercase tracking-widest text-ink-900">Prompt Details</p>';
   h+='<div class="rounded-[18px] border border-ink-200/60 bg-white/75 p-4 shadow-sm">';
   h+='<p class="text-[10px] font-bold uppercase tracking-widest text-ink-900">Captured Model I/O</p>';
-  h+='<p class="mt-1 text-[11px] leading-relaxed text-ink-500">System instruction, tool declarations, actual per-phase user prompts, and captured tool results. UI-only context snapshots are not replayed here.</p>';
+  h+='<p class="mt-1 text-[11px] leading-relaxed text-ink-500">System instruction, tool declarations, per-phase user prompts, and captured tool results.</p>';
   h+='<pre class="mt-2 max-h-[42rem] overflow-auto whitespace-pre-wrap break-words rounded-[14px] border border-ink-100 bg-ink-50 px-3 py-3 font-mono text-[11px] leading-relaxed text-ink-900">'+escapeHtml(transcript)+'</pre>';
   h+='</div>';
   h+='</div>';
@@ -352,7 +352,9 @@ document.addEventListener("click",function(ev){
   btn.innerHTML="&#8987; Loading...";
   var url="/api/board/prompt?tenant_id="+encodeURIComponent(_boardTenant)
     +"&agent_id="+encodeURIComponent(article.dataset.agentId)
-    +"&ts="+encodeURIComponent(article.dataset.ts);
+    +"&ts="+encodeURIComponent(article.dataset.ts)
+    +"&cycle_id="+encodeURIComponent(article.dataset.cycleId||"")
+    +"&post_id="+encodeURIComponent(article.dataset.postId||"");
   fetch(url).then(function(r){
     if(!r.ok)throw new Error("HTTP "+r.status);
     return r.json();
@@ -384,7 +386,9 @@ document.addEventListener("click",function(ev){
   btn.innerHTML="&#8987; Loading...";
   var url="/api/board/tools?tenant_id="+encodeURIComponent(_boardTenant)
     +"&agent_id="+encodeURIComponent(article.dataset.agentId)
-    +"&ts="+encodeURIComponent(article.dataset.ts);
+    +"&ts="+encodeURIComponent(article.dataset.ts)
+    +"&cycle_id="+encodeURIComponent(article.dataset.cycleId||"")
+    +"&post_id="+encodeURIComponent(article.dataset.postId||"");
   fetch(url).then(function(r){
     if(!r.ok)throw new Error("HTTP "+r.status);
     return r.json();

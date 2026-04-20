@@ -24,6 +24,14 @@ def test_schema_includes_phase0_memory_columns_and_tables() -> None:
     assert "proj.ds.memory_relation_extraction_runs" in ddls
     assert "proj.ds.memory_relation_tuning_runs" in ddls
     assert "proj.ds.memory_relation_triples" in ddls
+    assert "proj.ds.agent_llm_interactions" in ddls
+    assert "proj.ds.agent_llm_tool_events" in ddls
+    assert "proj.ds.agent_llm_context_refs" in ddls
+    assert "proj.ds.agent_llm_artifact_links" in ddls
+    assert ("cycle_id", "STRING") in cols["agent_order_intents"]
+    assert ("llm_call_id", "STRING") in cols["agent_order_intents"]
+    assert ("cycle_id", "STRING") in cols["agent_memory_events"]
+    assert ("llm_call_id", "STRING") in cols["agent_memory_events"]
     assert ("memory_tier", "STRING") in cols["agent_memory_events"]
     assert ("context_tags_json", "JSON") in cols["agent_memory_events"]
     assert ("access_count", "INT64") in cols["agent_memory_events"]
@@ -36,6 +44,11 @@ def test_schema_includes_phase0_memory_columns_and_tables() -> None:
     assert ("raw_output_json", "JSON") in cols["memory_relation_extraction_runs"]
     assert ("recommended_mode", "STRING") in cols["memory_relation_tuning_runs"]
     assert ("health_ok", "BOOL") in cols["memory_relation_tuning_runs"]
+    assert ("context_payload_json", "JSON") in cols["agent_llm_interactions"]
+    assert ("available_tools_json", "JSON") in cols["agent_llm_interactions"]
+    assert ("model_visible_result_json", "JSON") in cols["agent_llm_tool_events"]
+    assert ("source_hash", "STRING") in cols["agent_llm_context_refs"]
+    assert ("artifact_table", "STRING") in cols["agent_llm_artifact_links"]
 
 
 def test_default_memory_policy_includes_phase0_defaults() -> None:

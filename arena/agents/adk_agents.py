@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import inspect
+import json
 import logging
 import threading
 import time
 import warnings
 from concurrent.futures import TimeoutError as FutureTimeoutError
+from datetime import datetime, timezone
 from typing import Any
+from uuid import uuid4
 
 from google.adk import Runner
 
@@ -90,7 +94,7 @@ from arena.memory.policy import memory_embed_cache_max
 from arena.models import BoardPost, ExecutionReport, OrderIntent
 from arena.tools.default_registry import build_default_registry
 from arena.tools.registry import ToolEntry, ToolRegistry
-from arena.providers.registry import get_provider_spec
+from arena.providers.registry import default_model_for_provider, get_provider_spec
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +105,43 @@ warnings.filterwarnings(
     message="coroutine 'close_litellm_async_clients' was never awaited",
     category=RuntimeWarning,
 )
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _stable_json(value: Any) -> str:
+    return json.dumps(_safe_json(value), ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def _stable_hash(value: Any) -> str:
+    return hashlib.sha256(_stable_json(value).encode("utf-8")).hexdigest()
+
+
+def _short_hash(value: Any, length: int = 16) -> str:
+    return _stable_hash(value)[:length]
+
+
+def _extract_json_tail(text: str, *, marker: str = "") -> dict[str, Any] | None:
+    """Extracts the JSON payload embedded at the end of model prompt text."""
+    prompt = str(text or "")
+    if not prompt:
+        return None
+    start = -1
+    if marker and marker in prompt:
+        start = prompt.find("{", prompt.find(marker))
+    if start < 0:
+        start = prompt.rfind("\n{")
+        if start >= 0:
+            start += 1
+    if start < 0:
+        return None
+    try:
+        parsed = json.loads(prompt[start:])
+    except (json.JSONDecodeError, TypeError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
 
 
 def _apply_tool_schema_metadata(fn, *, entry: ToolEntry, sig: inspect.Signature):
@@ -274,6 +315,8 @@ class _ADKDecisionRunner:
         self._current_phase: str = "unknown"
         self._current_context: dict[str, Any] | None = None
         self._prompt_snapshots: list[dict[str, Any]] = []
+        self._llm_call_ids_by_phase: dict[str, str] = {}
+        self._latest_llm_call_id: str = ""
         tool_resolution = resolve_adk_tools(
             repo=self.repo,
             tenant_id=self.tenant_id,
@@ -343,6 +386,371 @@ class _ADKDecisionRunner:
                 }
             )
         return tools
+
+    def _configured_model_id(self) -> str:
+        if self._agent_config and str(self._agent_config.model or "").strip():
+            return str(self._agent_config.model or "").strip()
+        provider_token = str(self.provider or "").strip().lower()
+        if provider_token == "gemini_direct":
+            provider_token = "gemini"
+        spec = get_provider_spec(provider_token)
+        provider_id = spec.provider_id if spec is not None else provider_token
+        return default_model_for_provider(self.settings, provider_id)
+
+    def _new_llm_call_id(self, phase: str) -> str:
+        phase_token = str(phase or "unknown").strip().lower() or "unknown"
+        return f"llm_{phase_token}_{uuid4().hex[:12]}"
+
+    def llm_call_id_for_phase(self, phase: str | None = None) -> str:
+        phase_token = str(phase or "").strip().lower()
+        if phase_token:
+            return self._llm_call_ids_by_phase.get(phase_token, "")
+        return self._latest_llm_call_id
+
+    def _append_audit_rows(self, method_name: str, rows: list[dict[str, Any]]) -> None:
+        if not rows:
+            return
+        writer = getattr(self.repo, method_name, None)
+        if not callable(writer):
+            return
+        try:
+            writer(rows, tenant_id=self.tenant_id)
+        except Exception as exc:
+            logger.warning(
+                "[yellow]LLM audit write failed[/yellow] agent=%s method=%s err=%s",
+                self.agent_id,
+                method_name,
+                str(exc),
+            )
+
+    def _context_refs_for_audit(
+        self,
+        *,
+        llm_call_id: str,
+        context: dict[str, Any] | None,
+        phase: str,
+        cycle_id: str,
+        created_at: datetime,
+    ) -> list[dict[str, Any]]:
+        if not isinstance(context, dict):
+            return []
+
+        rows: list[dict[str, Any]] = []
+
+        def add_ref(
+            *,
+            source_table: str,
+            source_id: str,
+            item: Any,
+            context_role: str,
+            prompt_section: str,
+            rank: int,
+            source_ts: Any = None,
+            used_in_prompt: bool = True,
+        ) -> None:
+            source_token = str(source_id or "").strip()
+            if not source_token:
+                return
+            ref_id = "ctx_" + _short_hash(
+                {
+                    "llm_call_id": llm_call_id,
+                    "source_table": source_table,
+                    "source_id": source_token,
+                    "context_role": context_role,
+                    "prompt_section": prompt_section,
+                    "rank": rank,
+                },
+                20,
+            )
+            rows.append(
+                {
+                    "llm_call_id": llm_call_id,
+                    "context_ref_id": ref_id,
+                    "cycle_id": cycle_id,
+                    "created_at": created_at,
+                    "agent_id": self.agent_id,
+                    "phase": phase,
+                    "source_table": source_table,
+                    "source_id": source_token,
+                    "source_ts": source_ts,
+                    "source_hash": _stable_hash(item),
+                    "context_role": context_role,
+                    "prompt_section": prompt_section,
+                    "rank": rank,
+                    "used_in_prompt": used_in_prompt,
+                    "detail_json": item if isinstance(item, dict) else {"value": item},
+                }
+            )
+
+        for idx, row in enumerate(context.get("memory_events") or [], start=1):
+            if isinstance(row, dict):
+                add_ref(
+                    source_table="agent_memory_events",
+                    source_id=str(row.get("event_id") or ""),
+                    item=row,
+                    context_role="memory",
+                    prompt_section="memory_context",
+                    rank=idx,
+                    source_ts=row.get("created_at"),
+                )
+
+        for idx, row in enumerate(context.get("board_posts") or [], start=1):
+            if isinstance(row, dict):
+                add_ref(
+                    source_table="board_posts",
+                    source_id=str(row.get("post_id") or ""),
+                    item=row,
+                    context_role="board",
+                    prompt_section="board_context",
+                    rank=idx,
+                    source_ts=row.get("created_at"),
+                )
+
+        for idx, row in enumerate(context.get("research_briefings") or [], start=1):
+            if isinstance(row, dict):
+                add_ref(
+                    source_table="research_briefings",
+                    source_id=str(row.get("briefing_id") or ""),
+                    item=row,
+                    context_role="research",
+                    prompt_section="research_context",
+                    rank=idx,
+                    source_ts=row.get("created_at"),
+                )
+
+        for idx, row in enumerate(context.get("active_theses") or [], start=1):
+            if isinstance(row, dict):
+                add_ref(
+                    source_table="agent_memory_events",
+                    source_id=str(row.get("event_id") or row.get("semantic_key") or ""),
+                    item=row,
+                    context_role="active_thesis",
+                    prompt_section="active_thesis_context",
+                    rank=idx,
+                    source_ts=row.get("created_at"),
+                )
+
+        for idx, row in enumerate(context.get("graph_events") or [], start=1):
+            if not isinstance(row, dict):
+                continue
+            source_table = "memory_graph_edges" if row.get("edge_id") else "memory_graph_nodes"
+            add_ref(
+                source_table=source_table,
+                source_id=str(row.get("edge_id") or row.get("node_id") or row.get("event_id") or ""),
+                item=row,
+                context_role="graph",
+                prompt_section="graph_context",
+                rank=idx,
+                source_ts=row.get("created_at"),
+            )
+
+        for idx, row in enumerate(context.get("market_features") or [], start=1):
+            if not isinstance(row, dict):
+                continue
+            ticker = str(row.get("ticker") or row.get("symbol") or "").strip().upper()
+            source = str(row.get("source") or row.get("data_source") or "").strip().lower()
+            as_of = str(
+                row.get("date")
+                or row.get("as_of_date")
+                or row.get("feature_date")
+                or row.get("created_at")
+                or ""
+            ).strip()
+            source_id = "|".join(part for part in [ticker, source, as_of] if part) or f"rank_{idx}"
+            add_ref(
+                source_table="market_features",
+                source_id=source_id,
+                item=row,
+                context_role="market",
+                prompt_section="market_context",
+                rank=idx,
+                source_ts=row.get("created_at") or row.get("as_of_ts"),
+            )
+
+        return rows
+
+    def _tool_event_rows_for_audit(
+        self,
+        *,
+        llm_call_id: str,
+        events: list[dict[str, Any]],
+        phase: str,
+        cycle_id: str,
+        default_created_at: datetime,
+    ) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for idx, event in enumerate(events, start=1):
+            if not isinstance(event, dict):
+                continue
+            tool_name = str(event.get("tool") or "").strip()
+            if not tool_name:
+                continue
+            started_at = event.get("started_at")
+            created_at = default_created_at
+            try:
+                if started_at is not None:
+                    created_at = datetime.fromtimestamp(float(started_at) / 1000.0, tz=timezone.utc)
+            except (TypeError, ValueError, OSError):
+                created_at = default_created_at
+            result = event.get("result") if event.get("result") is not None else event.get("result_preview")
+            tool_event_id = "tool_" + _short_hash(
+                {
+                    "llm_call_id": llm_call_id,
+                    "idx": idx,
+                    "tool": tool_name,
+                    "started_at": started_at,
+                    "args": event.get("args"),
+                },
+                20,
+            )
+            rows.append(
+                {
+                    "llm_call_id": llm_call_id,
+                    "tool_event_id": tool_event_id,
+                    "cycle_id": cycle_id,
+                    "created_at": created_at,
+                    "agent_id": self.agent_id,
+                    "phase": str(event.get("phase") or phase or "").strip().lower() or phase,
+                    "tool_name": tool_name,
+                    "source": event.get("source"),
+                    "args_json": event.get("args") or {},
+                    "model_visible_result_json": result,
+                    "raw_result_hash": _stable_hash(result) if result is not None else None,
+                    "elapsed_ms": event.get("elapsed_ms"),
+                    "error": event.get("error"),
+                }
+            )
+        return rows
+
+    def _record_llm_interaction_audit(
+        self,
+        *,
+        llm_call_id: str,
+        phase: str,
+        session_id: str,
+        resumed: bool,
+        context: dict[str, Any] | None,
+        prompt: str,
+        created_at: datetime,
+        completed_at: datetime,
+        status: str,
+        response_text: str = "",
+        response_json: dict[str, Any] | None = None,
+        token_usage: dict[str, Any] | None = None,
+        error_message: str = "",
+        tool_events: list[dict[str, Any]] | None = None,
+    ) -> None:
+        cycle_id = str((context or {}).get("cycle_id") or "").strip()
+        context_payload = _extract_json_tail(prompt, marker="Context payload JSON")
+        context_sections = self._prompt_context_sections(context)
+        available_tools = self._available_tools_payload()
+        row = {
+            "llm_call_id": llm_call_id,
+            "cycle_id": cycle_id,
+            "created_at": created_at,
+            "completed_at": completed_at,
+            "agent_id": self.agent_id,
+            "provider": self.provider,
+            "model": self._configured_model_id(),
+            "phase": phase,
+            "session_id": session_id,
+            "resume_session": resumed,
+            "trading_mode": self.settings.trading_mode,
+            "status": status,
+            "system_prompt": self._system_prompt_snapshot,
+            "user_prompt": prompt,
+            "context_payload_json": context_payload,
+            "context_sections_json": context_sections,
+            "available_tools_json": available_tools,
+            "response_text": response_text or None,
+            "response_json": response_json,
+            "token_usage_json": token_usage or {},
+            "request_hash": _stable_hash(
+                {
+                    "system_prompt": self._system_prompt_snapshot,
+                    "user_prompt": prompt,
+                    "available_tools": available_tools,
+                }
+            ),
+            "prompt_version": "adk_prompt_v1",
+            "context_builder_version": "context_builder_v1",
+            "settings_hash": _stable_hash(
+                {
+                    "trading_mode": self.settings.trading_mode,
+                    "kis_target_market": getattr(self.settings, "kis_target_market", ""),
+                    "memory_policy": getattr(self.settings, "memory_policy", None),
+                    "agent_config": self._agent_config.model_dump(mode="json") if self._agent_config else {},
+                }
+            ),
+            "latency_ms": int(max(0.0, (completed_at - created_at).total_seconds() * 1000.0)),
+            "error_message": error_message,
+        }
+        self._append_audit_rows("append_llm_interactions", [row])
+        self._append_audit_rows(
+            "append_llm_context_refs",
+            self._context_refs_for_audit(
+                llm_call_id=llm_call_id,
+                context=context,
+                phase=phase,
+                cycle_id=cycle_id,
+                created_at=created_at,
+            ),
+        )
+        self._append_audit_rows(
+            "append_llm_tool_events",
+            self._tool_event_rows_for_audit(
+                llm_call_id=llm_call_id,
+                events=tool_events or [],
+                phase=phase,
+                cycle_id=cycle_id,
+                default_created_at=completed_at,
+            ),
+        )
+
+    def record_artifact_links(
+        self,
+        *,
+        phase: str,
+        cycle_id: str,
+        artifacts: list[dict[str, Any]],
+    ) -> None:
+        phase_token = str(phase or "").strip().lower() or "unknown"
+        llm_call_id = self.llm_call_id_for_phase(phase_token)
+        if not llm_call_id or not artifacts:
+            return
+        created_at = _utc_now()
+        rows: list[dict[str, Any]] = []
+        for artifact in artifacts:
+            if not isinstance(artifact, dict):
+                continue
+            artifact_table = str(artifact.get("artifact_table") or "").strip()
+            artifact_id = str(artifact.get("artifact_id") or "").strip()
+            if not artifact_table or not artifact_id:
+                continue
+            link_id = "alink_" + _short_hash(
+                {
+                    "llm_call_id": llm_call_id,
+                    "artifact_table": artifact_table,
+                    "artifact_id": artifact_id,
+                    "artifact_role": artifact.get("artifact_role"),
+                },
+                20,
+            )
+            rows.append(
+                {
+                    "llm_call_id": llm_call_id,
+                    "artifact_link_id": link_id,
+                    "cycle_id": str(cycle_id or "").strip(),
+                    "created_at": created_at,
+                    "agent_id": self.agent_id,
+                    "phase": phase_token,
+                    "artifact_table": artifact_table,
+                    "artifact_id": artifact_id,
+                    "artifact_role": artifact.get("artifact_role"),
+                    "detail_json": artifact.get("detail_json"),
+                }
+            )
+        self._append_audit_rows("append_llm_artifact_links", rows)
 
     @staticmethod
     def _prompt_context_sections(context: dict[str, Any] | None) -> dict[str, Any]:
@@ -501,8 +909,8 @@ class _ADKDecisionRunner:
             query=query,
         )
 
-    def _persist_tool_summary_memory(self, *, summary: str, payload: dict[str, Any]) -> None:
-        persist_tool_summary_memory(
+    def _persist_tool_summary_memory(self, *, summary: str, payload: dict[str, Any]) -> str | None:
+        return persist_tool_summary_memory(
             memory_store=self._memory_store,
             settings=self.settings,
             repo=self.repo,
@@ -658,6 +1066,8 @@ class _ADKDecisionRunner:
             self._seen_memory_ids = set()
             self._candidate_ledger = {}
             self._prompt_snapshots = []
+            self._llm_call_ids_by_phase = {}
+            self._latest_llm_call_id = ""
         self._current_phase = phase
         self._current_context = context
         self._seed_seen_memory_ids(context)
@@ -694,18 +1104,59 @@ class _ADKDecisionRunner:
             context=context,
         )
 
-        text = self._run_on_loop(self._run_async(self._runner, session_id, prompt))
-        if not text or not text.strip():
-            raise RuntimeError("ADK runner returned empty response")
+        llm_call_id = self._new_llm_call_id(phase)
+        self._llm_call_ids_by_phase[phase] = llm_call_id
+        self._latest_llm_call_id = llm_call_id
+        created_at = _utc_now()
+        text = ""
+        decision: dict[str, Any] | None = None
+        try:
+            text = self._run_on_loop(self._run_async(self._runner, session_id, prompt))
+            if not text or not text.strip():
+                raise RuntimeError("ADK runner returned empty response")
+            decision = parse_decision_response(text)
+        except Exception as exc:
+            completed_at = _utc_now()
+            tag_phase_tool_events(self._tool_events, phase=phase, start_idx=phase_start_idx)
+            token_usage = getattr(self, "_last_token_usage", None)
+            self._record_llm_interaction_audit(
+                llm_call_id=llm_call_id,
+                phase=phase,
+                session_id=session_id,
+                resumed=bool(resume_session_id),
+                context=context,
+                prompt=prompt,
+                created_at=created_at,
+                completed_at=completed_at,
+                status="error",
+                response_text=text,
+                token_usage=token_usage if isinstance(token_usage, dict) else None,
+                error_message=str(exc),
+                tool_events=self._tool_events[phase_start_idx:],
+            )
+            raise
 
-        decision = parse_decision_response(text)
-
-        # Tag tool events recorded during this phase.
+        completed_at = _utc_now()
         tag_phase_tool_events(self._tool_events, phase=phase, start_idx=phase_start_idx)
+        token_usage = getattr(self, "_last_token_usage", None)
+        self._record_llm_interaction_audit(
+            llm_call_id=llm_call_id,
+            phase=phase,
+            session_id=session_id,
+            resumed=bool(resume_session_id),
+            context=context,
+            prompt=prompt,
+            created_at=created_at,
+            completed_at=completed_at,
+            status="ok",
+            response_text=text,
+            response_json=decision,
+            token_usage=token_usage if isinstance(token_usage, dict) else None,
+            tool_events=self._tool_events[phase_start_idx:],
+        )
 
         # Persist a compact summary of ReAct tool usage for next-cycle reference.
         # Saved for every phase (draft + execution) so the board shows the full picture.
-        token_usage = getattr(self, "_last_token_usage", None)
         summary_record = build_tool_summary_memory_record(
             self._tool_events,
             registry=self._registry,
@@ -716,8 +1167,21 @@ class _ADKDecisionRunner:
         )
         if summary_record is not None:
             summary, payload = summary_record or ("", {})
+            payload["llm_call_id"] = llm_call_id
             try:
-                self._persist_tool_summary_memory(summary=summary, payload=payload)
+                event_id = self._persist_tool_summary_memory(summary=summary, payload=payload)
+                if event_id:
+                    self.record_artifact_links(
+                        phase=phase,
+                        cycle_id=str(context.get("cycle_id") or "").strip(),
+                        artifacts=[
+                            {
+                                "artifact_table": "agent_memory_events",
+                                "artifact_id": event_id,
+                                "artifact_role": "tool_summary_memory",
+                            }
+                        ],
+                    )
             except Exception as exc:
                 logger.warning(
                     "[yellow]Tool summary memory write failed[/yellow] agent=%s err=%s",
@@ -729,31 +1193,94 @@ class _ADKDecisionRunner:
 
     def decide_board(self, session_id: str, orders_summary: str, *, cycle_id: str = "") -> dict[str, Any]:
         """Step 2: 주문 내역 기반 게시글 작성. 같은 세션 컨텍스트 활용."""
+        phase = "board"
+        phase_start_idx = len(self._tool_events)
         board_prompt = build_board_prompt(orders_summary)
+        audit_context = dict(self._current_context or {})
+        if cycle_id and not str(audit_context.get("cycle_id") or "").strip():
+            audit_context["cycle_id"] = str(cycle_id or "").strip()
         self._record_prompt_snapshot(
-            phase="board",
+            phase=phase,
             session_id=session_id,
             prompt=board_prompt,
             resumed=True,
-            context=self._current_context,
+            context=audit_context,
         )
-        text = self._run_on_loop(self._run_async(self._runner, session_id, board_prompt))
-        board_decision = parse_board_response(text)
+        llm_call_id = self._new_llm_call_id(phase)
+        self._llm_call_ids_by_phase[phase] = llm_call_id
+        self._latest_llm_call_id = llm_call_id
+        created_at = _utc_now()
+        text = ""
+        try:
+            text = self._run_on_loop(self._run_async(self._runner, session_id, board_prompt))
+            board_decision = parse_board_response(text)
+        except Exception as exc:
+            completed_at = _utc_now()
+            tag_phase_tool_events(self._tool_events, phase=phase, start_idx=phase_start_idx)
+            token_usage = getattr(self, "_last_token_usage", None)
+            self._record_llm_interaction_audit(
+                llm_call_id=llm_call_id,
+                phase=phase,
+                session_id=session_id,
+                resumed=True,
+                context=audit_context,
+                prompt=board_prompt,
+                created_at=created_at,
+                completed_at=completed_at,
+                status="error",
+                response_text=text,
+                token_usage=token_usage if isinstance(token_usage, dict) else None,
+                error_message=str(exc),
+                tool_events=self._tool_events[phase_start_idx:],
+            )
+            raise
+
+        completed_at = _utc_now()
+        tag_phase_tool_events(self._tool_events, phase=phase, start_idx=phase_start_idx)
+        token_usage = getattr(self, "_last_token_usage", None)
+        self._record_llm_interaction_audit(
+            llm_call_id=llm_call_id,
+            phase=phase,
+            session_id=session_id,
+            resumed=True,
+            context=audit_context,
+            prompt=board_prompt,
+            created_at=created_at,
+            completed_at=completed_at,
+            status="ok",
+            response_text=text,
+            response_json=board_decision,
+            token_usage=token_usage if isinstance(token_usage, dict) else None,
+            tool_events=self._tool_events[phase_start_idx:],
+        )
         try:
             events = [event for event in self._tool_events if str(event.get("tool") or "").strip()]
             payload = {
                 "phase": "board",
                 "cycle_id": str(cycle_id or "").strip(),
+                "llm_call_id": llm_call_id,
                 "analysis_funnel": self._funnel_metrics(),
                 "tool_events": _safe_json(events),
                 "tool_mix": _tool_category_counts(events, registry=self._registry),
-                "token_usage": _safe_json(getattr(self, "_last_token_usage", None) or {}),
+                "token_usage": _safe_json(token_usage if isinstance(token_usage, dict) else {}),
                 "prompt_bundle": self._prompt_bundle_payload(),
             }
-            self._persist_tool_summary_memory(
+            event_id = self._persist_tool_summary_memory(
                 summary="Board prompt bundle snapshot before post generation.",
                 payload=payload,
             )
+            if event_id:
+                self.record_artifact_links(
+                    phase=phase,
+                    cycle_id=str(cycle_id or "").strip(),
+                    artifacts=[
+                        {
+                            "artifact_table": "agent_memory_events",
+                            "artifact_id": event_id,
+                            "artifact_role": "board_prompt_bundle_memory",
+                        }
+                    ],
+                )
         except Exception as exc:
             logger.warning(
                 "[yellow]Board prompt bundle memory write failed[/yellow] agent=%s err=%s",
@@ -925,6 +1452,26 @@ class AdkTradingAgent:
             row_map=row_map,
             feedback_events=order_feedback,
         )
+        llm_call_lookup = getattr(self.runner, "llm_call_id_for_phase", None)
+        execution_llm_call_id = llm_call_lookup("execution") if callable(llm_call_lookup) else ""
+        if execution_llm_call_id:
+            for intent in intents:
+                intent.llm_call_id = execution_llm_call_id
+        artifact_recorder = getattr(self.runner, "record_artifact_links", None)
+        if callable(artifact_recorder) and intents:
+            artifact_recorder(
+                phase="execution",
+                cycle_id=cycle_id,
+                artifacts=[
+                    {
+                        "artifact_table": "agent_order_intents",
+                        "artifact_id": intent.intent_id,
+                        "artifact_role": "order_intent",
+                        "detail_json": {"ticker": intent.ticker, "side": intent.side.value},
+                    }
+                    for intent in intents
+                ],
+            )
         record_candidate_order_feedback = getattr(self.runner, "record_candidate_order_feedback", None)
         if callable(record_candidate_order_feedback):
             record_candidate_order_feedback(order_feedback)
@@ -983,7 +1530,9 @@ class AdkTradingAgent:
             if clean and clean not in tickers:
                 tickers.append(clean)
         self._board_ticker_names = {}
-        return BoardPost(
+        llm_call_lookup = getattr(self.runner, "llm_call_id_for_phase", None)
+        board_llm_call_id = llm_call_lookup("board") if callable(llm_call_lookup) else ""
+        post = BoardPost(
             agent_id=self.agent_id,
             title=title,
             body=body,
@@ -991,7 +1540,23 @@ class AdkTradingAgent:
             trading_mode=getattr(initial_post, "trading_mode", "paper"),
             tickers=tickers,
             cycle_id=str(cycle_id or "").strip(),
+            llm_call_id=board_llm_call_id,
         )
+        artifact_recorder = getattr(self.runner, "record_artifact_links", None)
+        if callable(artifact_recorder):
+            artifact_recorder(
+                phase="board",
+                cycle_id=str(cycle_id or "").strip(),
+                artifacts=[
+                    {
+                        "artifact_table": "board_posts",
+                        "artifact_id": post.post_id,
+                        "artifact_role": "board_post",
+                        "detail_json": {"title": post.title, "tickers": post.tickers},
+                    }
+                ],
+            )
+        return post
 
 def build_adk_agents(
     settings: Settings,

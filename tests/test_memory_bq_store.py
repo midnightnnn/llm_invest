@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from arena.data.bigquery.memory_bq_store import MemoryBQStore
+from arena.models import MemoryEvent
 
 
 class _FakeClient:
@@ -82,6 +83,28 @@ def test_find_buy_memories_for_ticker_uses_structured_payload_before_summary_fal
     assert "JSON_VALUE(payload_json, '$.intent.side')" in sql
     assert "OR summary LIKE CONCAT(@ticker, ' BUY%')" in sql
     assert params["ticker"] == "AAPL"
+
+
+def test_write_memory_event_promotes_cycle_and_llm_call_columns() -> None:
+    session = _FakeSession()
+    store = MemoryBQStore(session)
+
+    store.write_memory_event(
+        MemoryEvent(
+            agent_id="gpt",
+            event_type="react_tools_summary",
+            summary="tools",
+            payload={"cycle_id": "cycle_1", "llm_call_id": "llm_execution_1"},
+            trading_mode="paper",
+            score=0.6,
+        ),
+        tenant_id="tenant-a",
+    )
+
+    sql, params = session.executed[0]
+    assert "cycle_id, llm_call_id, payload_json" in sql
+    assert params["cycle_id"] == "cycle_1"
+    assert params["llm_call_id"] == "llm_execution_1"
 
 
 def test_upsert_memory_relation_triples_merges_with_json_detail() -> None:

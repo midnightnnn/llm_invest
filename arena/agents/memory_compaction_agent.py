@@ -62,6 +62,18 @@ def _is_retryable_compaction_error(exc: Exception) -> bool:
     ]
     return any(marker in text for marker in markers)
 
+
+def _model_accepts_temperature(model: str) -> bool:
+    token = str(model or "").strip().lower()
+    if not token:
+        return True
+    if "gpt-5" in token:
+        return False
+    if token.startswith("anthropic/") or token.startswith("claude-") or "/claude-" in token:
+        return False
+    return True
+
+
 def _trim_text(value: Any, *, max_len: int) -> str:
     text = str(value or "").replace("\n", " ").strip()
     if len(text) > max_len:
@@ -140,8 +152,7 @@ class MemoryCompactionAgent:
         return resolve_compaction_prompt(self.repo, self.tenant_id, policy=self.settings.memory_policy)
 
     def _request_temperature(self) -> float | None:
-        model = str(self.model or "").strip().lower()
-        if "gpt-5" in model:
+        if not _model_accepts_temperature(self.model):
             return None
         return 0.1
 

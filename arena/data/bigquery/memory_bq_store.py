@@ -32,7 +32,8 @@ _MEMORY_SELECT_COLUMNS = (
     "event_id, created_at, agent_id, event_type, summary, trading_mode, payload_json, "
     "importance_score, outcome_score, score, memory_tier, expires_at, promoted_at, "
     "semantic_key, context_tags_json, primary_regime, primary_strategy_tag, primary_sector, "
-    "access_count, last_accessed_at, decay_score, effective_score, graph_node_id, causal_chain_id"
+    "access_count, last_accessed_at, decay_score, effective_score, graph_node_id, causal_chain_id, "
+    "cycle_id, llm_call_id"
 )
 
 
@@ -65,8 +66,8 @@ class MemoryBQStore:
         tenant = self.session.resolve_tenant_id(tenant_id)
         sql = f"""
         INSERT INTO `{self.session.dataset_fqn}.board_posts`
-        (tenant_id, post_id, cycle_id, created_at, agent_id, title, body, draft_summary, trading_mode, tickers)
-        VALUES (@tenant_id, @post_id, @cycle_id, @created_at, @agent_id, @title, @body, @draft_summary, @trading_mode, @tickers)
+        (tenant_id, post_id, cycle_id, llm_call_id, created_at, agent_id, title, body, draft_summary, trading_mode, tickers)
+        VALUES (@tenant_id, @post_id, @cycle_id, @llm_call_id, @created_at, @agent_id, @title, @body, @draft_summary, @trading_mode, @tickers)
         """
         self.session.execute(
             sql,
@@ -74,6 +75,7 @@ class MemoryBQStore:
                 "tenant_id": tenant,
                 "post_id": post.post_id,
                 "cycle_id": post.cycle_id or None,
+                "llm_call_id": post.llm_call_id or None,
                 "created_at": post.created_at,
                 "agent_id": post.agent_id,
                 "title": post.title,
@@ -99,7 +101,7 @@ class MemoryBQStore:
         """Returns recent board posts for context building."""
         tenant = self.session.resolve_tenant_id(tenant_id)
         sql = f"""
-        SELECT post_id, created_at, agent_id, title, body, trading_mode, tickers
+        SELECT post_id, cycle_id, llm_call_id, created_at, agent_id, title, body, trading_mode, tickers
         FROM `{self.session.dataset_fqn}.board_posts`
         WHERE tenant_id = @tenant_id
           AND trading_mode = @trading_mode
@@ -134,7 +136,7 @@ class MemoryBQStore:
             filters.append("agent_id = @agent_id")
             params["agent_id"] = str(agent_id or "").strip()
         sql = f"""
-        SELECT post_id, cycle_id, created_at, agent_id, title, body, draft_summary, trading_mode, tickers
+        SELECT post_id, cycle_id, llm_call_id, created_at, agent_id, title, body, draft_summary, trading_mode, tickers
         FROM `{self.session.dataset_fqn}.board_posts`
         WHERE {' AND '.join(filters)}
         ORDER BY created_at DESC
@@ -153,13 +155,13 @@ class MemoryBQStore:
         sql = f"""
         INSERT INTO `{self.session.dataset_fqn}.agent_memory_events`
         (
-          tenant_id, event_id, created_at, agent_id, event_type, summary, trading_mode, payload_json,
+          tenant_id, event_id, created_at, agent_id, event_type, summary, trading_mode, cycle_id, llm_call_id, payload_json,
           importance_score, outcome_score, score, memory_tier, expires_at, promoted_at, semantic_key,
           context_tags_json, primary_regime, primary_strategy_tag, primary_sector, access_count,
           last_accessed_at, decay_score, effective_score, graph_node_id, causal_chain_id
         )
         VALUES (
-          @tenant_id, @event_id, @created_at, @agent_id, @event_type, @summary, @trading_mode, @payload_json,
+          @tenant_id, @event_id, @created_at, @agent_id, @event_type, @summary, @trading_mode, @cycle_id, @llm_call_id, @payload_json,
           @importance_score, @outcome_score, @score, @memory_tier, @expires_at, @promoted_at, @semantic_key,
           @context_tags_json, @primary_regime, @primary_strategy_tag, @primary_sector, @access_count,
           @last_accessed_at, @decay_score, @effective_score, @graph_node_id, @causal_chain_id
@@ -168,6 +170,16 @@ class MemoryBQStore:
         importance_score = event.importance_score
         if importance_score is None:
             importance_score = event.score
+        payload_cycle_id = ""
+        payload_llm_call_id = ""
+        if isinstance(event.payload, dict):
+            payload_cycle_id = str(event.payload.get("cycle_id") or "").strip()
+            payload_llm_call_id = str(event.payload.get("llm_call_id") or "").strip()
+            intent_payload = event.payload.get("intent")
+            if not payload_cycle_id and isinstance(intent_payload, dict):
+                payload_cycle_id = str(intent_payload.get("cycle_id") or "").strip()
+            if not payload_llm_call_id and isinstance(intent_payload, dict):
+                payload_llm_call_id = str(intent_payload.get("llm_call_id") or "").strip()
         self.session.execute(
             sql,
             {
@@ -178,6 +190,8 @@ class MemoryBQStore:
                 "event_type": event.event_type,
                 "summary": event.summary,
                 "trading_mode": event.trading_mode,
+                "cycle_id": str(event.cycle_id or "").strip() or payload_cycle_id or None,
+                "llm_call_id": str(event.llm_call_id or "").strip() or payload_llm_call_id or None,
                 "payload_json": json.dumps(event.payload, ensure_ascii=False, default=str),
                 "importance_score": importance_score,
                 "outcome_score": ("FLOAT64", event.outcome_score),
@@ -242,15 +256,14 @@ class MemoryBQStore:
         trading_mode: str = "paper",
         tenant_id: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Returns memory events linked to a specific cycle via payload.cycle_id or payload.intent.cycle_id."""
+        """Returns memory events linked to a specific cycle."""
         tenant = self.session.resolve_tenant_id(tenant_id)
         filters = [
             "tenant_id = @tenant_id",
             "agent_id = @agent_id",
             "trading_mode = @trading_mode",
             "("
-            "COALESCE(JSON_VALUE(payload_json, '$.cycle_id'), '') = @cycle_id "
-            "OR COALESCE(JSON_VALUE(payload_json, '$.intent.cycle_id'), '') = @cycle_id"
+            "COALESCE(cycle_id, JSON_VALUE(payload_json, '$.cycle_id'), JSON_VALUE(payload_json, '$.intent.cycle_id'), '') = @cycle_id"
             ")",
         ]
         params: dict[str, Any] = {
@@ -363,10 +376,7 @@ class MemoryBQStore:
           AND agent_id = @agent_id
           AND trading_mode = @trading_mode
           AND event_type IN UNNEST(@event_types)
-          AND (
-            COALESCE(JSON_VALUE(payload_json, '$.cycle_id'), '') = @cycle_id
-            OR COALESCE(JSON_VALUE(payload_json, '$.intent.cycle_id'), '') = @cycle_id
-          )
+          AND COALESCE(cycle_id, JSON_VALUE(payload_json, '$.cycle_id'), JSON_VALUE(payload_json, '$.intent.cycle_id'), '') = @cycle_id
           AND COALESCE(semantic_key, JSON_VALUE(payload_json, '$.thesis_id'), '') != ''
         GROUP BY semantic_key
         ORDER BY last_created_at DESC
@@ -666,10 +676,22 @@ class MemoryBQStore:
             primary_strategy_tag = COALESCE(@primary_strategy_tag, primary_strategy_tag),
             primary_sector = COALESCE(@primary_sector, primary_sector),
             graph_node_id = COALESCE(@graph_node_id, graph_node_id),
-            causal_chain_id = COALESCE(@causal_chain_id, causal_chain_id)
+            causal_chain_id = COALESCE(@causal_chain_id, causal_chain_id),
+            cycle_id = COALESCE(@cycle_id, cycle_id),
+            llm_call_id = COALESCE(@llm_call_id, llm_call_id)
         WHERE tenant_id = @tenant_id
           AND event_id = @event_id
         """
+        payload_cycle_id = ""
+        payload_llm_call_id = ""
+        if isinstance(payload, dict):
+            payload_cycle_id = str(payload.get("cycle_id") or "").strip()
+            payload_llm_call_id = str(payload.get("llm_call_id") or "").strip()
+            intent_payload = payload.get("intent")
+            if not payload_cycle_id and isinstance(intent_payload, dict):
+                payload_cycle_id = str(intent_payload.get("cycle_id") or "").strip()
+            if not payload_llm_call_id and isinstance(intent_payload, dict):
+                payload_llm_call_id = str(intent_payload.get("llm_call_id") or "").strip()
         self.session.execute(
             sql,
             {
@@ -691,6 +713,8 @@ class MemoryBQStore:
                 "primary_sector": str(primary_sector or "").strip().lower() or None,
                 "graph_node_id": str(graph_node_id or "").strip() or None,
                 "causal_chain_id": str(causal_chain_id or "").strip() or None,
+                "cycle_id": payload_cycle_id or None,
+                "llm_call_id": payload_llm_call_id or None,
             },
         )
         row = self.memory_event_by_id(event_id=event_id, tenant_id=tenant)

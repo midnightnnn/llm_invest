@@ -18,6 +18,7 @@ from google.cloud import bigquery
 from .bigquery.backtest_store import BacktestStore
 from .bigquery.execution_store import ExecutionStore
 from .bigquery.ledger_store import LedgerStore
+from .bigquery.llm_audit_store import LlmAuditStore
 from .bigquery.market_store import MarketStore
 from .bigquery.memory_bq_store import MemoryBQStore
 from .bigquery.runtime_store import RuntimeStore
@@ -42,6 +43,7 @@ class BigQueryRepository:
 
         # Domain stores — new code can use these directly.
         self._ledger_store = LedgerStore(self._session)
+        self._llm_audit_store = LlmAuditStore(self._session)
         self._market_store = MarketStore(self._session)
         self._memory_bq_store = MemoryBQStore(self._session)
         self._runtime_store = RuntimeStore(self._session)
@@ -120,6 +122,7 @@ class BigQueryRepository:
 
     _STORE_ATTRS = (
         "_memory_bq_store",
+        "_llm_audit_store",
         "_runtime_store",
         "_market_store",
         "_ledger_store",

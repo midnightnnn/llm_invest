@@ -694,10 +694,10 @@ class MemoryStore:
         semantic_key: str | None = None,
         memory_tier: str | None = None,
         expires_at: datetime | None = None,
-    ) -> None:
+    ) -> str | None:
         """Stores a memory event."""
         if not memory_event_enabled(self.memory_policy, event_type, True):
-            return
+            return None
         context_tags = self._context_tags(event_type=event_type, summary=summary, payload=payload)
         tier = str(memory_tier or "").strip().lower() or self._memory_tier(event_type=event_type, payload=payload)
         event = MemoryEvent(
@@ -747,6 +747,7 @@ class MemoryStore:
                 graph_node_id=event.graph_node_id or "",
                 causal_chain_id=event.causal_chain_id or "",
             )
+        return event.event_id
 
     def _candidate_memory_exists(self, *, agent_id: str, semantic_key: str) -> bool:
         key = str(semantic_key or "").strip()

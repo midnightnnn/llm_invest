@@ -49,6 +49,7 @@ class OrderIntent(BaseModel):
     created_at: datetime = Field(default_factory=utc_now)
     intent_id: str = Field(default_factory=lambda: f"intent_{uuid4().hex[:12]}")
     cycle_id: str = ""
+    llm_call_id: str = ""
 
     @property
     def notional_krw(self) -> float:
@@ -120,6 +121,7 @@ class BoardPost(BaseModel):
     created_at: datetime = Field(default_factory=utc_now)
     post_id: str = Field(default_factory=lambda: f"post_{uuid4().hex[:12]}")
     cycle_id: str = ""
+    llm_call_id: str = ""
 
 
 class MemoryEvent(BaseModel):
@@ -150,3 +152,5 @@ class MemoryEvent(BaseModel):
     causal_chain_id: str | None = None
     created_at: datetime = Field(default_factory=utc_now)
     event_id: str = Field(default_factory=lambda: f"mem_{uuid4().hex[:12]}")
+    cycle_id: str = ""
+    llm_call_id: str = ""

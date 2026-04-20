@@ -158,30 +158,29 @@ def persist_tool_summary_memory(
     agent_id: str,
     summary: str,
     payload: dict[str, Any],
-) -> None:
+) -> str | None:
     """Persists tool summaries through the main memory path when available."""
     if memory_store:
-        memory_store.record_memory(
+        return memory_store.record_memory(
             agent_id=agent_id,
             summary=summary,
             event_type="react_tools_summary",
             score=0.6,
             payload=payload,
         )
-        return
 
     if not memory_event_enabled(settings.memory_policy, "react_tools_summary", True):
-        return
-    repo.write_memory_event(
-        MemoryEvent(
-            agent_id=agent_id,
-            event_type="react_tools_summary",
-            summary=summary,
-            trading_mode=settings.trading_mode,
-            payload=payload,
-            score=0.6,
-        )
+        return None
+    event = MemoryEvent(
+        agent_id=agent_id,
+        event_type="react_tools_summary",
+        summary=summary,
+        trading_mode=settings.trading_mode,
+        payload=payload,
+        score=0.6,
     )
+    repo.write_memory_event(event)
+    return event.event_id
 
 
 async def collect_response_text(
