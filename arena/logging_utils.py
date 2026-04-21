@@ -35,6 +35,32 @@ _STANDARD_RECORD_ATTRS: set[str] = {
 }
 
 
+def _clean_log_field(value: Any) -> Any:
+    """Normalizes structured log fields while dropping empty noise values."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        clean = value.strip()
+        return clean or None
+    if isinstance(value, dict):
+        cleaned: dict[str, Any] = {}
+        for key, item in value.items():
+            normalized = _clean_log_field(item)
+            if normalized is None:
+                continue
+            cleaned[str(key)] = normalized
+        return cleaned or None
+    if isinstance(value, (list, tuple)):
+        cleaned_items = []
+        for item in value:
+            normalized = _clean_log_field(item)
+            if normalized is None:
+                continue
+            cleaned_items.append(normalized)
+        return cleaned_items or None
+    return value
+
+
 def _json_safe(value: Any) -> Any:
     """Normalizes values so they can be embedded in JSON logs."""
     if value is None:
@@ -48,6 +74,26 @@ def _json_safe(value: Any) -> Any:
     if isinstance(value, (list, tuple)):
         return [_json_safe(v) for v in value]
     return str(value)
+
+
+def event_extra(event: str, /, **fields: Any) -> dict[str, Any]:
+    """Builds structured logging metadata while preserving the current message format."""
+    payload: dict[str, Any] = {"event": str(event).strip()}
+    for key, value in fields.items():
+        normalized = _clean_log_field(value)
+        if normalized is None:
+            continue
+        payload[str(key)] = normalized
+    return payload
+
+
+def failure_extra(event: str, exc: BaseException | None = None, /, **fields: Any) -> dict[str, Any]:
+    """Extends event metadata with stable exception fields for Cloud Logging queries."""
+    payload = event_extra(event, **fields)
+    if exc is not None:
+        payload.setdefault("err_type", type(exc).__name__)
+        payload.setdefault("err", str(exc))
+    return payload
 
 
 class _JsonFormatter(logging.Formatter):

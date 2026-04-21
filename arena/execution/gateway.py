@@ -7,6 +7,7 @@ from uuid import uuid4
 from arena.broker.base import BrokerClient
 from arena.config import AgentConfig, merge_agent_risk_settings
 from arena.data.bq import BigQueryRepository
+from arena.logging_utils import failure_extra
 from arena.memory.store import MemoryStore
 from arena.models import AccountSnapshot, ExecutionReport, ExecutionStatus, OrderIntent, RiskDecision, utc_now
 from arena.risk import RiskEngine
@@ -65,6 +66,12 @@ class ExecutionGateway:
                 "[yellow]Runtime audit append failed[/yellow] action=%s err=%s",
                 action,
                 str(exc),
+                extra=failure_extra(
+                    "runtime_audit_append_failed",
+                    exc,
+                    tenant_id=self._tenant_label(),
+                    action=action,
+                ),
             )
 
     def _sync_execution_memory(
@@ -94,6 +101,17 @@ class ExecutionGateway:
                 intent.intent_id,
                 report.order_id,
                 str(exc),
+                extra=failure_extra(
+                    "execution_memory_sync_failed",
+                    exc,
+                    tenant_id=tenant,
+                    phase=phase,
+                    intent_id=intent.intent_id,
+                    order_id=report.order_id,
+                    agent_id=intent.agent_id,
+                    ticker=intent.ticker,
+                    stage="record_execution",
+                ),
             )
             self._append_runtime_warning(
                 action="execution_memory_sync",
@@ -126,6 +144,17 @@ class ExecutionGateway:
                     intent.intent_id,
                     report.order_id,
                     str(exc),
+                    extra=failure_extra(
+                        "execution_thesis_sync_failed",
+                        exc,
+                        tenant_id=tenant,
+                        phase=phase,
+                        intent_id=intent.intent_id,
+                        order_id=report.order_id,
+                        agent_id=intent.agent_id,
+                        ticker=intent.ticker,
+                        stage="record_thesis_lifecycle",
+                    ),
                 )
                 self._append_runtime_warning(
                     action="execution_memory_sync",

@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from arena.config import Settings
 from arena.data.bq import BigQueryRepository
+from arena.logging_utils import event_extra, failure_extra
 from arena.market_hours import MarketWindow
 from arena.orchestrator import ArenaOrchestrator
 from arena.cli_commands.run_shared import _MARKET_ALIAS
@@ -424,9 +425,26 @@ def cmd_run_batch(live: bool, *, all_tenants: bool = False, market_override: str
     tenants = cli._resolve_batch_tenants(bootstrap_repo, fallback=fallback)
     tenants = cli._partition_tenants_for_task(tenants)
     if not tenants:
-        logger.info("[yellow]No tenants assigned to this task shard; skipping[/yellow]")
+        logger.info(
+            "[yellow]No tenants assigned to this task shard; skipping[/yellow]",
+            extra=event_extra(
+                "batch_task_shard_empty",
+                market=market_override or "all",
+            ),
+        )
         return
-    logger.info("[bold]Batch multi-tenant start[/bold] tenants=%s live=%s", ",".join(tenants), live)
+    logger.info(
+        "[bold]Batch multi-tenant start[/bold] tenants=%s live=%s",
+        ",".join(tenants),
+        live,
+        extra=event_extra(
+            "batch_multi_tenant_start",
+            live=live,
+            market=market_override or "all",
+            tenant_count=len(tenants),
+            tenants=tenants,
+        ),
+    )
 
     max_workers = int(os.getenv("ARENA_BATCH_PARALLEL", "3") or "3")
     build_failures: list[tuple[str, str]] = []
@@ -449,13 +467,47 @@ def cmd_run_batch(live: bool, *, all_tenants: bool = False, market_override: str
                 runtimes.append(future.result())
             except SystemExit as exc:
                 build_failures.append((tenant, f"SystemExit({exc.code})"))
-                logger.exception("[red]Batch tenant build blocked[/red] tenant=%s code=%s", tenant, exc.code)
+                logger.exception(
+                    "[red]Batch tenant build blocked[/red] tenant=%s code=%s",
+                    tenant,
+                    exc.code,
+                    extra=failure_extra(
+                        "batch_tenant_build_blocked",
+                        exc,
+                        tenant_id=tenant,
+                        market=market_override or "all",
+                        stage="runtime",
+                    ),
+                )
             except Exception as exc:
                 build_failures.append((tenant, str(exc)))
-                logger.exception("[red]Batch tenant build failed[/red] tenant=%s err=%s", tenant, str(exc))
+                logger.exception(
+                    "[red]Batch tenant build failed[/red] tenant=%s err=%s",
+                    tenant,
+                    str(exc),
+                    extra=failure_extra(
+                        "batch_tenant_build_failed",
+                        exc,
+                        tenant_id=tenant,
+                        market=market_override or "all",
+                        stage="runtime",
+                    ),
+                )
 
     if not runtimes:
-        logger.error("[red]Batch multi-tenant failed[/red] no tenants initialized")
+        logger.error(
+            "[red]Batch multi-tenant failed[/red] no tenants initialized",
+            extra=event_extra(
+                "batch_multi_tenant_failed",
+                reason="no_tenants_initialized",
+                live=live,
+                market=market_override or "all",
+                tenant_count=len(tenants),
+                runtime_count=0,
+                build_failed_count=len(build_failures),
+                execution_failed_count=0,
+            ),
+        )
         raise SystemExit(1)
 
     if market_override.strip():
@@ -467,9 +519,27 @@ def cmd_run_batch(live: bool, *, all_tenants: bool = False, market_override: str
         ]
         skipped = pre_count - len(runtimes)
         if skipped:
-            logger.info("[cyan]Market filter[/cyan] --market=%s matched=%d skipped=%d", market_override, len(runtimes), skipped)
+            logger.info(
+                "[cyan]Market filter[/cyan] --market=%s matched=%d skipped=%d",
+                market_override,
+                len(runtimes),
+                skipped,
+                extra=event_extra(
+                    "batch_market_filter",
+                    market=market_override,
+                    matched=len(runtimes),
+                    skipped=skipped,
+                ),
+            )
         if not runtimes:
-            logger.info("[yellow]No tenants match --market=%s; skipping[/yellow]", market_override)
+            logger.info(
+                "[yellow]No tenants match --market=%s; skipping[/yellow]",
+                market_override,
+                extra=event_extra(
+                    "batch_market_filter_empty",
+                    market=market_override,
+                ),
+            )
             return
 
     _, first_settings, first_repo, _ = runtimes[0]
@@ -478,7 +548,18 @@ def cmd_run_batch(live: bool, *, all_tenants: bool = False, market_override: str
 
     if phase == "seed" or phase is None:
         if phase == "seed":
-            logger.info("[bold green]Batch multi-tenant done[/bold green] mode=seed tenants=%d", len(runtimes))
+            logger.info(
+                "[bold green]Batch multi-tenant done[/bold green] mode=seed tenants=%d",
+                len(runtimes),
+                extra=event_extra(
+                    "batch_multi_tenant_done",
+                    mode="seed",
+                    live=live,
+                    market=market_override or "all",
+                    tenant_count=len(tenants),
+                    runtime_count=len(runtimes),
+                ),
+            )
         return
 
     exec_failures: list[tuple[str, str]] = []
@@ -502,16 +583,63 @@ def cmd_run_batch(live: bool, *, all_tenants: bool = False, market_override: str
                 future.result()
             except SystemExit as exc:
                 exec_failures.append((tenant, f"SystemExit({exc.code})"))
-                logger.exception("[red]Batch tenant blocked[/red] tenant=%s code=%s", tenant, exc.code)
+                logger.exception(
+                    "[red]Batch tenant blocked[/red] tenant=%s code=%s",
+                    tenant,
+                    exc.code,
+                    extra=failure_extra(
+                        "batch_tenant_blocked",
+                        exc,
+                        tenant_id=tenant,
+                        market=market_override or "all",
+                        stage="execution",
+                        phase=phase,
+                    ),
+                )
             except Exception as exc:
                 exec_failures.append((tenant, str(exc)))
-                logger.exception("[red]Batch tenant failed[/red] tenant=%s err=%s", tenant, str(exc))
+                logger.exception(
+                    "[red]Batch tenant failed[/red] tenant=%s err=%s",
+                    tenant,
+                    str(exc),
+                    extra=failure_extra(
+                        "batch_tenant_failed",
+                        exc,
+                        tenant_id=tenant,
+                        market=market_override or "all",
+                        stage="execution",
+                        phase=phase,
+                    ),
+                )
 
     failures = build_failures + exec_failures
     if failures:
         logger.error(
             "[red]Batch multi-tenant completed with failures[/red] failed=%s",
             ", ".join([f"{tenant}:{error}" for tenant, error in failures]),
+            extra=event_extra(
+                "batch_multi_tenant_completed_with_failures",
+                live=live,
+                market=market_override or "all",
+                phase=phase,
+                tenant_count=len(tenants),
+                runtime_count=len(runtimes),
+                build_failed_count=len(build_failures),
+                execution_failed_count=len(exec_failures),
+                failed_count=len(failures),
+                failed_tenants=[tenant for tenant, _ in failures],
+            ),
         )
         raise SystemExit(1)
-    logger.info("[bold green]Batch multi-tenant done[/bold green] tenants=%d", len(runtimes))
+    logger.info(
+        "[bold green]Batch multi-tenant done[/bold green] tenants=%d",
+        len(runtimes),
+        extra=event_extra(
+            "batch_multi_tenant_done",
+            live=live,
+            market=market_override or "all",
+            phase=phase,
+            tenant_count=len(tenants),
+            runtime_count=len(runtimes),
+        ),
+    )

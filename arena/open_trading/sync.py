@@ -13,6 +13,7 @@ import pandas as pd
 
 from arena.config import Settings
 from arena.data.bq import BigQueryRepository
+from arena.logging_utils import event_extra, failure_extra
 from arena.models import AccountSnapshot, Position, utc_now
 
 from .client import OpenTradingClient
@@ -316,6 +317,13 @@ class MarketDataSyncService:
                     logger.warning(
                         "[yellow]US discovery band failed[/yellow] excd=%s band=(%s,%s) err=%s",
                         excd, str(price_min), str(price_max), str(exc),
+                        extra=failure_extra(
+                            "us_discovery_band_failed",
+                            exc,
+                            excd=excd,
+                            price_min=price_min,
+                            price_max=price_max,
+                        ),
                     )
                     raw = []
                 excd_raw_total += len(raw)
@@ -395,7 +403,16 @@ class MarketDataSyncService:
             try:
                 raw = loader(market_scope="0001")
             except Exception as exc:
-                logger.warning("[yellow]KOSPI discovery failed[/yellow] source=%s err=%s", label, str(exc))
+                logger.warning(
+                    "[yellow]KOSPI discovery failed[/yellow] source=%s err=%s",
+                    label,
+                    str(exc),
+                    extra=failure_extra(
+                        "kospi_discovery_failed",
+                        exc,
+                        source=label,
+                    ),
+                )
                 continue
             before = len(seen)
             for row in raw:
@@ -459,7 +476,14 @@ class MarketDataSyncService:
         try:
             rows = loader(sources=self._all_sources(), limit=limit)
         except Exception as exc:
-            logger.warning("[yellow]Missing daily feature scan skipped[/yellow] err=%s", str(exc))
+            logger.warning(
+                "[yellow]Missing daily feature scan skipped[/yellow] err=%s",
+                str(exc),
+                extra=failure_extra(
+                    "missing_daily_feature_scan_skipped",
+                    exc,
+                ),
+            )
             return symbols
         if not rows:
             return symbols
@@ -549,24 +573,28 @@ class MarketDataSyncService:
         exchange_code: str,
         instrument_id: str,
         fx_by_date: dict[date, float] | None = None,
-        default_fx: float = 1.0,
     ) -> list[dict[str, object]]:
-        """Builds normalized market_features rows from daily candle history."""
+        """Builds normalized market_features rows from daily candle history.
+
+        For non-KRW quotes each candle MUST have a same-day fx rate in
+        ``fx_by_date``; rows without one are dropped so that fabricated KRW
+        prices can never be persisted.
+        """
         series = self._extract_chart_series(candles, close_keys=close_keys)
         if not series:
             return []
 
         rows: list[dict[str, object]] = []
         krw_closes: list[float] = []
-        fx_rate = float(default_fx) if quote_currency != "KRW" else 1.0
+        skipped_fx_dates: list[date] = []
 
         for idx, (as_of_ts, native_close) in enumerate(series):
             if quote_currency != "KRW":
                 mapped_fx = float((fx_by_date or {}).get(as_of_ts.date()) or 0.0)
-                if mapped_fx > 0:
-                    fx_rate = mapped_fx
-                if fx_rate <= 0:
+                if mapped_fx <= 0:
+                    skipped_fx_dates.append(as_of_ts.date())
                     continue
+                fx_rate = mapped_fx
                 close_price_krw = float(native_close * fx_rate)
                 fx_used = float(fx_rate)
             else:
@@ -605,6 +633,24 @@ class MarketDataSyncService:
                 }
             )
 
+        if skipped_fx_dates:
+            logger.warning(
+                "[yellow]market features fx missing[/yellow] ticker=%s source=%s skipped=%d range=%s..%s",
+                ticker,
+                source,
+                len(skipped_fx_dates),
+                skipped_fx_dates[0].isoformat(),
+                skipped_fx_dates[-1].isoformat(),
+                extra=event_extra(
+                    "market_features_fx_missing",
+                    ticker=ticker,
+                    source=source,
+                    skipped=len(skipped_fx_dates),
+                    range_start=skipped_fx_dates[0].isoformat(),
+                    range_end=skipped_fx_dates[-1].isoformat(),
+                ),
+            )
+
         return rows
 
     def _ensure_usd_krw_daily_fx(self, candles: list[dict[str, object]]) -> dict[date, float]:
@@ -637,7 +683,18 @@ class MarketDataSyncService:
                 max_pages=8,
             )
         except Exception as exc:
-            logger.warning("[yellow]USD/KRW daily FX fetch failed[/yellow] symbol=%s err=%s", symbol, str(exc))
+            logger.warning(
+                "[yellow]USD/KRW daily FX fetch failed[/yellow] symbol=%s err=%s",
+                symbol,
+                str(exc),
+                extra=failure_extra(
+                    "usd_krw_daily_fx_fetch_failed",
+                    exc,
+                    symbol=symbol,
+                    start_date=start_date.isoformat(),
+                    end_date=end_date.isoformat(),
+                ),
+            )
             return self._usd_krw_daily_fx
 
         fx_series = self._extract_chart_series(
@@ -677,7 +734,17 @@ class MarketDataSyncService:
                 close_keys=("ovrs_nmix_prpr", "clos"),
             )
         except Exception as exc:
-            logger.warning("[yellow]USD/KRW latest FX fetch failed[/yellow] symbol=%s err=%s", symbol, str(exc))
+            logger.warning(
+                "[yellow]USD/KRW latest FX fetch failed[/yellow] symbol=%s err=%s",
+                symbol,
+                str(exc),
+                extra=failure_extra(
+                    "usd_krw_latest_fx_fetch_failed",
+                    exc,
+                    symbol=symbol,
+                    caller="market_data_sync._latest_usd_krw_fx_rate",
+                ),
+            )
             raise RuntimeError(f"USD/KRW latest FX fetch failed for symbol={symbol}") from exc
 
         if not fx_series:
@@ -767,14 +834,11 @@ class MarketDataSyncService:
                 continue
             instrument_id = f"{order_excd}:{ticker}"
             fx_by_date = self._ensure_usd_krw_daily_fx(candles)
-            fallback_fx = 0.0
-            if fx_by_date:
-                for _, rate in sorted(fx_by_date.items()):
-                    if float(rate) > 0:
-                        fallback_fx = float(rate)
-                        break
-            else:
-                fallback_fx = self._latest_usd_krw_fx_rate()
+            if not fx_by_date:
+                raise RuntimeError(
+                    f"USD/KRW daily FX unavailable for ticker={ticker}; refusing to persist "
+                    "non-KRW rows without authoritative per-day fx"
+                )
             rows = self._build_feature_rows(
                 ticker=ticker,
                 candles=candles,
@@ -785,7 +849,6 @@ class MarketDataSyncService:
                 exchange_code=order_excd,
                 instrument_id=instrument_id,
                 fx_by_date=fx_by_date,
-                default_fx=fallback_fx,
             )
             instrument_row = {
                 "instrument_id": instrument_id,
@@ -832,7 +895,6 @@ class MarketDataSyncService:
             since_date=since_date,
             exchange_code="KRX",
             instrument_id=f"KRX:{ticker}",
-            default_fx=1.0,
         )
         instrument_row = {
             "instrument_id": f"KRX:{ticker}",
@@ -931,7 +993,15 @@ class MarketDataSyncService:
             try:
                 self.repo.insert_market_features_latest(rows)
             except Exception as exc:
-                logger.warning("[yellow]market_features_latest refresh skipped[/yellow] err=%s", str(exc))
+                logger.warning(
+                    "[yellow]market_features_latest refresh skipped[/yellow] err=%s",
+                    str(exc),
+                    extra=failure_extra(
+                        "market_features_latest_refresh_skipped",
+                        exc,
+                        rows=len(rows),
+                    ),
+                )
         elif hasattr(self.repo, "refresh_market_features_latest"):
             try:
                 self.repo.refresh_market_features_latest(
@@ -940,13 +1010,29 @@ class MarketDataSyncService:
                     lookback_days=30,
                 )
             except Exception as exc:
-                logger.warning("[yellow]market_features_latest backfill skipped[/yellow] err=%s", str(exc))
+                logger.warning(
+                    "[yellow]market_features_latest backfill skipped[/yellow] err=%s",
+                    str(exc),
+                    extra=failure_extra(
+                        "market_features_latest_backfill_skipped",
+                        exc,
+                        ticker_count=len(tickers),
+                    ),
+                )
 
         if instrument_rows and hasattr(self.repo, "upsert_instrument_master"):
             try:
                 self.repo.upsert_instrument_master(instrument_rows)
             except Exception as exc:
-                logger.warning("[yellow]instrument_master upsert skipped[/yellow] err=%s", str(exc))
+                logger.warning(
+                    "[yellow]instrument_master upsert skipped[/yellow] err=%s",
+                    str(exc),
+                    extra=failure_extra(
+                        "instrument_master_upsert_skipped",
+                        exc,
+                        rows=len(instrument_rows),
+                    ),
+                )
 
         quote_exchange_map = {
             str(symbol.get("ticker") or "").strip().upper(): str(symbol.get("quote_excd") or "").strip().upper()
@@ -960,7 +1046,15 @@ class MarketDataSyncService:
                     quote_exchange_map=quote_exchange_map,
                 )
             except Exception as exc:
-                logger.warning("[yellow]fundamentals snapshot refresh skipped[/yellow] err=%s", str(exc))
+                logger.warning(
+                    "[yellow]fundamentals snapshot refresh skipped[/yellow] err=%s",
+                    str(exc),
+                    extra=failure_extra(
+                        "fundamentals_snapshot_refresh_skipped",
+                        exc,
+                        ticker_count=len(tickers),
+                    ),
+                )
 
         if hasattr(self.repo, "rebuild_universe_candidates"):
             try:
@@ -972,7 +1066,15 @@ class MarketDataSyncService:
                     ticker_names=getattr(self, "_kospi_ticker_names", {}),
                 )
             except Exception as exc:
-                logger.warning("[yellow]universe_candidates rebuild skipped[/yellow] err=%s", str(exc))
+                logger.warning(
+                    "[yellow]universe_candidates rebuild skipped[/yellow] err=%s",
+                    str(exc),
+                    extra=failure_extra(
+                        "universe_candidates_rebuild_skipped",
+                        exc,
+                        ticker_count=len(tickers),
+                    ),
+                )
 
     def _refresh_fundamentals_snapshot(
         self,
@@ -1116,7 +1218,14 @@ class MarketDataSyncService:
         """Fetches market data and writes feature rows into BigQuery."""
         symbols = self._include_missing_daily_feature_symbols(self._target_symbols())
         if not symbols:
-            logger.warning("[yellow]No tickers selected for market sync[/yellow] target=%s", self.settings.kis_target_market)
+            logger.warning(
+                "[yellow]No tickers selected for market sync[/yellow] target=%s",
+                self.settings.kis_target_market,
+                extra=event_extra(
+                    "market_sync_no_tickers",
+                    target_market=self.settings.kis_target_market,
+                ),
+            )
             return MarketSyncResult(inserted_rows=0, attempted_tickers=0, failed_tickers=[])
 
         tickers = [s["ticker"] for s in symbols]
@@ -1137,7 +1246,15 @@ class MarketDataSyncService:
         except Exception as exc:
             latest_dates = {}
             spans_by_source = {}
-            logger.warning("[yellow]Latest feature date lookup skipped[/yellow] err=%s", str(exc))
+            logger.warning(
+                "[yellow]Latest feature date lookup skipped[/yellow] err=%s",
+                str(exc),
+                extra=failure_extra(
+                    "latest_feature_date_lookup_skipped",
+                    exc,
+                    ticker_count=len(tickers),
+                ),
+            )
 
         rows: list[dict[str, object]] = []
         failures: list[str] = []
@@ -1193,7 +1310,17 @@ class MarketDataSyncService:
                 instrument_rows.append(instrument_row)
             except Exception as exc:
                 failures.append(ticker)
-                logger.error("[red]Market sync failed[/red] ticker=%s err=%s", ticker, str(exc))
+                logger.exception(
+                    "[red]Market sync failed[/red] ticker=%s err=%s",
+                    ticker,
+                    str(exc),
+                    extra=failure_extra(
+                        "market_sync_ticker_failed",
+                        exc,
+                        ticker=ticker,
+                        target_market=self.settings.kis_target_market,
+                    ),
+                )
 
         inserted = 0
         if rows:
@@ -1217,15 +1344,16 @@ class MarketDataSyncService:
             except Exception as exc:
                 inserted = 0
                 failures = sorted(set(failures) | {str(row.get("ticker") or "") for row in rows if row.get("ticker")})
-                logger.error(
+                logger.exception(
                     "[red]Market sync write failed[/red] err=%s",
                     str(exc),
-                    extra={
-                        "event": "market_sync_write_failed",
-                        "target_market": self.settings.kis_target_market,
-                        "attempted_tickers": len(symbols),
-                        "failed_tickers": len(failures),
-                    },
+                    extra=failure_extra(
+                        "market_sync_write_failed",
+                        exc,
+                        target_market=self.settings.kis_target_market,
+                        attempted_tickers=len(symbols),
+                        failed_tickers=len(failures),
+                    ),
                 )
         else:
             self._refresh_latest_and_universe(rows=[], instrument_rows=instrument_rows, tickers=tickers, symbols=symbols)
@@ -1249,7 +1377,14 @@ class MarketDataSyncService:
         """Fetches intraday quotes and writes them as hourly feature rows."""
         symbols = self._target_symbols()
         if not symbols:
-            logger.warning("[yellow]No tickers selected for quote sync[/yellow] target=%s", self.settings.kis_target_market)
+            logger.warning(
+                "[yellow]No tickers selected for quote sync[/yellow] target=%s",
+                self.settings.kis_target_market,
+                extra=event_extra(
+                    "quote_sync_no_tickers",
+                    target_market=self.settings.kis_target_market,
+                ),
+            )
             return MarketSyncResult(inserted_rows=0, attempted_tickers=0, failed_tickers=[])
 
         now = datetime.now(timezone.utc)
@@ -1272,7 +1407,15 @@ class MarketDataSyncService:
                         daily_map[(t, ex)] = dict(row)
                         daily_map.setdefault((t, ""), dict(row))
         except Exception as exc:
-            logger.warning("[yellow]Daily feature lookup skipped[/yellow] err=%s", str(exc))
+            logger.warning(
+                "[yellow]Daily feature lookup skipped[/yellow] err=%s",
+                str(exc),
+                extra=failure_extra(
+                    "daily_feature_lookup_skipped",
+                    exc,
+                    ticker_count=len(tickers),
+                ),
+            )
 
         rows: list[dict[str, object]] = []
         failures: list[str] = []
@@ -1350,7 +1493,17 @@ class MarketDataSyncService:
                     instrument_rows.append(instrument_row)
             except Exception as exc:
                 failures.append(ticker)
-                logger.warning("[yellow]Quote sync failed[/yellow] ticker=%s err=%s", ticker, str(exc))
+                logger.warning(
+                    "[yellow]Quote sync failed[/yellow] ticker=%s err=%s",
+                    ticker,
+                    str(exc),
+                    extra=failure_extra(
+                        "quote_sync_ticker_failed",
+                        exc,
+                        ticker=ticker,
+                        target_market=self.settings.kis_target_market,
+                    ),
+                )
 
         inserted = 0
         if rows:
@@ -1373,15 +1526,16 @@ class MarketDataSyncService:
                 )
             except Exception as exc:
                 inserted = 0
-                logger.error(
+                logger.exception(
                     "[red]Quote sync write failed[/red] err=%s",
                     str(exc),
-                    extra={
-                        "event": "quote_sync_write_failed",
-                        "target_market": self.settings.kis_target_market,
-                        "attempted_tickers": len(symbols),
-                        "failed_tickers": len(failures),
-                    },
+                    extra=failure_extra(
+                        "quote_sync_write_failed",
+                        exc,
+                        target_market=self.settings.kis_target_market,
+                        attempted_tickers=len(symbols),
+                        failed_tickers=len(failures),
+                    ),
                 )
         else:
             self._refresh_latest_and_universe(rows=[], instrument_rows=instrument_rows, tickers=tickers, symbols=symbols)
@@ -1438,7 +1592,17 @@ class AccountSyncService:
                 close_keys=("ovrs_nmix_prpr", "clos"),
             )
         except Exception as exc:
-            logger.warning("[yellow]USD/KRW latest FX fetch failed[/yellow] symbol=%s err=%s", symbol, str(exc))
+            logger.warning(
+                "[yellow]USD/KRW latest FX fetch failed[/yellow] symbol=%s err=%s",
+                symbol,
+                str(exc),
+                extra=failure_extra(
+                    "usd_krw_latest_fx_fetch_failed",
+                    exc,
+                    symbol=symbol,
+                    caller="account_sync._latest_usd_krw_fx_rate",
+                ),
+            )
             raise RuntimeError(f"USD/KRW latest FX fetch failed for symbol={symbol}") from exc
 
         if not fx_series:
@@ -1507,6 +1671,12 @@ class AccountSyncService:
                 "[yellow]position fx_rate fallback[/yellow] ticker=%s rate=%.2f source=latest_fx",
                 ticker,
                 fx,
+                extra=event_extra(
+                    "position_fx_rate_fallback",
+                    ticker=ticker,
+                    fx_rate=fx,
+                    fx_source="latest_fx",
+                ),
             )
 
         avg_price_ccy = _to_float(row.get("avg_unpr3"), default=0.0)
@@ -1592,6 +1762,11 @@ class AccountSyncService:
                     "[yellow]instrument_map load failed[/yellow] tickers=%d err=%s",
                     len(tickers),
                     str(exc),
+                    extra=failure_extra(
+                        "instrument_map_load_failed",
+                        exc,
+                        ticker_count=len(tickers),
+                    ),
                 )
                 instrument_map = {}
 
@@ -1619,6 +1794,12 @@ class AccountSyncService:
             logger.warning(
                 "[yellow]overseas balance fx_rate fallback[/yellow] rate=%.2f source=latest_fx (API bass_exrt missing)",
                 live_fx,
+                extra=event_extra(
+                    "overseas_balance_fx_rate_fallback",
+                    fx_rate=live_fx,
+                    fx_source="latest_fx",
+                    reason="api_bass_exrt_missing",
+                ),
             )
 
         cash_krw = 0.0
@@ -1814,7 +1995,14 @@ class BrokerTradeSyncService:
                 if snap is not None and float(getattr(snap, "usd_krw_rate", 0.0) or 0.0) > 0:
                     return float(snap.usd_krw_rate)
             except Exception as exc:
-                logger.warning("[yellow]broker_trade snapshot fx lookup failed[/yellow] err=%s", str(exc))
+                logger.warning(
+                    "[yellow]broker_trade snapshot fx lookup failed[/yellow] err=%s",
+                    str(exc),
+                    extra=failure_extra(
+                        "broker_trade_snapshot_fx_lookup_failed",
+                        exc,
+                    ),
+                )
         return 0.0
 
     def _parsed_markets(self) -> set[str]:
@@ -2021,9 +2209,25 @@ class BrokerTradeSyncService:
                             )
                             erlm_fx_map[key] = fx
                     except Exception as exc:
-                        logger.warning("[yellow]period_trans fx fetch skipped[/yellow] excg=%s err=%s", excg, str(exc))
+                        logger.warning(
+                            "[yellow]period_trans fx fetch skipped[/yellow] excg=%s err=%s",
+                            excg,
+                            str(exc),
+                            extra=failure_extra(
+                                "period_trans_fx_fetch_skipped",
+                                exc,
+                                exchange=excg,
+                            ),
+                        )
             except Exception as exc:
-                logger.warning("[yellow]period_trans fx fetch failed[/yellow] err=%s", str(exc))
+                logger.warning(
+                    "[yellow]period_trans fx fetch failed[/yellow] err=%s",
+                    str(exc),
+                    extra=failure_extra(
+                        "period_trans_fx_fetch_failed",
+                        exc,
+                    ),
+                )
 
             for exchange_code in self._us_exchange_candidates():
                 try:
@@ -2034,6 +2238,11 @@ class BrokerTradeSyncService:
                         "[yellow]Broker trade sync skipped[/yellow] scope=us:%s err=%s",
                         exchange_code,
                         str(exc),
+                        extra=failure_extra(
+                            "broker_trade_sync_scope_skipped",
+                            exc,
+                            scope=f"us:{exchange_code}",
+                        ),
                     )
                     continue
                 scanned_rows += len(rows)
@@ -2058,6 +2267,13 @@ class BrokerTradeSyncService:
                             "[yellow]Broker trade skipped (no FX)[/yellow] ticker=%s date=%s — will retry next sync",
                             normalized.get("ticker"),
                             ord_dt,
+                            extra=event_extra(
+                                "broker_trade_skipped_no_fx",
+                                ticker=str(normalized.get("ticker") or ""),
+                                ord_dt=ord_dt,
+                                exchange=exchange_code,
+                                reason="missing_fx_rate",
+                            ),
                         )
                         continue
                     normalized_rows.append(normalized)
@@ -2073,6 +2289,11 @@ class BrokerTradeSyncService:
                 logger.warning(
                     "[yellow]Broker trade sync skipped[/yellow] scope=kospi err=%s",
                     str(exc),
+                    extra=failure_extra(
+                        "broker_trade_sync_scope_skipped",
+                        exc,
+                        scope="kospi",
+                    ),
                 )
                 rows = []
             scanned_rows += len(rows)
@@ -2146,6 +2367,12 @@ class BrokerCashSyncService(BrokerTradeSyncService):
                 "[yellow]Broker cash skipped (no FX)[/yellow] exchange=%s date=%s",
                 exchange_code,
                 _pick_str(row, ["ord_dt", "ORD_DT", "trad_dt", "TRAD_DT"]),
+                extra=event_extra(
+                    "broker_cash_skipped_no_fx",
+                    exchange=exchange_code,
+                    ord_dt=_pick_str(row, ["ord_dt", "ORD_DT", "trad_dt", "TRAD_DT"]),
+                    reason="missing_fx_rate",
+                ),
             )
             return None
         gross_native = qty * max(price_native, 0.0)
@@ -2277,6 +2504,12 @@ class BrokerCashSyncService(BrokerTradeSyncService):
                     "[yellow]Broker cash fee skipped (no FX)[/yellow] exchange=%s date=%s",
                     exchange_code,
                     _pick_str(row, ["trad_dt", "TRAD_DT", "ord_dt", "ORD_DT"]),
+                    extra=event_extra(
+                        "broker_cash_fee_skipped_no_fx",
+                        exchange=exchange_code,
+                        trad_dt=_pick_str(row, ["trad_dt", "TRAD_DT", "ord_dt", "ORD_DT"]),
+                        reason="missing_fx_rate",
+                    ),
                 )
                 return out
             payload = {"kind": "fee_usd", "exchange_code": exchange_code, "row": row}
@@ -2379,7 +2612,14 @@ class BrokerCashSyncService(BrokerTradeSyncService):
             try:
                 all_known_rows.extend(existing_loader(since=start_at))
             except Exception as exc:
-                logger.warning("[yellow]Existing broker cash load skipped[/yellow] err=%s", str(exc))
+                logger.warning(
+                    "[yellow]Existing broker cash load skipped[/yellow] err=%s",
+                    str(exc),
+                    extra=failure_extra(
+                        "existing_broker_cash_load_skipped",
+                        exc,
+                    ),
+                )
 
         known_flow_by_day = self._known_cash_flows_by_day(rows=all_known_rows)
 
@@ -2420,6 +2660,12 @@ class BrokerCashSyncService(BrokerTradeSyncService):
                     "[yellow]Broker cash residual inference skipped (missing FX)[/yellow] prev_day=%s curr_day=%s",
                     prev_day.isoformat(),
                     curr_day.isoformat(),
+                    extra=event_extra(
+                        "broker_cash_residual_inference_skipped",
+                        prev_day=prev_day.isoformat(),
+                        curr_day=curr_day.isoformat(),
+                        reason="missing_fx",
+                    ),
                 )
                 continue
             prev_domestic = float(prev["cash_krw"]) - (prev_usd * prev_fx)
@@ -2497,6 +2743,11 @@ class BrokerCashSyncService(BrokerTradeSyncService):
                         "[yellow]Broker cash sync skipped[/yellow] scope=us:%s err=%s",
                         exchange_code,
                         str(exc),
+                        extra=failure_extra(
+                            "broker_cash_sync_scope_skipped",
+                            exc,
+                            scope=f"us:{exchange_code}",
+                        ),
                     )
                     continue
                 scanned_rows += len(rows)
@@ -2516,6 +2767,11 @@ class BrokerCashSyncService(BrokerTradeSyncService):
                         "[yellow]Broker cash fee sync skipped[/yellow] scope=us:%s err=%s",
                         exchange_code,
                         str(exc),
+                        extra=failure_extra(
+                            "broker_cash_fee_sync_scope_skipped",
+                            exc,
+                            scope=f"us:{exchange_code}:fees",
+                        ),
                     )
                     fee_rows = []
                 scanned_rows += len(fee_rows)
@@ -2533,6 +2789,11 @@ class BrokerCashSyncService(BrokerTradeSyncService):
                 logger.warning(
                     "[yellow]Broker cash sync skipped[/yellow] scope=kospi err=%s",
                     str(exc),
+                    extra=failure_extra(
+                        "broker_cash_sync_scope_skipped",
+                        exc,
+                        scope="kospi",
+                    ),
                 )
                 rows = []
             scanned_rows += len(rows)
@@ -2550,6 +2811,11 @@ class BrokerCashSyncService(BrokerTradeSyncService):
                 logger.warning(
                     "[yellow]Broker cash fee/tax sync skipped[/yellow] scope=kospi err=%s",
                     str(exc),
+                    extra=failure_extra(
+                        "broker_cash_fee_tax_sync_scope_skipped",
+                        exc,
+                        scope="kospi:fees",
+                    ),
                 )
                 profit_rows = []
             scanned_rows += len(profit_rows)
@@ -2893,9 +3159,16 @@ class DividendSyncService:
                         self.repo.insert_dividend_events(insert_rows)
                         events_inserted += len(insert_rows)
                     except Exception as exc:
-                        logger.error(
+                        logger.exception(
                             "[red]Dividend event insert failed[/red] ticker=%s err=%s",
                             ticker, str(exc),
+                            extra=failure_extra(
+                                "dividend_event_insert_failed",
+                                exc,
+                                ticker=ticker,
+                                tenant_id=tenant,
+                                rows=len(insert_rows),
+                            ),
                         )
                         continue
 
@@ -2916,6 +3189,13 @@ class DividendSyncService:
                                 "[yellow]Dividend broker holding lookup skipped[/yellow] ticker=%s err=%s",
                                 ticker,
                                 str(exc),
+                                extra=failure_extra(
+                                    "dividend_broker_holding_lookup_skipped",
+                                    exc,
+                                    ticker=ticker,
+                                    tenant_id=tenant,
+                                    ex_date=ex_dt.isoformat() if ex_dt else None,
+                                ),
                             )
                     if total_shares <= 0:
                         total_shares = sum(float(row.get("shares_held") or 0.0) for row in insert_rows)
@@ -2942,10 +3222,17 @@ class DividendSyncService:
                                 append_cash_events([cash_row], tenant_id=tenant)
                                 broker_cash_events_inserted += 1
                             except Exception as exc:
-                                logger.error(
+                                logger.exception(
                                     "[red]Dividend cash event insert failed[/red] ticker=%s err=%s",
                                     ticker,
                                     str(exc),
+                                    extra=failure_extra(
+                                        "dividend_cash_event_insert_failed",
+                                        exc,
+                                        ticker=ticker,
+                                        tenant_id=tenant,
+                                        event_id=cash_event_id,
+                                    ),
                                 )
 
         result = DividendSyncResult(

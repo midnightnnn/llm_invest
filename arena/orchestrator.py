@@ -12,6 +12,7 @@ from arena.board.store import BoardStore
 from arena.config import Settings
 from arena.context import ContextBuilder
 from arena.execution.gateway import ExecutionGateway
+from arena.logging_utils import event_extra, failure_extra
 from arena.market_sources import live_market_sources_for_markets, parse_markets
 from arena.models import AccountSnapshot, BoardPost, ExecutionReport, ExecutionStatus, Position, Side, utc_now
 
@@ -86,14 +87,14 @@ class ArenaOrchestrator:
         return raw
 
     def _board_context_from_posts(self, posts: list[dict[str, Any]]) -> str:
-        """Builds compact board context from same-cycle shared draft posts.
+        """Builds compact board context from same-cycle shared explore posts.
 
         Uses ``draft_summary`` when available (agent-written concise summary).
         Falls back to truncated body when summary is missing.
         """
         if not posts:
             return ""
-        lines: list[str] = ["[다른 에이전트 draft 요약 — 각 에이전트가 직접 작성한 핵심 요약입니다]"]
+        lines: list[str] = ["[다른 에이전트 explore 요약 — 각 에이전트가 직접 작성한 핵심 요약입니다]"]
         limit = max(1, int(self.settings.context_max_board_posts))
         for row in posts[:limit]:
             aid = self._trim_text(row.get("agent_id"), max_len=24)
@@ -270,20 +271,26 @@ class ArenaOrchestrator:
         sleeves, baselines, metas = self._load_sleeves()
 
         # Default prompt injection excludes historical board posts.
-        # Only same-cycle shared draft posts are injected in execution phase.
+        # Only same-cycle shared explore summaries are injected in execution phase.
         base_board_posts: list[dict[str, Any]] = []
         shared_board_posts: list[dict[str, Any]] = []
+        tenant = self._tenant_label()
         cycle_health: dict[str, list[str]] = {
-            "draft_failed_agents": [],
+            "explore_failed_agents": [],
             "execution_failed_agents": [],
             "board_finalize_failed_agents": [],
             "board_publish_failed_agents": [],
             "nav_failed_agents": [],
         }
-        if len(self.agents) > 1:
-            logger.info("[cyan]Cycle board sync[/cyan] round=draft agents=%d", len(self.agents))
+        share_explore_summary = len(self.agents) > 1
+        if self.agents:
+            logger.info(
+                "[cyan]Cycle explore[/cyan] agents=%d share_summary=%s",
+                len(self.agents),
+                str(share_explore_summary).lower(),
+            )
 
-            def _draft_one(agent: TradingAgent) -> dict[str, Any]:
+            def _explore_one(agent: TradingAgent) -> dict[str, Any]:
                 sleeve = sleeves.get(agent.agent_id) or AccountSnapshot(cash_krw=0.0, total_equity_krw=0.0, positions={})
                 context = self.context_builder.build(
                     agent_id=agent.agent_id,
@@ -293,32 +300,58 @@ class ArenaOrchestrator:
                     agent_config=self.settings.agent_configs.get(agent.agent_id),
                     cycle_id=cycle_id,
                 )
-                context["cycle_phase"] = "draft"
+                context["cycle_phase"] = "explore"
                 context["cycle_id"] = cycle_id
+                context["share_explore_summary"] = share_explore_summary
                 context["board_posts"] = base_board_posts
                 context["board_context"] = ""
                 output = agent.generate(context)
+                if not share_explore_summary:
+                    return {}
                 return output.board_post.model_dump(mode="json")
 
-            draft_posts: list[dict[str, Any]] = []
+            explore_posts: list[dict[str, Any]] = []
             with ThreadPoolExecutor(max_workers=len(self.agents)) as pool:
-                futures = {pool.submit(_draft_one, agent): agent.agent_id for agent in self.agents}
+                futures = {pool.submit(_explore_one, agent): agent.agent_id for agent in self.agents}
                 for future in as_completed(futures):
                     try:
-                        draft_posts.append(future.result())
+                        result = future.result()
+                        if result:
+                            explore_posts.append(result)
                     except Exception as exc:
                         aid = futures[future]
-                        cycle_health["draft_failed_agents"].append(aid)
-                        logger.error("[red]Draft failed[/red] agent=%s err=%s", aid, exc)
+                        cycle_health["explore_failed_agents"].append(aid)
+                        logger.exception(
+                            "[red]Explore failed[/red] agent=%s err=%s",
+                            aid,
+                            exc,
+                            extra=failure_extra(
+                                "cycle_explore_failed",
+                                exc,
+                                tenant_id=tenant,
+                                cycle_id=cycle_id,
+                                phase="explore",
+                                agent_id=aid,
+                            ),
+                        )
 
-            shared_board_posts = list(draft_posts)
+            shared_board_posts = list(explore_posts)
             try:
                 shared_board_posts.sort(key=lambda p: str(p.get("created_at") or ""), reverse=True)
             except Exception:
                 pass
 
         reports: list[ExecutionReport] = []
-        logger.info("[cyan]Cycle execution[/cyan] agents=%d", len(self.agents))
+        logger.info(
+            "[cyan]Cycle execution[/cyan] agents=%d",
+            len(self.agents),
+            extra=event_extra(
+                "cycle_execution_start",
+                tenant_id=tenant,
+                cycle_id=cycle_id,
+                agents=len(self.agents),
+            ),
+        )
 
         def _execute_one(agent: TradingAgent) -> tuple[BoardPost | None, list[ExecutionReport], dict[str, str]]:
             """Runs one agent's execution phase: generate → process → apply_fill."""
@@ -340,7 +373,19 @@ class ArenaOrchestrator:
                 output = agent.generate(context)
             except Exception as exc:
                 diagnostics["execution_failed"] = str(exc)
-                logger.error("[red]Execution failed[/red] agent=%s err=%s", agent.agent_id, exc)
+                logger.exception(
+                    "[red]Execution failed[/red] agent=%s err=%s",
+                    agent.agent_id,
+                    exc,
+                    extra=failure_extra(
+                        "cycle_execution_failed",
+                        exc,
+                        tenant_id=tenant,
+                        cycle_id=cycle_id,
+                        phase="execution",
+                        agent_id=agent.agent_id,
+                    ),
+                )
                 return None, [
                     self._cycle_error_report(
                         agent_id=agent.agent_id,
@@ -363,7 +408,23 @@ class ArenaOrchestrator:
                         instrument_id=str(intent.instrument_id or ""),
                     )
                 except Exception as exc:
-                    logger.error("[red]Order execution failed[/red] agent=%s ticker=%s err=%s", agent.agent_id, intent.ticker, exc)
+                    logger.exception(
+                        "[red]Order execution failed[/red] agent=%s ticker=%s err=%s",
+                        agent.agent_id,
+                        intent.ticker,
+                        exc,
+                        extra=failure_extra(
+                            "cycle_order_execution_failed",
+                            exc,
+                            tenant_id=tenant,
+                            cycle_id=cycle_id,
+                            phase="execution",
+                            agent_id=agent.agent_id,
+                            ticker=intent.ticker,
+                            intent_id=intent.intent_id,
+                            side=intent.side.value,
+                        ),
+                    )
                     agent_reports.append(
                         ExecutionReport(
                             status=ExecutionStatus.ERROR,
@@ -389,14 +450,38 @@ class ArenaOrchestrator:
                 )
             except Exception as exc:
                 diagnostics["board_finalize_failed"] = str(exc)
-                logger.error("[red]Board finalize failed[/red] agent=%s err=%s", agent.agent_id, exc)
+                logger.exception(
+                    "[red]Board finalize failed[/red] agent=%s err=%s",
+                    agent.agent_id,
+                    exc,
+                    extra=failure_extra(
+                        "cycle_board_finalize_failed",
+                        exc,
+                        tenant_id=tenant,
+                        cycle_id=cycle_id,
+                        phase="board",
+                        agent_id=agent.agent_id,
+                    ),
+                )
             if board_post is not None:
                 try:
                     self.board_store.publish(board_post)
                     logger.info("[cyan]BOARD[/cyan] agent=%s title=%s", board_post.agent_id, board_post.title)
                 except Exception as exc:
                     diagnostics["board_publish_failed"] = str(exc)
-                    logger.warning("[yellow]Board publish failed[/yellow] agent=%s err=%s", agent.agent_id, exc)
+                    logger.exception(
+                        "[yellow]Board publish failed[/yellow] agent=%s err=%s",
+                        agent.agent_id,
+                        exc,
+                        extra=failure_extra(
+                            "cycle_board_publish_failed",
+                            exc,
+                            tenant_id=tenant,
+                            cycle_id=cycle_id,
+                            phase="board",
+                            agent_id=agent.agent_id,
+                        ),
+                    )
             return board_post, agent_reports, diagnostics
 
         with ThreadPoolExecutor(max_workers=len(self.agents)) as pool:
@@ -413,7 +498,19 @@ class ArenaOrchestrator:
                     if diagnostics.get("board_publish_failed"):
                         cycle_health["board_publish_failed_agents"].append(aid)
                 except Exception as exc:
-                    logger.error("[red]Execution failed[/red] agent=%s err=%s", aid, exc)
+                    logger.exception(
+                        "[red]Execution failed[/red] agent=%s err=%s",
+                        aid,
+                        exc,
+                        extra=failure_extra(
+                            "cycle_execution_worker_failed",
+                            exc,
+                            tenant_id=tenant,
+                            cycle_id=cycle_id,
+                            phase="execution",
+                            agent_id=aid,
+                        ),
+                    )
                     cycle_health["execution_failed_agents"].append(aid)
                     reports.append(
                         self._cycle_error_report(
@@ -454,11 +551,11 @@ class ArenaOrchestrator:
         error_reports = sum(1 for report in reports if report.status == ExecutionStatus.ERROR)
         if any(cycle_health.values()):
             logger.warning(
-                "[yellow]Cycle finished with warnings[/yellow] cycle_id=%s reports=%d error_reports=%d draft_failed=%d execution_failed=%d board_finalize_failed=%d board_publish_failed=%d nav_failed=%d",
+                "[yellow]Cycle finished with warnings[/yellow] cycle_id=%s reports=%d error_reports=%d explore_failed=%d execution_failed=%d board_finalize_failed=%d board_publish_failed=%d nav_failed=%d",
                 cycle_id,
                 len(reports),
                 error_reports,
-                len(cycle_health["draft_failed_agents"]),
+                len(cycle_health["explore_failed_agents"]),
                 len(cycle_health["execution_failed_agents"]),
                 len(cycle_health["board_finalize_failed_agents"]),
                 len(cycle_health["board_publish_failed_agents"]),
@@ -470,7 +567,7 @@ class ArenaOrchestrator:
                     "cycle_id": cycle_id,
                     "reports": len(reports),
                     "error_reports": error_reports,
-                    "draft_failed_agents": cycle_health["draft_failed_agents"],
+                    "explore_failed_agents": cycle_health["explore_failed_agents"],
                     "execution_failed_agents": cycle_health["execution_failed_agents"],
                     "board_finalize_failed_agents": cycle_health["board_finalize_failed_agents"],
                     "board_publish_failed_agents": cycle_health["board_publish_failed_agents"],

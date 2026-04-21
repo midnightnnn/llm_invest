@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from arena.config import Settings
 from arena.data.bq import BigQueryRepository
+from arena.logging_utils import event_extra, failure_extra
 from arena.orchestrator import ArenaOrchestrator
 from arena.cli_commands.run_shared import _MARKET_ALIAS
 
@@ -36,6 +37,11 @@ def _run_post_cycle_maintenance(
             "[yellow]Post-cycle memory compaction failed; continuing[/yellow] tenant=%s err=%s",
             tenant,
             str(exc),
+            extra=failure_extra(
+                "post_cycle_memory_compaction_failed",
+                exc,
+                tenant_id=tenant,
+            ),
         )
 
     try:
@@ -46,6 +52,11 @@ def _run_post_cycle_maintenance(
             "[yellow]Post-cycle memory relation extraction failed; continuing[/yellow] tenant=%s err=%s",
             tenant,
             str(exc),
+            extra=failure_extra(
+                "post_cycle_memory_relation_extraction_failed",
+                exc,
+                tenant_id=tenant,
+            ),
         )
 
     try:
@@ -56,6 +67,11 @@ def _run_post_cycle_maintenance(
             "[yellow]Post-cycle memory relation tuner failed; continuing[/yellow] tenant=%s err=%s",
             tenant,
             str(exc),
+            extra=failure_extra(
+                "post_cycle_memory_relation_tuner_failed",
+                exc,
+                tenant_id=tenant,
+            ),
         )
 
     try:
@@ -433,14 +449,38 @@ def cmd_run_agent_cycle(live: bool, *, all_tenants: bool = False, market_overrid
     tenants = cli._resolve_batch_tenants(bootstrap_repo, fallback=fallback)
     tenants = cli._filter_tenants_by_market(bootstrap_repo, tenants, market_override)
     if not tenants:
-        logger.info("[yellow]No tenants match --market=%s; skipping[/yellow]", market_override or "all")
+        logger.info(
+            "[yellow]No tenants match --market=%s; skipping[/yellow]",
+            market_override or "all",
+            extra=event_extra(
+                "agent_cycle_market_filter_empty",
+                market=market_override or "all",
+            ),
+        )
         return
     tenants = cli._partition_tenants_for_task(tenants)
     if not tenants:
-        logger.info("[yellow]No tenants assigned to this task shard; skipping[/yellow]")
+        logger.info(
+            "[yellow]No tenants assigned to this task shard; skipping[/yellow]",
+            extra=event_extra(
+                "agent_cycle_task_shard_empty",
+                market=market_override or "all",
+            ),
+        )
         return
     run_ids = {tenant: cli._new_run_id("agent_cycle") for tenant in tenants}
-    logger.info("[bold]Agent cycle multi-tenant start[/bold] tenants=%s live=%s", ",".join(tenants), live)
+    logger.info(
+        "[bold]Agent cycle multi-tenant start[/bold] tenants=%s live=%s",
+        ",".join(tenants),
+        live,
+        extra=event_extra(
+            "agent_cycle_multi_tenant_start",
+            live=live,
+            market=market_override or "all",
+            tenant_count=len(tenants),
+            tenants=tenants,
+        ),
+    )
 
     max_workers = int(os.getenv("ARENA_BATCH_PARALLEL", "3") or "3")
     build_failures: list[tuple[str, str]] = []
@@ -476,7 +516,19 @@ def cmd_run_agent_cycle(live: bool, *, all_tenants: bool = False, market_overrid
                     message=f"runtime build blocked: SystemExit({exc.code})",
                     detail={"exit_code": int(exc.code) if isinstance(exc.code, int) else str(exc.code)},
                 )
-                logger.exception("[red]Agent cycle tenant build blocked[/red] tenant=%s code=%s", tenant, exc.code)
+                logger.exception(
+                    "[red]Agent cycle tenant build blocked[/red] tenant=%s code=%s",
+                    tenant,
+                    exc.code,
+                    extra=failure_extra(
+                        "agent_cycle_tenant_build_blocked",
+                        exc,
+                        tenant_id=tenant,
+                        run_id=run_ids.get(tenant),
+                        market=market_override or "all",
+                        stage="runtime",
+                    ),
+                )
             except Exception as exc:
                 build_failures.append((tenant, str(exc)))
                 cli._append_tenant_run_status(
@@ -492,10 +544,34 @@ def cmd_run_agent_cycle(live: bool, *, all_tenants: bool = False, market_overrid
                     message=str(exc),
                     detail={"error": str(exc)},
                 )
-                logger.exception("[red]Agent cycle tenant build failed[/red] tenant=%s err=%s", tenant, str(exc))
+                logger.exception(
+                    "[red]Agent cycle tenant build failed[/red] tenant=%s err=%s",
+                    tenant,
+                    str(exc),
+                    extra=failure_extra(
+                        "agent_cycle_tenant_build_failed",
+                        exc,
+                        tenant_id=tenant,
+                        run_id=run_ids.get(tenant),
+                        market=market_override or "all",
+                        stage="runtime",
+                    ),
+                )
 
     if not runtimes:
-        logger.error("[red]Agent cycle multi-tenant failed[/red] no tenants initialized")
+        logger.error(
+            "[red]Agent cycle multi-tenant failed[/red] no tenants initialized",
+            extra=event_extra(
+                "agent_cycle_multi_tenant_failed",
+                reason="no_tenants_initialized",
+                live=live,
+                market=market_override or "all",
+                tenant_count=len(tenants),
+                runtime_count=0,
+                build_failed_count=len(build_failures),
+                execution_failed_count=0,
+            ),
+        )
         raise SystemExit(1)
 
     if live:
@@ -505,7 +581,16 @@ def cmd_run_agent_cycle(live: bool, *, all_tenants: bool = False, market_overrid
             tenant, settings, repo, orchestrator = runtime
             if cli._live_agent_cycle_market_closed(settings):
                 skipped_closed += 1
-                logger.info("[yellow]All configured markets closed (holiday/weekend)[/yellow] — skipping agent cycle tenant=%s", tenant)
+                logger.info(
+                    "[yellow]All configured markets closed (holiday/weekend)[/yellow] — skipping agent cycle tenant=%s",
+                    tenant,
+                    extra=event_extra(
+                        "agent_cycle_market_closed",
+                        tenant_id=tenant,
+                        run_id=run_ids.get(tenant),
+                        live=live,
+                    ),
+                )
                 now = cli.utc_now()
                 cli._append_tenant_run_status(
                     repo,
@@ -525,7 +610,17 @@ def cmd_run_agent_cycle(live: bool, *, all_tenants: bool = False, market_overrid
             filtered.append((tenant, settings, repo, orchestrator))
         runtimes = filtered
         if skipped_closed and not runtimes:
-            logger.info("[yellow]All selected tenants skipped due to market closure[/yellow]")
+            logger.info(
+                "[yellow]All selected tenants skipped due to market closure[/yellow]",
+                extra=event_extra(
+                    "agent_cycle_all_tenants_market_closed",
+                    tenant_count=len(tenants),
+                    runtime_count=0,
+                    skipped_count=skipped_closed,
+                    live=live,
+                    market=market_override or "all",
+                ),
+            )
             return
 
     exec_failures: list[tuple[str, str]] = []
@@ -549,16 +644,61 @@ def cmd_run_agent_cycle(live: bool, *, all_tenants: bool = False, market_overrid
                 future.result()
             except SystemExit as exc:
                 exec_failures.append((tenant, f"SystemExit({exc.code})"))
-                logger.exception("[red]Agent cycle tenant blocked[/red] tenant=%s code=%s", tenant, exc.code)
+                logger.exception(
+                    "[red]Agent cycle tenant blocked[/red] tenant=%s code=%s",
+                    tenant,
+                    exc.code,
+                    extra=failure_extra(
+                        "agent_cycle_tenant_blocked",
+                        exc,
+                        tenant_id=tenant,
+                        run_id=run_ids.get(tenant),
+                        market=market_override or "all",
+                        stage="execution",
+                    ),
+                )
             except Exception as exc:
                 exec_failures.append((tenant, str(exc)))
-                logger.exception("[red]Agent cycle tenant failed[/red] tenant=%s err=%s", tenant, str(exc))
+                logger.exception(
+                    "[red]Agent cycle tenant failed[/red] tenant=%s err=%s",
+                    tenant,
+                    str(exc),
+                    extra=failure_extra(
+                        "agent_cycle_tenant_failed",
+                        exc,
+                        tenant_id=tenant,
+                        run_id=run_ids.get(tenant),
+                        market=market_override or "all",
+                        stage="execution",
+                    ),
+                )
 
     failures = build_failures + exec_failures
     if failures:
         logger.error(
             "[red]Agent cycle multi-tenant completed with failures[/red] failed=%s",
             ", ".join([f"{tenant}:{error}" for tenant, error in failures]),
+            extra=event_extra(
+                "agent_cycle_multi_tenant_completed_with_failures",
+                live=live,
+                market=market_override or "all",
+                tenant_count=len(tenants),
+                runtime_count=len(runtimes),
+                build_failed_count=len(build_failures),
+                execution_failed_count=len(exec_failures),
+                failed_count=len(failures),
+                failed_tenants=[tenant for tenant, _ in failures],
+            ),
         )
         raise SystemExit(1)
-    logger.info("[bold green]Agent cycle multi-tenant done[/bold green] tenants=%d", len(runtimes))
+    logger.info(
+        "[bold green]Agent cycle multi-tenant done[/bold green] tenants=%d",
+        len(runtimes),
+        extra=event_extra(
+            "agent_cycle_multi_tenant_done",
+            live=live,
+            market=market_override or "all",
+            tenant_count=len(tenants),
+            runtime_count=len(runtimes),
+        ),
+    )

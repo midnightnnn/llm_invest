@@ -13,6 +13,7 @@ from arena.agents.adk_agents import (
     AdkTradingAgent,
     _ADKDecisionRunner,
     _apply_tool_schema_metadata,
+    _agent_config_payload,
     _compact_tool_result_for_prompt,
     _ContextTools,
     _has_credentials,
@@ -28,7 +29,7 @@ from arena.agents.adk_models import (
     _normalize_vertex_anthropic_model,
 )
 from arena.agents.adk_agent_flow import (
-    draft_phase_output,
+    explore_phase_output,
     extract_decision_payload,
     retry_policy_from_env,
 )
@@ -211,7 +212,7 @@ def test_build_tool_summary_memory_record_keeps_token_usage_even_without_events(
     record = build_tool_summary_memory_record(
         [],
         registry=ToolRegistry([]),
-        phase="draft",
+        phase="explore",
         analysis_funnel={"discovered_nonheld": 0},
         cycle_id="cycle_1",
         token_usage={"llm_calls": 1, "prompt_tokens": 120},
@@ -219,7 +220,7 @@ def test_build_tool_summary_memory_record_keeps_token_usage_even_without_events(
 
     assert record is not None
     summary, payload = record
-    assert "ReAct tools used (draft): 0" in summary
+    assert "ReAct tools used (explore): 0" in summary
     assert payload["token_usage"]["prompt_tokens"] == 120
     assert payload["analysis_funnel"]["discovered_nonheld"] == 0
 
@@ -428,13 +429,13 @@ def test_extract_decision_payload_normalizes_non_list_orders() -> None:
     assert orders == []
 
 
-def test_draft_phase_output_uses_distinct_tickers() -> None:
-    out = draft_phase_output(
+def test_explore_phase_output_uses_distinct_tickers() -> None:
+    out = explore_phase_output(
         agent_id="gpt",
-        cycle_id="cycle_draft_1",
+        cycle_id="cycle_explore_1",
         decision={
-            "board_title": "draft title",
-            "board_body": "draft body",
+            "board_title": "explore title",
+            "board_body": "explore body",
         },
         draft_summary="summary",
         orders=[
@@ -442,10 +443,11 @@ def test_draft_phase_output_uses_distinct_tickers() -> None:
             {"ticker": "MSFT"},
             {"ticker": "AAPL"},
         ],
+        share_summary=True,
     )
 
     assert out.intents == []
-    assert out.board_post.title == "draft title"
+    assert out.board_post.title == "explore title"
     assert out.board_post.draft_summary == "summary"
     assert out.board_post.tickers == ["AAPL", "MSFT"]
 
@@ -726,7 +728,7 @@ def test_candidate_ledger_tracks_discovery_and_analysis_from_result_tickers() ->
     runner = _ADKDecisionRunner.__new__(_ADKDecisionRunner)
     runner._candidate_ledger = {}
     runner._held_tickers_cache = {"AAPL"}
-    runner._current_phase = "draft"
+    runner._current_phase = "explore"
     runner._current_context = {}
     runner._tool_events = []
 
@@ -781,7 +783,7 @@ def test_candidate_ledger_records_screen_market_momentum_bucket_source() -> None
     runner = _ADKDecisionRunner.__new__(_ADKDecisionRunner)
     runner._candidate_ledger = {}
     runner._held_tickers_cache = set()
-    runner._current_phase = "draft"
+    runner._current_phase = "explore"
     runner._current_context = {}
     runner._tool_events = []
 
@@ -801,7 +803,7 @@ def test_candidate_ledger_records_recommend_opportunities_profile_source() -> No
     runner = _ADKDecisionRunner.__new__(_ADKDecisionRunner)
     runner._candidate_ledger = {}
     runner._held_tickers_cache = set()
-    runner._current_phase = "draft"
+    runner._current_phase = "explore"
     runner._current_context = {}
     runner._tool_events = []
 
@@ -943,6 +945,28 @@ class _RepoForPortfolioDiagnosis:
             "QQQ": [300.0, 301.0, 302.0, 304.0, 306.0, 307.0, 309.0, 311.0, 312.0, 314.0, 316.0, 318.0],
         }
         return {ticker: base.get(ticker, []) for ticker in tickers}
+
+    def get_daily_close_frame(self, *, tickers, start, end, sources=None, price_field="close_price_krw"):
+        _ = (sources, price_field)
+        series = {
+            "QQQ": [
+                ("2026-01-02", 300.0),
+                ("2026-01-03", 310.0),
+                ("2026-01-04", 315.0),
+            ],
+        }
+        frame = pd.DataFrame(
+            {
+                token: [px for _, px in series.get(token, [])]
+                for token in tickers
+                if token in series
+            },
+            index=pd.to_datetime([ts for ts, _ in series.get(next(iter(tickers), ""), [])]),
+        )
+        if frame.empty:
+            return frame
+        mask = (frame.index.date >= start) & (frame.index.date <= end)
+        return frame.loc[mask]
 
 
 class _RepoForPortfolioDiagnosisExact(_RepoForPortfolioDiagnosis):
@@ -1572,8 +1596,8 @@ class _FakeRunner:
                         "rationale": "fx repricing",
                     }
                 ],
-                "board_title": "draft",
-                "board_body": "draft",
+                "board_title": "explore",
+                "board_body": "explore",
             },
             "sid_1",
         )
@@ -1596,8 +1620,8 @@ class _FakeKospiRunner(_FakeRunner):
                         "rationale": "momentum continuation",
                     }
                 ],
-                "board_title": "draft",
-                "board_body": "draft",
+                "board_title": "explore",
+                "board_body": "explore",
             },
             "sid_kospi_1",
         )
@@ -1720,6 +1744,32 @@ def test_generate_raises_when_decision_fails(monkeypatch) -> None:
                 ],
             }
         )
+
+
+def test_agent_config_payload_serializes_dataclass() -> None:
+    payload = _agent_config_payload(
+        AgentConfig(
+            agent_id="claude",
+            provider="claude",
+            model="claude-sonnet-4-6",
+            capital_krw=2_000_000.0,
+            target_market="kospi",
+            system_prompt="focus on risk",
+            risk_overrides={"max_position_ratio": 0.2},
+            disabled_tools=["save_memory"],
+        )
+    )
+
+    assert payload == {
+        "agent_id": "claude",
+        "provider": "claude",
+        "model": "claude-sonnet-4-6",
+        "capital_krw": 2_000_000.0,
+        "target_market": "kospi",
+        "system_prompt": "focus on risk",
+        "risk_overrides": {"max_position_ratio": 0.2},
+        "disabled_tools": ["save_memory"],
+    }
 
 
 def test_finalize_board_post_uses_execution_summary(monkeypatch) -> None:
@@ -2012,10 +2062,10 @@ def test_persist_tool_summary_memory_prefers_memory_store() -> None:
     runner.repo = _RepoForToolSummary()
 
     runner._persist_tool_summary_memory(
-        summary="ReAct tools used (draft): 2",
+        summary="ReAct tools used (explore): 2",
         payload={
             "tool_events": [{"tool": "technical_signals"}],
-            "phase": "draft",
+            "phase": "explore",
             "token_usage": {"llm_calls": 2, "prompt_tokens": 1200, "completion_tokens": 180, "total_tokens": 1380},
         },
     )
@@ -2181,6 +2231,7 @@ def test_collect_response_text_records_mcp_calls_and_token_usage() -> None:
 
     assert text == '{"orders": []}'
     assert token_usage["llm_calls"] == 1
+    assert token_usage["tool_calls"] == 1
     assert token_usage["prompt_tokens"] == 120
     assert token_usage["completion_tokens"] == 25
     assert token_usage["cached_tokens"] == 60

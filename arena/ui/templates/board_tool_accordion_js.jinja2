@@ -69,7 +69,7 @@ function buildToolPipelineHTML(data,opts){
     h+='<p class="text-xs font-bold uppercase tracking-widest text-ink-500 mb-2">';
     h+='&#9881; Tool Pipeline</p>';
   }
-  var PHASE_LABELS={draft:"Draft Analysis",execution:"Execution"};
+  var PHASE_LABELS={explore:"Explore Analysis",execution:"Execution"};
   var phases=[];var seen={};
   evts.forEach(function(ev){var p=ev.phase||"execution";if(!seen[p]){seen[p]=1;phases.push(p);}});
   var num=0;
@@ -78,7 +78,7 @@ function buildToolPipelineHTML(data,opts){
     if(!phaseEvts.length)return;
     if(phases.length>1){
       h+='<div class="flex items-center gap-2 mt-3 mb-1">';
-      h+='<span class="text-[10px] font-bold uppercase tracking-widest '+(phase==="draft"?"text-amber-600":"text-emerald-600")+'">'+(PHASE_LABELS[phase]||phase)+' ('+phaseEvts.length+')</span>';
+      h+='<span class="text-[10px] font-bold uppercase tracking-widest '+(phase==="explore"?"text-amber-600":"text-emerald-600")+'">'+(PHASE_LABELS[phase]||phase)+' ('+phaseEvts.length+')</span>';
       h+='<span class="flex-1 border-t border-ink-100/60"></span></div>';
     }
     var groups=groupParallel(phaseEvts);
@@ -133,7 +133,7 @@ function buildToolPipelineHTML(data,opts){
 }
 function promptPhaseLabel(phase){
   var token=String(phase||"").toLowerCase();
-  if(token==="draft")return"Draft Prompt";
+  if(token==="explore")return"Explore Prompt";
   if(token==="execution")return"Execution Prompt";
   if(token==="board")return"Board Prompt";
   return token?token:"Prompt";

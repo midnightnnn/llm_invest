@@ -19,13 +19,13 @@ def cycle_phase(context: dict[str, Any]) -> str:
     return str(context.get("cycle_phase", "execution")).strip().lower() or "execution"
 
 
-def execution_resume_session_id(*, phase: str, draft_session_id: str | None) -> str | None:
+def execution_resume_session_id(*, phase: str, explore_session_id: str | None) -> str | None:
     """Returns resume session id only for execution phase."""
-    return draft_session_id if phase == "execution" else None
+    return explore_session_id if phase == "execution" else None
 
 
 def extract_decision_payload(decision: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
-    """Extracts normalized draft summary and order list from model output."""
+    """Extracts normalized explore summary and order list from model output."""
     draft_summary = str(decision.get("draft_summary", "")).strip()[:200]
     orders = decision.get("orders", [])
     if not isinstance(orders, list):
@@ -44,17 +44,21 @@ def mentioned_tickers(orders: list[dict[str, Any]]) -> list[str]:
             out.append(ticker)
     return out
 
-def draft_phase_output(
+
+def explore_phase_output(
     *,
     agent_id: str,
     cycle_id: str,
     decision: dict[str, Any],
     draft_summary: str,
     orders: list[dict[str, Any]],
+    share_summary: bool,
 ) -> AgentOutput:
-    """Builds draft-phase board-only output."""
-    board_title = str(decision.get("board_title", "거래 아이디어")).strip()[:120] or "거래 아이디어"
-    board_body = str(decision.get("board_body", "근거 없음")).strip()[:1800] or "근거 없음"
+    """Builds explore-phase output used for optional peer summary sharing."""
+    title_default = "탐색 요약" if share_summary else "내부 탐색"
+    body_default = "근거 없음" if share_summary else (draft_summary or "내부 탐색 단계")
+    board_title = str(decision.get("board_title", title_default)).strip()[:120] or title_default
+    board_body = str(decision.get("board_body", body_default)).strip()[:1800] or body_default
     post = BoardPost(
         agent_id=agent_id,
         title=board_title,

@@ -35,7 +35,7 @@ def build_resume_prompt(
     parts = [
         "cycle_phase: execution",
         "",
-        "이전 draft 단계의 분석과 도구 호출 결과를 바탕으로 최종 주문을 결정합니다.",
+        "이전 explore 단계의 분석과 도구 호출 결과를 바탕으로 최종 주문을 결정합니다.",
         "이전에 호출한 도구 결과를 최대한 활용하세요. 필요시 추가 도구 호출도 가능합니다.",
     ]
     if board_ctx:
@@ -106,12 +106,21 @@ def build_tool_summary_memory_record(
     token_usage: dict[str, Any] | None,
 ) -> tuple[str, dict[str, Any]] | None:
     """Builds summary text/payload for ReAct tool memory persistence."""
-    events = [event for event in tool_events if str(event.get("tool") or "").strip()]
+    phase_token = str(phase or "").strip().lower() or "unknown"
+    events = []
+    for event in tool_events:
+        tool_name = str(event.get("tool") or "").strip()
+        if not tool_name:
+            continue
+        event_phase = str(event.get("phase") or "").strip().lower()
+        if event_phase and event_phase != phase_token:
+            continue
+        events.append(event)
     if not events and safe_int((token_usage or {}).get("llm_calls"), 0) <= 0:
         return None
 
     mix = _tool_category_counts(events, registry=registry)
-    lines = [f"ReAct tools used ({phase}): {len(events)}"]
+    lines = [f"ReAct tools used ({phase_token}): {len(events)}"]
     for event in events[:6]:
         tool = str(event.get("tool") or "tool")
         preview = event.get("result") or event.get("result_preview")
@@ -141,7 +150,7 @@ def build_tool_summary_memory_record(
         "tool_events": _safe_json(events),
         "tool_mix": mix,
         "analysis_funnel": analysis_funnel,
-        "phase": phase,
+        "phase": phase_token,
         "cycle_id": cycle_id,
         "token_usage": _safe_json(token_usage or {}),
     }

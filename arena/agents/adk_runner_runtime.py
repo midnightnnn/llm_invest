@@ -9,6 +9,7 @@ from google.genai import types
 
 from arena.agents.adk_prompting import _safe_json
 from arena.config import Settings
+from arena.logging_utils import event_extra
 from arena.memory.policy import memory_event_enabled, memory_vector_search_enabled
 from arena.models import MemoryEvent, utc_now
 
@@ -241,6 +242,7 @@ async def collect_response_text(
 
     token_usage = {
         "llm_calls": llm_calls,
+        "tool_calls": tool_calls,
         "prompt_tokens": total_prompt_tokens,
         "completion_tokens": total_completion_tokens,
         "cached_tokens": total_cached_tokens,
@@ -261,5 +263,17 @@ async def collect_response_text(
         cache_pct,
         total_completion_tokens,
         total_thinking_tokens,
+        extra=event_extra(
+            "adk_token_usage",
+            agent_id=agent_id,
+            llm_calls=llm_calls,
+            tool_calls=tool_calls,
+            prompt_tokens=total_prompt_tokens,
+            cached_tokens=total_cached_tokens,
+            cache_pct=cache_pct,
+            completion_tokens=total_completion_tokens,
+            thinking_tokens=total_thinking_tokens,
+            total_tokens=token_usage["total_tokens"],
+        ),
     )
     return last_text, token_usage

@@ -114,11 +114,11 @@ def _system_prompt(
     return core.replace("{agent_id}", agent_id).replace("{target_market}", target_market) + "\n\n" + user
 
 
-_DRAFT_FORMAT = """\
-## draft phase 규칙
-거래를 실행하지 마십시오. 게시판 글을 사용하여 예비 분석 내용을 공유하십시오.
+_EXPLORE_SHARED_FORMAT = """\
+## explore phase 규칙
+지금은 도구 탐색과 근거 수집 단계입니다. 거래를 실행하지 마십시오.
 핵심 논리, 계획된 행동과 행동의 근거를 간결하게 요약한 draft_summary 필드를 반드시 포함해야 합니다.
-당신을 포함한 에이전트들은 서로 게시글 전체글이 아닌 요약본만을 읽습니다.
+이 요약은 다른 에이전트들과 공유되므로, 게시글 전체글이 아니라 execution에 필요한 핵심만 압축해서 적으십시오.
 
 ## 출력 형식 (반드시 이 JSON 형식을 준수)
 ```json
@@ -126,6 +126,18 @@ _DRAFT_FORMAT = """\
   "board_title": "게시판 제목",
   "board_body": "게시판 전체글",
   "draft_summary": "핵심 논리와 계획 요약"
+}
+```"""
+
+_EXPLORE_SOLO_FORMAT = """\
+## explore phase 규칙
+지금은 도구 탐색과 근거 수집 단계입니다. 거래를 실행하지 마십시오.
+single-agent cycle이므로 이 출력은 다른 에이전트와 공유되지 않습니다.
+
+## 출력 형식 (반드시 이 JSON 형식을 준수)
+```json
+{
+  "explore_status": "complete"
 }
 ```"""
 
@@ -161,8 +173,15 @@ def _user_prompt(context: dict[str, Any], default_universe: list[str], *, max_to
     """Builds compact user prompt payload for one cycle decision."""
     _ = default_universe
 
-    phase = context.get("cycle_phase", "execution")
-    phase_format = _DRAFT_FORMAT if phase == "draft" else EXECUTION_FORMAT
+    phase = str(context.get("cycle_phase", "execution") or "").strip().lower() or "execution"
+    if phase == "explore":
+        phase_format = (
+            _EXPLORE_SHARED_FORMAT
+            if bool(context.get("share_explore_summary"))
+            else _EXPLORE_SOLO_FORMAT
+        )
+    else:
+        phase_format = EXECUTION_FORMAT
 
     analysis_funnel = context.get("analysis_funnel_prompt")
     if not isinstance(analysis_funnel, dict):

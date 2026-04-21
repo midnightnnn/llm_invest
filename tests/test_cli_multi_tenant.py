@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import date, datetime, timezone
 from types import SimpleNamespace
 
@@ -849,6 +850,109 @@ def test_cmd_run_agent_cycle_multi_tenant_prefilters_market_before_build(monkeyp
 
     assert built == ["tenant-a", "tenant-c"]
     assert executed == ["tenant-a", "tenant-c"]
+
+
+def test_cmd_run_agent_cycle_multi_tenant_failure_summary_tracks_selected_and_runtime_counts(monkeypatch, caplog) -> None:
+    settings = load_settings()
+    settings.kis_target_market = "us"
+
+    class _BootstrapRepo(_FakeRepo):
+        def ensure_dataset(self):
+            return None
+
+        def ensure_tables(self):
+            return None
+
+    bootstrap_repo = _BootstrapRepo(
+        tenants=["tenant-a", "tenant-b"],
+        latest_config_map={
+            "tenant-a": "us",
+            "tenant-b": "us",
+        },
+    )
+
+    monkeypatch.delenv("CLOUD_RUN_TASK_INDEX", raising=False)
+    monkeypatch.delenv("CLOUD_RUN_TASK_COUNT", raising=False)
+    monkeypatch.setattr(cli, "load_settings", lambda: settings)
+    monkeypatch.setattr(cli, "configure_logging", lambda *args, **kwargs: None)
+    monkeypatch.setattr(cli, "_validate_or_exit", lambda *args, **kwargs: None)
+    monkeypatch.setattr(cli, "_repo_or_exit", lambda settings, tenant_id=None: bootstrap_repo)
+    monkeypatch.setattr(cli, "_resolve_batch_tenants", lambda repo, fallback="local": ["tenant-a", "tenant-b"])
+
+    def _build_runtime(**kwargs):
+        if kwargs["tenant_id"] == "tenant-a":
+            raise RuntimeError("build boom")
+        return settings, bootstrap_repo, object()
+
+    def _run_agent_cycle_once_guarded(*args, **kwargs):
+        raise RuntimeError("exec boom")
+
+    monkeypatch.setattr(cli, "_build_runtime", _build_runtime)
+    monkeypatch.setattr(cli, "_run_agent_cycle_once_guarded", _run_agent_cycle_once_guarded)
+
+    with caplog.at_level(logging.ERROR), pytest.raises(SystemExit):
+        cli.cmd_run_agent_cycle(live=False, all_tenants=True, market_override="us")
+
+    record = next(
+        item
+        for item in caplog.records
+        if getattr(item, "event", "") == "agent_cycle_multi_tenant_completed_with_failures"
+    )
+    assert record.tenant_count == 2
+    assert record.runtime_count == 1
+    assert record.build_failed_count == 1
+    assert record.execution_failed_count == 1
+    assert record.failed_count == 2
+
+
+def test_cmd_run_batch_multi_tenant_failure_summary_tracks_selected_and_runtime_counts(monkeypatch, caplog) -> None:
+    settings = load_settings()
+    settings.kis_target_market = "us"
+
+    class _BootstrapRepo(_FakeRepo):
+        def ensure_dataset(self):
+            return None
+
+        def ensure_tables(self):
+            return None
+
+    bootstrap_repo = _BootstrapRepo(tenants=["tenant-a", "tenant-b"])
+
+    monkeypatch.delenv("CLOUD_RUN_TASK_INDEX", raising=False)
+    monkeypatch.delenv("CLOUD_RUN_TASK_COUNT", raising=False)
+    monkeypatch.setattr(cli, "load_settings", lambda: settings)
+    monkeypatch.setattr(cli, "configure_logging", lambda *args, **kwargs: None)
+    monkeypatch.setattr(cli, "_validate_or_exit", lambda *args, **kwargs: None)
+    monkeypatch.setattr(cli, "_repo_or_exit", lambda settings, tenant_id=None: bootstrap_repo)
+    monkeypatch.setattr(cli, "_resolve_batch_tenants", lambda repo, fallback="local": ["tenant-a", "tenant-b"])
+    monkeypatch.setattr(cli, "_partition_tenants_for_task", lambda tenants: tenants)
+
+    def _build_runtime(**kwargs):
+        if kwargs["tenant_id"] == "tenant-a":
+            raise RuntimeError("build boom")
+        return settings, bootstrap_repo, object()
+
+    def _batch_tenant_work(*args, **kwargs):
+        raise RuntimeError("exec boom")
+
+    monkeypatch.setattr(cli, "_build_runtime", _build_runtime)
+    monkeypatch.setattr(cli, "_batch_phase", lambda *args, **kwargs: ("open_cycle", None))
+    monkeypatch.setattr(cli, "_batch_market_sync", lambda *args, **kwargs: None)
+    monkeypatch.setattr(cli, "_batch_tenant_work", _batch_tenant_work)
+
+    with caplog.at_level(logging.ERROR), pytest.raises(SystemExit):
+        cli.cmd_run_batch(live=False, all_tenants=True, market_override="")
+
+    record = next(
+        item
+        for item in caplog.records
+        if getattr(item, "event", "") == "batch_multi_tenant_completed_with_failures"
+    )
+    assert record.tenant_count == 2
+    assert record.runtime_count == 1
+    assert record.build_failed_count == 1
+    assert record.execution_failed_count == 1
+    assert record.failed_count == 2
 
 
 def test_cmd_backfill_tenant_markets_derives_from_agents_config(monkeypatch) -> None:

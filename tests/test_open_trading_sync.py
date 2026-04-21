@@ -468,6 +468,22 @@ def test_market_sync_us_includes_existing_tickers_missing_daily_features() -> No
             ]
 
     class LongHistoryClient(FakeClient):
+        def get_usd_krw_daily_chart(
+            self,
+            *,
+            symbol,
+            start_date="",
+            end_date="",
+            market_div_code="X",
+            period="D",
+            max_pages=8,
+        ):
+            _ = (symbol, start_date, end_date, market_div_code, period, max_pages)
+            return [
+                {"stck_bsop_date": f"202601{idx:02d}", "ovrs_nmix_prpr": str(1300 + idx)}
+                for idx in range(1, 26)
+            ]
+
         def get_overseas_daily_price(self, ticker, excd, bymd, gubn, modp):
             self.overseas_daily_requests.append(
                 {

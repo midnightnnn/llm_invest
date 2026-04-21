@@ -12,6 +12,7 @@ from uuid import uuid4
 from arena.board.store import BoardStore
 from arena.config import AgentConfig, Settings, merge_agent_risk_settings
 from arena.data.bq import BigQueryRepository
+from arena.logging_utils import event_extra, failure_extra
 from arena.market_sources import (
     KOSPI_MARKETS,
     US_MARKETS,
@@ -780,7 +781,16 @@ class ContextBuilder:
                 )
             )
         except Exception as exc:
-            logger.warning("[yellow]memory hydrate failed[/yellow] agent=%s err=%s", agent_id, str(exc))
+            logger.warning(
+                "[yellow]memory hydrate failed[/yellow] agent=%s err=%s",
+                agent_id,
+                str(exc),
+                extra=failure_extra(
+                    "memory_hydrate_failed",
+                    exc,
+                    agent_id=agent_id,
+                ),
+            )
             return []
 
     def _vector_memory_candidates(
@@ -898,7 +908,16 @@ class ContextBuilder:
                 )
             )
         except Exception as exc:
-            logger.warning("[yellow]relation memory candidates failed[/yellow] agent=%s err=%s", agent_id, str(exc))
+            logger.warning(
+                "[yellow]relation memory candidates failed[/yellow] agent=%s err=%s",
+                agent_id,
+                str(exc),
+                extra=failure_extra(
+                    "relation_memory_candidates_failed",
+                    exc,
+                    agent_id=agent_id,
+                ),
+            )
             return [], {}, {}
 
         bonus_base = memory_graph_semantic_triples_boost_bonus_base(self.settings.memory_policy)
@@ -1236,7 +1255,16 @@ class ContextBuilder:
                     )
                 )
             except Exception as exc:
-                logger.warning("[yellow]graph neighbor load failed[/yellow] err=%s", str(exc))
+                logger.warning(
+                    "[yellow]graph neighbor load failed[/yellow] err=%s",
+                    str(exc),
+                    extra=failure_extra(
+                        "memory_graph_neighbor_load_failed",
+                        exc,
+                        hop=hop,
+                        frontier_size=len(frontier_ids),
+                    ),
+                )
                 return expanded
 
             next_frontier_roots: dict[str, set[str]] = {}
@@ -1368,7 +1396,11 @@ class ContextBuilder:
                 )
             )
         except Exception as exc:
-            logger.warning("[yellow]environment briefing load failed[/yellow] err=%s", str(exc))
+            logger.warning(
+                "[yellow]environment briefing load failed[/yellow] err=%s",
+                str(exc),
+                extra=failure_extra("environment_briefing_load_failed", exc),
+            )
             return []
 
         queries: list[str] = []
@@ -1407,7 +1439,15 @@ class ContextBuilder:
                 )
             )
         except Exception as exc:
-            logger.warning("[yellow]research context load failed[/yellow] err=%s", str(exc))
+            logger.warning(
+                "[yellow]research context load failed[/yellow] err=%s",
+                str(exc),
+                extra=failure_extra(
+                    "research_context_load_failed",
+                    exc,
+                    ticker_count=len(tickers),
+                ),
+            )
             return "", []
         lines: list[str] = []
         compact_rows: list[dict[str, Any]] = []
@@ -1753,7 +1793,16 @@ class ContextBuilder:
                 trading_mode=self.settings.trading_mode,
             )
         except Exception as exc:
-            logger.warning("[yellow]candidate memory load failed[/yellow] agent=%s err=%s", agent_id, str(exc))
+            logger.warning(
+                "[yellow]candidate memory load failed[/yellow] agent=%s err=%s",
+                agent_id,
+                str(exc),
+                extra=failure_extra(
+                    "candidate_memory_load_failed",
+                    exc,
+                    agent_id=agent_id,
+                ),
+            )
             return []
         out: list[dict[str, Any]] = []
         for row in rows:
@@ -2083,12 +2132,26 @@ class ContextBuilder:
                 str(cycle_id or "").strip() or "-",
                 len(payload_rows),
                 used_in_prompt,
+                extra=event_extra(
+                    "memory_access_log",
+                    agent_id=agent_id,
+                    cycle_id=str(cycle_id or "").strip() or None,
+                    rows=len(payload_rows),
+                    used_in_prompt=used_in_prompt,
+                ),
             )
         except Exception as exc:
             logger.warning(
                 "[yellow]memory access log failed[/yellow] agent=%s err=%s",
                 agent_id,
                 str(exc),
+                extra=failure_extra(
+                    "memory_access_log_failed",
+                    exc,
+                    agent_id=agent_id,
+                    cycle_id=str(cycle_id or "").strip() or None,
+                    rows=len(payload_rows),
+                ),
             )
 
     def build(
@@ -2261,6 +2324,11 @@ class ContextBuilder:
                     "[yellow]latest_agent_chained_returns fallback[/yellow] agent=%s err=%s",
                     agent_id,
                     str(exc),
+                    extra=failure_extra(
+                        "latest_agent_chained_returns_fallback",
+                        exc,
+                        agent_id=agent_id,
+                    ),
                 )
                 chained_stats = {}
             if chained_stats:
@@ -2311,6 +2379,12 @@ class ContextBuilder:
                 "[yellow]Recent intent count fallback[/yellow] agent=%s err=%s",
                 agent_id,
                 str(exc),
+                extra=failure_extra(
+                    "recent_intent_count_fallback",
+                    exc,
+                    agent_id=agent_id,
+                    trading_mode=self.settings.trading_mode,
+                ),
             )
             intents_today = 0
         try:
@@ -2329,6 +2403,12 @@ class ContextBuilder:
                 "[yellow]Recent turnover fallback[/yellow] agent=%s err=%s",
                 agent_id,
                 str(exc),
+                extra=failure_extra(
+                    "recent_turnover_fallback",
+                    exc,
+                    agent_id=agent_id,
+                    trading_mode=self.settings.trading_mode,
+                ),
             )
             turnover_today = 0.0
 

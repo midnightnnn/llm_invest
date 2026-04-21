@@ -20,6 +20,7 @@ from arena.memory.relations import (
     build_research_briefing_relation_triples,
     relation_triples_to_graph_projection,
 )
+from arena.logging_utils import event_extra, failure_extra
 from arena.memory.thesis import ACTIVE_THESIS_EVENT_TYPES, CLOSED_THESIS_EVENT_TYPES, THESIS_EVENT_TYPES
 from arena.models import BoardPost, MemoryEvent
 
@@ -845,7 +846,16 @@ class MemoryBQStore:
         try:
             self.upsert_memory_relation_triples_with_graph(rows, tenant_id=tenant_id)
         except Exception as exc:
-            logger.warning("[yellow]memory relation triple projection skipped[/yellow] err=%s", str(exc))
+            logger.warning(
+                "[yellow]memory relation triple projection skipped[/yellow] err=%s",
+                str(exc),
+                extra=failure_extra(
+                    "memory_relation_triple_projection_skipped",
+                    exc,
+                    tenant_id=tenant_id,
+                    rows=len(rows),
+                ),
+            )
 
     def upsert_memory_relation_triples_with_graph(
         self,
@@ -1746,7 +1756,17 @@ class MemoryBQStore:
             safe_rows.append(_json_safe(payload))
         errors = self.session.client.insert_rows_json(table_id, safe_rows)
         if errors:
-            logger.error("[red]BigQuery research_briefings insert failed[/red] errors=%s", errors)
+            logger.error(
+                "[red]BigQuery research_briefings insert failed[/red] errors=%s",
+                errors,
+                extra=event_extra(
+                    "bq_research_briefings_insert_failed",
+                    table=table_id,
+                    tenant_id=tenant,
+                    rows=len(safe_rows),
+                    errors=errors,
+                ),
+            )
             return
         graph_nodes = [build_research_briefing_graph_node(row) for row in graph_rows]
         self.upsert_memory_graph_nodes(graph_nodes, tenant_id=tenant)

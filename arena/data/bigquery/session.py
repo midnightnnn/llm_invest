@@ -12,6 +12,7 @@ from google.api_core.exceptions import NotFound
 from google.cloud import bigquery
 
 from arena.data.schema import parse_ddl_columns, render_table_ddls
+from arena.logging_utils import failure_extra
 
 logger = logging.getLogger(__name__)
 
@@ -179,7 +180,17 @@ class BigQuerySession:
             self.execute(f"ALTER TABLE `{table_id}` ADD COLUMN ingested_at TIMESTAMP")
             logger.info("[cyan]BigQuery column added[/cyan] table=%s col=ingested_at", table_id)
         except Exception as exc:
-            logger.warning("[yellow]BigQuery column add skipped[/yellow] table=%s err=%s", table_id, str(exc))
+            logger.warning(
+                "[yellow]BigQuery column add skipped[/yellow] table=%s err=%s",
+                table_id,
+                str(exc),
+                extra=failure_extra(
+                    "bq_column_add_skipped",
+                    exc,
+                    table=table_id,
+                    column="ingested_at",
+                ),
+            )
 
     def _ensure_table_columns(self, table_name: str, columns: list[tuple[str, str]]) -> set[str]:
         table_id = f"{self.dataset_fqn}.{table_name}"
@@ -204,6 +215,12 @@ class BigQuerySession:
                 logger.warning(
                     "[yellow]BigQuery column add skipped[/yellow] table=%s col=%s err=%s",
                     table_id, name, str(exc),
+                    extra=failure_extra(
+                        "bq_column_add_skipped",
+                        exc,
+                        table=table_id,
+                        column=name,
+                    ),
                 )
         return added
 
@@ -219,7 +236,17 @@ class BigQuerySession:
             self.execute(f"ALTER TABLE `{table_id}` ADD COLUMN has_anthropic BOOL")
             logger.info("[cyan]BigQuery column added[/cyan] table=%s col=has_anthropic", table_id)
         except Exception as exc:
-            logger.warning("[yellow]BigQuery column add skipped[/yellow] table=%s err=%s", table_id, str(exc))
+            logger.warning(
+                "[yellow]BigQuery column add skipped[/yellow] table=%s err=%s",
+                table_id,
+                str(exc),
+                extra=failure_extra(
+                    "bq_column_add_skipped",
+                    exc,
+                    table=table_id,
+                    column="has_anthropic",
+                ),
+            )
 
     def _backfill_tenant_id_defaults(self, table_names: list[str]) -> None:
         for table_name in table_names:
@@ -242,4 +269,9 @@ class BigQuerySession:
                 logger.warning(
                     "[yellow]BigQuery tenant_id backfill skipped[/yellow] table=%s err=%s",
                     table_id, str(exc),
+                    extra=failure_extra(
+                        "bq_tenant_id_backfill_skipped",
+                        exc,
+                        table=table_id,
+                    ),
                 )

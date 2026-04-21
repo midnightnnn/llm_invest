@@ -152,60 +152,73 @@ class _ContextTools:
         agent_metric: str,
         today: date,
     ) -> dict[str, object] | None:
-        lb = 120
         portfolio_start_date = period_start.isoformat()
-        bench_ret: float | None = None
-        bench_native_ret: float | None = None
-        series_len = 0
-        benchmark_start_date: str | None = None
-        benchmark_end_date: str | None = None
-        exact_period_match = False
         benchmark_sources = self._sources()
 
         frame_loader = getattr(self.repo, "get_daily_close_frame", None)
-        if callable(frame_loader):
-            frame = frame_loader(
+        if not callable(frame_loader):
+            return None
+
+        krw_frame = frame_loader(
+            tickers=[bench],
+            start=period_start,
+            end=today,
+            sources=benchmark_sources,
+        )
+        if krw_frame is None or krw_frame.empty or bench not in krw_frame.columns:
+            return None
+
+        (
+            bench_ret,
+            series_len,
+            benchmark_start_date,
+            benchmark_end_date,
+        ) = self._series_return(krw_frame[bench])
+        if bench_ret is None:
+            return None
+
+        bench_native_ret: float | None = None
+        native_start_date: str | None = None
+        native_end_date: str | None = None
+        if self._frame_loader_accepts_price_field(frame_loader):
+            native_frame = frame_loader(
                 tickers=[bench],
                 start=period_start,
                 end=today,
                 sources=benchmark_sources,
+                price_field="close_price_native",
             )
-            if frame is not None and not frame.empty and bench in frame.columns:
+            if native_frame is not None and not native_frame.empty and bench in native_frame.columns:
                 (
-                    bench_ret,
-                    series_len,
-                    benchmark_start_date,
-                    benchmark_end_date,
-                ) = self._series_return(frame[bench])
-                exact_period_match = bench_ret is not None
-            if self._frame_loader_accepts_price_field(frame_loader):
-                native_frame = frame_loader(
-                    tickers=[bench],
-                    start=period_start,
-                    end=today,
-                    sources=benchmark_sources,
-                    price_field="close_price_native",
-                )
-                if native_frame is not None and not native_frame.empty and bench in native_frame.columns:
-                    bench_native_ret, _, _, _ = self._series_return(native_frame[bench])
+                    bench_native_ret,
+                    _,
+                    native_start_date,
+                    native_end_date,
+                ) = self._series_return(native_frame[bench])
 
-        if bench_ret is None:
-            lb = max(30, min(400, (today - period_start).days + 5))
-            bench_closes = self.repo.get_daily_closes(
-                tickers=[bench],
-                lookback_days=lb,
-                sources=benchmark_sources,
-            )
-            series = bench_closes.get(bench, [])
-            if series and len(series) >= 2:
-                start_px = float(series[0])
-                end_px = float(series[-1])
-                if start_px > 0:
-                    bench_ret = (end_px / start_px) - 1.0
-                    series_len = len(series)
+        # Integrity check: the two currency frames must cover the same window.
+        # A mismatch usually means one price column has NULLs in part of the
+        # range (legacy rows) and silently produces returns that aren't
+        # comparable. Drop native in that case rather than showing a tainted
+        # cross-currency figure.
+        native_inconsistent = False
+        if bench_native_ret is not None:
+            if native_start_date != benchmark_start_date or native_end_date != benchmark_end_date:
+                native_inconsistent = True
+                bench_native_ret = None
 
-        if bench_ret is None:
-            return None
+        # Sanity check: the implied FX drift between frame start and frame
+        # end should roughly equal (1 + krw_ret) / (1 + native_ret). If it
+        # diverges by more than 8% we treat the benchmark as tainted and
+        # drop it — better to show nothing than a fabricated alpha.
+        fx_drift_warning = False
+        if bench_native_ret is not None:
+            krw_leg = 1.0 + float(bench_ret)
+            native_leg = 1.0 + float(bench_native_ret)
+            if native_leg > 0:
+                implied_fx_drift = (krw_leg / native_leg) - 1.0
+                if abs(implied_fx_drift) > 0.08:
+                    fx_drift_warning = True
 
         source_basis = (
             "quote_aware"
@@ -224,7 +237,7 @@ class _ContextTools:
             "return": round(bench_ret, 6),
             "return_krw": round(bench_ret, 6),
             "trading_days_in_series": int(series_len),
-            "period_alignment": "exact" if exact_period_match else "approximate",
+            "period_alignment": "exact",
             "currency_basis": "KRW",
             "price_basis": "close_price_krw",
             "source_basis": source_basis,
@@ -243,17 +256,10 @@ class _ContextTools:
             bench_info["benchmark_end_date"] = benchmark_end_date
 
         notes: list[str] = []
-        if exact_period_match:
-            if benchmark_start_date and benchmark_start_date != portfolio_start_date:
-                notes.append(
-                    f"Benchmark uses first available trading day on or after "
-                    f"portfolio start ({portfolio_start_date} -> {benchmark_start_date})."
-                )
-        else:
+        if benchmark_start_date and benchmark_start_date != portfolio_start_date:
             notes.append(
-                f"Benchmark return is approximate: series covers ~{lb} calendar days "
-                f"ending today, which may not align exactly with portfolio start "
-                f"({portfolio_start_date}). Compare with caution."
+                f"Benchmark uses first available trading day on or after "
+                f"portfolio start ({portfolio_start_date} -> {benchmark_start_date})."
             )
         if source_basis == "quote_aware":
             notes.append(
@@ -266,6 +272,17 @@ class _ContextTools:
             notes.append("Scope is current_sleeve, not cumulative/TWR history.")
         elif scope == "cumulative":
             notes.append("Scope is cumulative/TWR history, not the current sleeve reset period.")
+        if native_inconsistent:
+            notes.append(
+                "Native return dropped because its frame did not share the same "
+                "trading-day window as the KRW frame (likely legacy rows with NULL prices)."
+            )
+        if fx_drift_warning:
+            bench_info["fx_drift_warning"] = True
+            notes.append(
+                "KRW vs native return imply >8% FX drift between frame start and end — "
+                "likely inconsistent fx_rate_used across the series. Treat return_krw with caution."
+            )
         if notes:
             bench_info["note"] = " ".join(notes)
         return bench_info

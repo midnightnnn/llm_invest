@@ -12,6 +12,7 @@ import uuid
 from datetime import date, datetime
 from typing import TYPE_CHECKING, Any
 
+from arena.logging_utils import event_extra, failure_extra
 from arena.models import utc_now
 
 if TYPE_CHECKING:
@@ -591,14 +592,25 @@ class MarketStore:
             "end": end,
         }
 
+        source_priority_expr = "0"
         if sources:
             filters.append("source IN UNNEST(@sources)")
             params["sources"] = sources
+            params["sources_priority"] = list(sources)
+            # Lower value wins. The first source in the caller-supplied list
+            # has priority 0, next has 1, and so on. Unknown sources fall
+            # back to a sentinel so the explicit ranking always dominates.
+            source_priority_expr = (
+                "IFNULL("
+                "(SELECT MIN(off) FROM UNNEST(@sources_priority) AS s WITH OFFSET AS off WHERE s = source),"
+                " 1048576)"
+            )
 
         where = " AND ".join(filters)
         sql = f"""
         WITH dedup_source AS (
           SELECT DATE(as_of_ts) AS d, as_of_ts, ticker, {price_column} AS close_price, source, ingested_at,
+                 {source_priority_expr} AS source_priority,
                  ROW_NUMBER() OVER (
                    PARTITION BY DATE(as_of_ts), ticker, source
                    ORDER BY as_of_ts DESC, IFNULL(ingested_at, as_of_ts) DESC
@@ -609,7 +621,7 @@ class MarketStore:
           SELECT d, ticker, close_price, as_of_ts, source, ingested_at,
                  ROW_NUMBER() OVER (
                    PARTITION BY d, ticker
-                   ORDER BY as_of_ts DESC, IFNULL(ingested_at, as_of_ts) DESC, source DESC
+                   ORDER BY source_priority ASC, as_of_ts DESC, IFNULL(ingested_at, as_of_ts) DESC, source DESC
                  ) AS rn_day
           FROM dedup_source
           WHERE rn_source = 1
@@ -707,6 +719,12 @@ class MarketStore:
                 "[yellow]Forecast query blocked[/yellow] mode=%s table=%s reason=missing model metadata columns",
                 mode_norm,
                 table_ref,
+                extra=event_extra(
+                    "forecast_query_blocked",
+                    table=table_ref,
+                    mode=mode_norm,
+                    reason="missing_model_metadata_columns",
+                ),
             )
             return []
 
@@ -765,6 +783,12 @@ class MarketStore:
                 "[yellow]BigQuery predicted_returns query failed[/yellow] table=%s err=%s",
                 table_ref,
                 str(exc),
+                extra=failure_extra(
+                    "bq_predicted_returns_query_failed",
+                    exc,
+                    table=table_ref,
+                    mode=mode_norm,
+                ),
             )
             return []
 

@@ -9,6 +9,7 @@ import threading
 import time
 import warnings
 from concurrent.futures import TimeoutError as FutureTimeoutError
+from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
@@ -17,7 +18,7 @@ from google.adk import Runner
 
 from arena.agents.adk_agent_flow import (
     cycle_phase,
-    draft_phase_output,
+    explore_phase_output,
     execution_phase_output,
     execution_resume_session_id,
     extract_decision_payload,
@@ -90,6 +91,7 @@ from arena.agents.adk_tool_config import (
 from arena.agents.base import AgentOutput, TradingAgent
 from arena.config import AgentConfig, Settings, normalize_agent_settings
 from arena.data.bq import BigQueryRepository
+from arena.logging_utils import event_extra, failure_extra
 from arena.memory.policy import memory_embed_cache_max
 from arena.models import BoardPost, ExecutionReport, OrderIntent
 from arena.tools.default_registry import build_default_registry
@@ -117,6 +119,19 @@ def _stable_json(value: Any) -> str:
 
 def _stable_hash(value: Any) -> str:
     return hashlib.sha256(_stable_json(value).encode("utf-8")).hexdigest()
+
+
+def _agent_config_payload(agent_config: AgentConfig | None) -> dict[str, Any]:
+    if agent_config is None:
+        return {}
+    model_dump = getattr(agent_config, "model_dump", None)
+    if callable(model_dump):
+        payload = model_dump(mode="json")
+        return payload if isinstance(payload, dict) else {}
+    if is_dataclass(agent_config):
+        payload = asdict(agent_config)
+        return payload if isinstance(payload, dict) else {}
+    return {}
 
 
 def _short_hash(value: Any, length: int = 16) -> str:
@@ -679,7 +694,7 @@ class _ADKDecisionRunner:
                     "trading_mode": self.settings.trading_mode,
                     "kis_target_market": getattr(self.settings, "kis_target_market", ""),
                     "memory_policy": getattr(self.settings, "memory_policy", None),
-                    "agent_config": self._agent_config.model_dump(mode="json") if self._agent_config else {},
+                    "agent_config": _agent_config_payload(self._agent_config),
                 }
             ),
             "latency_ms": int(max(0.0, (completed_at - created_at).total_seconds() * 1000.0)),
@@ -971,7 +986,7 @@ class _ADKDecisionRunner:
             if str((item or {}).get("phase") or "").strip().lower() != phase_token
         ]
         retained.append(snapshot)
-        phase_order = {"draft": 0, "execution": 1, "board": 2}
+        phase_order = {"explore": 0, "execution": 1, "board": 2}
         retained.sort(
             key=lambda item: (
                 phase_order.get(str((item or {}).get("phase") or "").strip().lower(), 99),
@@ -1054,7 +1069,7 @@ class _ADKDecisionRunner:
         """Runs the ReAct loop: LLM freely explores tools, then returns (decision JSON, session_id).
 
         When *resume_session_id* is provided the runner continues the existing
-        ADK session (draft → execution continuity) so that the model retains
+        ADK session (explore → execution continuity) so that the model retains
         all prior tool-call history in its conversation context.
         """
         phase = str(context.get("cycle_phase") or "execution").strip().lower() or "execution"
@@ -1156,7 +1171,7 @@ class _ADKDecisionRunner:
         )
 
         # Persist a compact summary of ReAct tool usage for next-cycle reference.
-        # Saved for every phase (draft + execution) so the board shows the full picture.
+        # Saved for every phase (explore + execution) so the board shows the full picture.
         summary_record = build_tool_summary_memory_record(
             self._tool_events,
             registry=self._registry,
@@ -1315,7 +1330,7 @@ class AdkTradingAgent:
         self.default_universe = settings.default_universe
         self._runner_settings = settings
         self._gemini_direct_fallback_used = False
-        self._draft_session_id: str | None = None
+        self._explore_session_id: str | None = None
         self._execution_session_id: str | None = None
         self._board_ticker_names: dict[str, str] = {}
         self.runner = self._build_runner(settings=settings)
@@ -1375,14 +1390,30 @@ class AdkTradingAgent:
                 f"market_features missing for agent={self.agent_id} cycle_id={str(context.get('cycle_id') or '').strip()}"
             )
 
-        logger.info("[blue]ADK decision start[/blue] agent=%s provider=%s", self.agent_id, self.provider)
         retry_limit, retry_delay = retry_policy_from_env()
         decision: dict[str, Any] | None = None
         session_id: str | None = None
         last_exc: Exception | None = None
         phase = cycle_phase(context)
-        # Resume draft session for execution phase (session continuity).
-        resume_sid = execution_resume_session_id(phase=phase, draft_session_id=self._draft_session_id)
+        cycle_id = str(context.get("cycle_id", "")).strip()
+        logger.info(
+            "[blue]ADK decision start[/blue] agent=%s provider=%s",
+            self.agent_id,
+            self.provider,
+            extra=event_extra(
+                "adk_decision_start",
+                agent_id=self.agent_id,
+                provider=self.provider,
+                phase=phase,
+                cycle_id=cycle_id,
+                resume_session_id=self._explore_session_id if phase == "execution" else None,
+            ),
+        )
+        # Resume explore session for execution phase (session continuity).
+        resume_sid = execution_resume_session_id(
+            phase=phase,
+            explore_session_id=self._explore_session_id,
+        )
         for attempt in range(retry_limit + 1):
             try:
                 decision, session_id = self.runner.decide_orders(
@@ -1395,6 +1426,10 @@ class AdkTradingAgent:
                 last_exc = exc
                 if self._fallback_gemini_to_direct(exc):
                     continue
+                llm_call_lookup = getattr(self.runner, "llm_call_id_for_phase", None)
+                llm_call_id = llm_call_lookup(phase) if callable(llm_call_lookup) else ""
+                token_usage = getattr(self.runner, "_last_token_usage", None)
+                tool_calls = token_usage.get("tool_calls") if isinstance(token_usage, dict) else None
                 should_retry = _is_retryable_adk_error(exc) and attempt < retry_limit
                 if should_retry:
                     sleep_s = retry_delay * float(attempt + 1)
@@ -1405,36 +1440,76 @@ class AdkTradingAgent:
                         attempt + 1,
                         sleep_s,
                         str(exc),
+                        extra=failure_extra(
+                            "adk_decision_retry",
+                            exc,
+                            agent_id=self.agent_id,
+                            provider=self.provider,
+                            phase=phase,
+                            cycle_id=cycle_id,
+                            llm_call_id=llm_call_id,
+                            tool_calls=tool_calls,
+                            attempt=attempt + 1,
+                            sleep_s=round(sleep_s, 1),
+                        ),
                     )
                     time.sleep(sleep_s)
                     continue
-                logger.error(
+                logger.exception(
                     "[red]ADK decision failed[/red] agent=%s provider=%s err=%s",
                     self.agent_id,
                     self.provider,
                     str(exc),
+                    extra=failure_extra(
+                        "adk_decision_failed",
+                        exc,
+                        agent_id=self.agent_id,
+                        provider=self.provider,
+                        phase=phase,
+                        cycle_id=cycle_id,
+                        llm_call_id=llm_call_id,
+                        tool_calls=tool_calls,
+                        attempt=attempt + 1,
+                        resumed_session=bool(resume_sid),
+                    ),
                 )
                 break
         if decision is None:
             reason = str(last_exc) if last_exc else "unknown"
             raise RuntimeError(f"ADK decision failed for agent={self.agent_id}: {reason}") from last_exc
-        logger.info("[blue]ADK decision received[/blue] agent=%s provider=%s", self.agent_id, self.provider)
-
-        cycle_id = str(context.get("cycle_id", "")).strip()
+        llm_call_lookup = getattr(self.runner, "llm_call_id_for_phase", None)
+        llm_call_id = llm_call_lookup(phase) if callable(llm_call_lookup) else ""
+        token_usage = getattr(self.runner, "_last_token_usage", None)
+        logger.info(
+            "[blue]ADK decision received[/blue] agent=%s provider=%s",
+            self.agent_id,
+            self.provider,
+            extra=event_extra(
+                "adk_decision_received",
+                agent_id=self.agent_id,
+                provider=self.provider,
+                phase=phase,
+                cycle_id=cycle_id,
+                llm_call_id=llm_call_id,
+                llm_calls=token_usage.get("llm_calls") if isinstance(token_usage, dict) else None,
+                tool_calls=token_usage.get("tool_calls") if isinstance(token_usage, dict) else None,
+            ),
+        )
 
         draft_summary, orders = extract_decision_payload(decision)
 
-        # Draft phase is board-sync only: never emit intents.
+        # Explore phase is board-sync only: never emit intents.
         # Preserve session_id so execution can continue the same conversation.
-        if phase == "draft":
-            self._draft_session_id = session_id
+        if phase == "explore":
+            self._explore_session_id = session_id
             self._execution_session_id = None
-            return draft_phase_output(
+            return explore_phase_output(
                 agent_id=self.agent_id,
                 cycle_id=cycle_id,
                 decision=decision,
                 draft_summary=draft_summary,
                 orders=orders,
+                share_summary=bool(context.get("share_explore_summary")),
             )
 
         record_candidate_orders = getattr(self.runner, "record_candidate_orders", None)
@@ -1479,7 +1554,7 @@ class AdkTradingAgent:
         # Save a placeholder board; final board generation happens after broker outcomes are known.
         orders_summary = format_orders_summary(intents, orders, ticker_names=self._board_ticker_names)
         self._execution_session_id = session_id
-        self._draft_session_id = None
+        self._explore_session_id = None
 
         return execution_phase_output(
             agent_id=self.agent_id,

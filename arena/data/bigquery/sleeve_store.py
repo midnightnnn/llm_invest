@@ -11,6 +11,7 @@ from datetime import date, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
+from arena.logging_utils import event_extra, failure_extra
 from arena.models import AccountSnapshot, Position, utc_now
 
 if TYPE_CHECKING:
@@ -353,6 +354,13 @@ class SleeveStore:
                     "[red]Account snapshot positions insert failed[/red] snapshot_at=%s errors=%s",
                     ts.isoformat(),
                     errors,
+                    extra=event_extra(
+                        "account_snapshot_positions_insert_failed",
+                        tenant_id=tenant,
+                        snapshot_at=ts.isoformat(),
+                        rows=len(rows),
+                        errors=errors,
+                    ),
                 )
                 try:
                     self.session.execute(
@@ -364,10 +372,16 @@ class SleeveStore:
                         {"tenant_id": tenant, "snapshot_at": ts},
                     )
                 except Exception as rollback_exc:
-                    logger.error(
+                    logger.exception(
                         "[red]Account snapshot rollback failed[/red] snapshot_at=%s err=%s",
                         ts.isoformat(),
                         str(rollback_exc),
+                        extra=failure_extra(
+                            "account_snapshot_rollback_failed",
+                            rollback_exc,
+                            tenant_id=tenant,
+                            snapshot_at=ts.isoformat(),
+                        ),
                     )
                 raise RuntimeError(f"positions_current insert failed: {errors}")
 
@@ -425,7 +439,15 @@ class SleeveStore:
         try:
             rows = self.session.fetch_rows(sql, {"tenant_id": tenant})
         except Exception as exc:
-            logger.warning("[yellow]get_all_held_tickers failed[/yellow] err=%s", str(exc))
+            logger.warning(
+                "[yellow]get_all_held_tickers failed[/yellow] err=%s",
+                str(exc),
+                extra=failure_extra(
+                    "get_all_held_tickers_failed",
+                    exc,
+                    tenant_id=tenant,
+                ),
+            )
             return []
         tickers = [str(r["ticker"]).strip().upper() for r in rows if r.get("ticker")]
         m = market.lower().strip()
@@ -483,7 +505,15 @@ class SleeveStore:
         try:
             rows = self.session.fetch_rows(sql, params)
         except Exception as exc:
-            logger.warning("[yellow]get_latest_position_tickers failed[/yellow] err=%s", str(exc))
+            logger.warning(
+                "[yellow]get_latest_position_tickers failed[/yellow] err=%s",
+                str(exc),
+                extra=failure_extra(
+                    "get_latest_position_tickers_failed",
+                    exc,
+                    all_tenants=all_tenants,
+                ),
+            )
             return []
         tickers = [str(r["ticker"]).strip().upper() for r in rows if r.get("ticker")]
         m = market.lower().strip()
@@ -806,6 +836,12 @@ class SleeveStore:
                     "[yellow]Agent checkpoint seed parse failed; falling back to sleeve[/yellow] agent=%s err=%s",
                     agent,
                     error,
+                    extra=event_extra(
+                        "agent_checkpoint_seed_parse_failed",
+                        agent_id=agent,
+                        tenant_id=tenant,
+                        err=error,
+                    ),
                 )
 
         if as_of_ts is not None:
@@ -941,6 +977,12 @@ class SleeveStore:
                 "[yellow]Agent origin checkpoint parse failed; falling back to first sleeve[/yellow] agent=%s err=%s",
                 agent,
                 error,
+                extra=event_extra(
+                    "agent_origin_checkpoint_parse_failed",
+                    agent_id=agent,
+                    tenant_id=tenant,
+                    err=error,
+                ),
             )
 
         cfg = self._first_agent_sleeve(agent_id=agent, tenant_id=tenant)
@@ -1349,6 +1391,14 @@ class SleeveStore:
             per_agent,
             seed_source,
             seed_positions,
+            extra=event_extra(
+                "agent_checkpoints_reinitialized",
+                tenant_id=tenant,
+                agents=list(tokens),
+                per_agent_cash_krw=per_agent,
+                seed_source=seed_source,
+                seed_positions=seed_positions,
+            ),
         )
         return checkpoint_loader(agent_ids=tokens, tenant_id=tenant)
 
@@ -1380,6 +1430,11 @@ class SleeveStore:
                 "[yellow]Sleeve seed from account snapshot skipped[/yellow] tenant=%s err=%s",
                 tenant_id,
                 str(exc),
+                extra=failure_extra(
+                    "sleeve_seed_from_account_snapshot_skipped",
+                    exc,
+                    tenant_id=tenant_id,
+                ),
             )
             return default_per_agent_cash, "[]", "virtual_cash", 0
 
@@ -1546,6 +1601,14 @@ class SleeveStore:
             per_agent,
             seed_source,
             seed_positions,
+            extra=event_extra(
+                "agent_sleeves_reinitialized",
+                tenant_id=tenant,
+                agents=list(tokens),
+                per_agent_cash_krw=per_agent,
+                seed_source=seed_source,
+                seed_positions=seed_positions,
+            ),
         )
         return self.latest_agent_sleeves(agent_ids=tokens, tenant_id=tenant)
 
@@ -2146,6 +2209,11 @@ class SleeveStore:
             logger.warning(
                 "[yellow]Dividend credit injection skipped[/yellow] agent=%s err=%s",
                 agent_id, str(exc),
+                extra=failure_extra(
+                    "dividend_credit_injection_skipped",
+                    exc,
+                    agent_id=agent_id,
+                ),
             )
 
         if positions:
@@ -2163,6 +2231,12 @@ class SleeveStore:
                         "[yellow]Instrument metadata refresh skipped[/yellow] agent=%s err=%s",
                         agent_id,
                         str(exc),
+                        extra=failure_extra(
+                            "instrument_metadata_refresh_skipped",
+                            exc,
+                            agent_id=agent_id,
+                            ticker_count=len(positions),
+                        ),
                     )
             for t, pos in positions.items():
                 pd = price_data.get(t)
@@ -2365,7 +2439,17 @@ class SleeveStore:
         try:
             return self.session.fetch_rows(sql, {"tenant_id": tenant, "agent_id": agent_id, "since": since})
         except Exception as exc:
-            logger.warning("[yellow]get_dividend_credits failed[/yellow] agent=%s err=%s", agent_id, str(exc))
+            logger.warning(
+                "[yellow]get_dividend_credits failed[/yellow] agent=%s err=%s",
+                agent_id,
+                str(exc),
+                extra=failure_extra(
+                    "get_dividend_credits_failed",
+                    exc,
+                    agent_id=agent_id,
+                    tenant_id=tenant,
+                ),
+            )
             return []
 
     def dividend_event_exists(
@@ -2388,7 +2472,16 @@ class SleeveStore:
             rows = self.session.fetch_rows(sql, {"tenant_id": tenant, "event_ids": event_ids})
             return {str(r["event_id"]) for r in rows if r.get("event_id")}
         except Exception as exc:
-            logger.warning("[yellow]dividend_event_exists check failed[/yellow] err=%s", str(exc))
+            logger.warning(
+                "[yellow]dividend_event_exists check failed[/yellow] err=%s",
+                str(exc),
+                extra=failure_extra(
+                    "dividend_event_exists_check_failed",
+                    exc,
+                    tenant_id=tenant,
+                    event_id_count=len(event_ids),
+                ),
+            )
             return set()
 
     def upsert_agent_nav_daily(

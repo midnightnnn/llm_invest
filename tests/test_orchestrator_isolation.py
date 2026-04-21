@@ -90,11 +90,15 @@ class FakeBoardStore:
 class DummyAgent:
     def __init__(self, agent_id: str):
         self.agent_id = agent_id
+        self.seen_phases: list[str] = []
         self.seen_posts: list[list[dict]] = []
+        self.seen_board_contexts: list[str] = []
 
     def generate(self, context: dict) -> AgentOutput:
+        self.seen_phases.append(str(context.get("cycle_phase") or ""))
         posts = list(context.get("board_posts") or [])
         self.seen_posts.append(posts)
+        self.seen_board_contexts.append(str(context.get("board_context") or ""))
         return AgentOutput(
             intents=[],
             board_post=BoardPost(agent_id=self.agent_id, title=f"{self.agent_id}-note", body="ok", tickers=[]),
@@ -307,6 +311,44 @@ def test_orchestrator_in_paper_mode_includes_simulated_history() -> None:
 
     assert repo.build_calls
     assert all(call["include_simulated"] is True for call in repo.build_calls)
+
+
+def test_orchestrator_runs_explore_before_execution_for_single_agent() -> None:
+    repo = FakeRepo()
+    agent = DummyAgent("gpt")
+    orchestrator = ArenaOrchestrator(
+        settings=_settings(trading_mode="paper"),
+        context_builder=FakeContextBuilder(),
+        board_store=FakeBoardStore(),
+        gateway=FakeGateway(repo),
+        agents=[agent],
+    )
+
+    orchestrator.run_cycle(snapshot=None)
+
+    assert agent.seen_phases == ["explore", "execution"]
+    assert agent.seen_posts == [[], []]
+    assert agent.seen_board_contexts == ["", ""]
+
+
+def test_orchestrator_shares_explore_posts_only_in_multi_agent_execution() -> None:
+    repo = FakeRepo()
+    agents = [DummyAgent("gpt"), DummyAgent("gemini")]
+    orchestrator = ArenaOrchestrator(
+        settings=_settings(trading_mode="paper"),
+        context_builder=FakeContextBuilder(),
+        board_store=FakeBoardStore(),
+        gateway=FakeGateway(repo),
+        agents=agents,
+    )
+
+    orchestrator.run_cycle(snapshot=None)
+
+    for agent in agents:
+        assert agent.seen_phases == ["explore", "execution"]
+        assert agent.seen_posts[0] == []
+        assert {str(post.get("agent_id") or "") for post in agent.seen_posts[1]} == {"gpt", "gemini"}
+        assert "explore 요약" in agent.seen_board_contexts[1]
 
 
 def test_orchestrator_publishes_board_after_execution() -> None:
