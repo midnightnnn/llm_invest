@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import types
 from datetime import datetime, timedelta, timezone
 
@@ -281,6 +282,40 @@ def test_search_overseas_stocks_returns_rows(monkeypatch) -> None:
     rows = client.search_overseas_stocks(excd="NAS", per_min=10.0, per_max=40.0, max_pages=1)
     assert len(rows) == 2
     assert rows[0]["symb"] == "AAPL"
+
+
+def test_get_overseas_period_rights_logs_structured_pagination_stop(monkeypatch, caplog) -> None:
+    client = OpenTradingClient(_settings())
+    calls = {"count": 0}
+
+    def _fake_request(*, method, path, tr_id, params=None, tr_cont="", retry_on_401=True):
+        _ = (method, tr_id, params, tr_cont, retry_on_401)
+        assert path == "/uapi/overseas-price/v1/quotations/period-rights"
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return {"rt_cd": "0", "output2": [{"cash_dvd_per_sh": "0.25"}]}, {"tr_cont": "M"}
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(client, "_request", _fake_request)
+
+    with caplog.at_level(logging.WARNING):
+        rows = client.get_overseas_period_rights(
+            ticker="AAPL",
+            start_date="20260101",
+            end_date="20260131",
+            excd="NAS",
+            max_pages=2,
+        )
+
+    assert len(rows) == 1
+    record = next(item for item in caplog.records if getattr(item, "event", "") == "period_rights_pagination_stopped")
+    assert record.market == "nasdaq"
+    assert record.stage == "period_rights_pagination"
+    assert record.ticker == "AAPL"
+    assert record.page == 1
+    assert record.exchange == "NAS"
+    assert record.err_type == "RuntimeError"
+    assert record.err == "boom"
 
 
 def test_request_refreshes_on_token_expired_msg_cd(monkeypatch) -> None:

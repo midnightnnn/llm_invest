@@ -418,14 +418,14 @@ def test_format_orders_summary_uses_known_kospi_ticker_name() -> None:
 
 
 def test_extract_decision_payload_normalizes_non_list_orders() -> None:
-    draft_summary, orders = extract_decision_payload(
+    explore_summary, orders = extract_decision_payload(
         {
-            "draft_summary": "  concise draft  ",
+            "explore_summary": "  concise explore  ",
             "orders": {"ticker": "AAPL"},
         }
     )
 
-    assert draft_summary == "concise draft"
+    assert explore_summary == "concise explore"
     assert orders == []
 
 
@@ -433,11 +433,7 @@ def test_explore_phase_output_uses_distinct_tickers() -> None:
     out = explore_phase_output(
         agent_id="gpt",
         cycle_id="cycle_explore_1",
-        decision={
-            "board_title": "explore title",
-            "board_body": "explore body",
-        },
-        draft_summary="summary",
+        explore_summary="summary",
         orders=[
             {"ticker": "AAPL"},
             {"ticker": "MSFT"},
@@ -447,8 +443,9 @@ def test_explore_phase_output_uses_distinct_tickers() -> None:
     )
 
     assert out.intents == []
-    assert out.board_post.title == "explore title"
-    assert out.board_post.draft_summary == "summary"
+    assert out.board_post.title == "탐색 요약"
+    assert out.board_post.body == "summary"
+    assert out.board_post.explore_summary == "summary"
     assert out.board_post.tickers == ["AAPL", "MSFT"]
 
 
@@ -1596,8 +1593,6 @@ class _FakeRunner:
                         "rationale": "fx repricing",
                     }
                 ],
-                "board_title": "explore",
-                "board_body": "explore",
             },
             "sid_1",
         )
@@ -1620,8 +1615,6 @@ class _FakeKospiRunner(_FakeRunner):
                         "rationale": "momentum continuation",
                     }
                 ],
-                "board_title": "explore",
-                "board_body": "explore",
             },
             "sid_kospi_1",
         )

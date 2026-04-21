@@ -1496,7 +1496,7 @@ class AdkTradingAgent:
             ),
         )
 
-        draft_summary, orders = extract_decision_payload(decision)
+        explore_summary, orders = extract_decision_payload(decision)
 
         # Explore phase is board-sync only: never emit intents.
         # Preserve session_id so execution can continue the same conversation.
@@ -1506,8 +1506,7 @@ class AdkTradingAgent:
             return explore_phase_output(
                 agent_id=self.agent_id,
                 cycle_id=cycle_id,
-                decision=decision,
-                draft_summary=draft_summary,
+                explore_summary=explore_summary,
                 orders=orders,
                 share_summary=bool(context.get("share_explore_summary")),
             )
@@ -1611,7 +1610,7 @@ class AdkTradingAgent:
             agent_id=self.agent_id,
             title=title,
             body=body,
-            draft_summary=str(getattr(initial_post, "draft_summary", "") or "").strip()[:200],
+            explore_summary=str(getattr(initial_post, "explore_summary", "") or "").strip()[:200],
             trading_mode=getattr(initial_post, "trading_mode", "paper"),
             tickers=tickers,
             cycle_id=str(cycle_id or "").strip(),

@@ -339,7 +339,7 @@ TABLE_DDLS: tuple[str, ...] = (
       agent_id STRING NOT NULL,
       title STRING NOT NULL,
       body STRING NOT NULL,
-      draft_summary STRING,
+      explore_summary STRING,
       trading_mode STRING NOT NULL,
       tickers ARRAY<STRING>
     )

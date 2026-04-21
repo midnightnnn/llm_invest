@@ -9,6 +9,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable
 
 from arena.config import Settings
+from arena.logging_utils import failure_extra
 from arena.ui.viewer_analytics import render_pnl_badge
 
 logger = logging.getLogger(__name__)
@@ -125,7 +126,18 @@ def build_viewer_data_helpers(
                 post_id=post_id,
             )
         except Exception as exc:
-            logger.warning("LLM audit prompt bundle lookup skipped: %s", str(exc))
+            logger.warning(
+                "LLM audit prompt bundle lookup skipped: %s",
+                str(exc),
+                extra=failure_extra(
+                    "llm_audit_prompt_bundle_lookup_skipped",
+                    exc,
+                    tenant_id=str(tenant_id or "").strip().lower() or "local",
+                    agent_id=str(agent_id or "").strip().lower() or None,
+                    cycle_id=str(cycle_id or "").strip() or None,
+                    post_id=str(post_id or "").strip() or None,
+                ),
+            )
             return {}
 
     def _fetch_audit_prompt_bundle_for_post_unchecked(
@@ -241,7 +253,7 @@ def build_viewer_data_helpers(
         FROM `{repo.dataset_fqn}.agent_llm_interactions`
         WHERE {' AND '.join(interaction_filters)}
         ORDER BY
-          CASE phase WHEN 'draft' THEN 1 WHEN 'execution' THEN 2 WHEN 'board' THEN 3 ELSE 9 END,
+          CASE phase WHEN 'explore' THEN 1 WHEN 'execution' THEN 2 WHEN 'board' THEN 3 ELSE 9 END,
           created_at ASC
         """
         interaction_rows = repo.fetch_rows(interaction_sql, interaction_params)

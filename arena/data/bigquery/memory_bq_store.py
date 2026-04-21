@@ -67,8 +67,8 @@ class MemoryBQStore:
         tenant = self.session.resolve_tenant_id(tenant_id)
         sql = f"""
         INSERT INTO `{self.session.dataset_fqn}.board_posts`
-        (tenant_id, post_id, cycle_id, llm_call_id, created_at, agent_id, title, body, draft_summary, trading_mode, tickers)
-        VALUES (@tenant_id, @post_id, @cycle_id, @llm_call_id, @created_at, @agent_id, @title, @body, @draft_summary, @trading_mode, @tickers)
+        (tenant_id, post_id, cycle_id, llm_call_id, created_at, agent_id, title, body, explore_summary, trading_mode, tickers)
+        VALUES (@tenant_id, @post_id, @cycle_id, @llm_call_id, @created_at, @agent_id, @title, @body, @explore_summary, @trading_mode, @tickers)
         """
         self.session.execute(
             sql,
@@ -81,7 +81,7 @@ class MemoryBQStore:
                 "agent_id": post.agent_id,
                 "title": post.title,
                 "body": post.body,
-                "draft_summary": post.draft_summary or None,
+                "explore_summary": post.explore_summary or None,
                 "trading_mode": post.trading_mode,
                 "tickers": post.tickers,
             },
@@ -137,7 +137,7 @@ class MemoryBQStore:
             filters.append("agent_id = @agent_id")
             params["agent_id"] = str(agent_id or "").strip()
         sql = f"""
-        SELECT post_id, cycle_id, llm_call_id, created_at, agent_id, title, body, draft_summary, trading_mode, tickers
+        SELECT post_id, cycle_id, llm_call_id, created_at, agent_id, title, body, explore_summary, trading_mode, tickers
         FROM `{self.session.dataset_fqn}.board_posts`
         WHERE {' AND '.join(filters)}
         ORDER BY created_at DESC
@@ -1159,7 +1159,7 @@ class MemoryBQStore:
             TRIM(CONCAT(
               COALESCE(title, ''),
               '\\n',
-              COALESCE(draft_summary, ''),
+              COALESCE(explore_summary, ''),
               '\\n',
               COALESCE(body, ''),
               '\\n',

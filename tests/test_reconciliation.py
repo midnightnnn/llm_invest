@@ -201,6 +201,28 @@ def _settings() -> Settings:
     )
 
 
+def test_cash_event_coverage_summary_logs_structured_failure(caplog) -> None:
+    class BrokenCashRepo(_FakeRepo):
+        def broker_cash_events_since(self, *, since, tenant_id=None):
+            _ = (since, tenant_id)
+            raise RuntimeError("coverage boom")
+
+    service = StateReconciliationService(settings=_settings(), repo=BrokenCashRepo())
+
+    with caplog.at_level("WARNING"):
+        summary = service._cash_event_coverage_summary(
+            since=datetime(2026, 3, 12, 1, 0, tzinfo=timezone.utc),
+            tenant_id="midnightnnn",
+        )
+
+    assert summary["cash_event_load_error"] == "coverage boom"
+    record = next(item for item in caplog.records if getattr(item, "event", "") == "broker_cash_coverage_load_skipped")
+    assert record.tenant_id == "midnightnnn"
+    assert record.stage == "cash_event_coverage"
+    assert record.err_type == "RuntimeError"
+    assert record.err == "coverage boom"
+
+
 def test_reconciliation_ok_with_excluded_ticker() -> None:
     repo = _FakeRepo()
     repo.snapshot = AccountSnapshot(

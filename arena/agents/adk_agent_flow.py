@@ -26,11 +26,11 @@ def execution_resume_session_id(*, phase: str, explore_session_id: str | None) -
 
 def extract_decision_payload(decision: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
     """Extracts normalized explore summary and order list from model output."""
-    draft_summary = str(decision.get("draft_summary", "")).strip()[:200]
+    explore_summary = str(decision.get("explore_summary", "")).strip()[:200]
     orders = decision.get("orders", [])
     if not isinstance(orders, list):
         orders = []
-    return draft_summary, orders
+    return explore_summary, orders
 
 
 def mentioned_tickers(orders: list[dict[str, Any]]) -> list[str]:
@@ -49,21 +49,18 @@ def explore_phase_output(
     *,
     agent_id: str,
     cycle_id: str,
-    decision: dict[str, Any],
-    draft_summary: str,
+    explore_summary: str,
     orders: list[dict[str, Any]],
     share_summary: bool,
 ) -> AgentOutput:
     """Builds explore-phase output used for optional peer summary sharing."""
-    title_default = "탐색 요약" if share_summary else "내부 탐색"
-    body_default = "근거 없음" if share_summary else (draft_summary or "내부 탐색 단계")
-    board_title = str(decision.get("board_title", title_default)).strip()[:120] or title_default
-    board_body = str(decision.get("board_body", body_default)).strip()[:1800] or body_default
+    title = "탐색 요약" if share_summary else "내부 탐색"
+    body = explore_summary or ("근거 없음" if share_summary else "내부 탐색 단계")
     post = BoardPost(
         agent_id=agent_id,
-        title=board_title,
-        body=board_body,
-        draft_summary=draft_summary,
+        title=title,
+        body=body[:1800],
+        explore_summary=explore_summary,
         cycle_id=cycle_id,
         tickers=mentioned_tickers(orders),
     )

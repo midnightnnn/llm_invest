@@ -16,6 +16,7 @@ from arena.config import (
     validate_settings,
 )
 from arena.data.bq import BigQueryRepository
+from arena.logging_utils import event_extra, failure_extra
 from arena.providers.credentials import parse_model_secret_providers
 
 logger = logging.getLogger(__name__)
@@ -32,7 +33,16 @@ def _validate_or_exit(settings: Settings, **kwargs) -> None:
     try:
         validate_settings(settings, **kwargs)
     except SettingsError as exc:
-        logger.error("[red]Settings invalid[/red] %s", str(exc))
+        logger.error(
+            "[red]Settings invalid[/red] %s",
+            str(exc),
+            extra=failure_extra(
+                "settings_invalid",
+                exc,
+                tenant_id=str(os.getenv("ARENA_TENANT_ID") or "").strip().lower() or None,
+                stage="validate_settings",
+            ),
+        )
         raise SystemExit(2)
 
 
@@ -47,7 +57,16 @@ def _repo_or_exit(settings: Settings, *, tenant_id: str | None = None) -> BigQue
             tenant_id=tenant,
         )
     except DefaultCredentialsError:
-        logger.error("[red]BigQuery auth failed[/red] Application Default Credentials are missing")
+        logger.error(
+            "[red]BigQuery auth failed[/red] Application Default Credentials are missing",
+            extra=event_extra(
+                "bigquery_auth_failed",
+                tenant_id=str(tenant_id or _tenant_id() or "local").strip().lower() or "local",
+                project=settings.google_cloud_project,
+                dataset=settings.bq_dataset,
+                stage="repo_init",
+            ),
+        )
         logger.error("Run these commands first:")
         logger.error("  gcloud auth login")
         logger.error("  gcloud auth application-default login")
@@ -126,6 +145,12 @@ def _apply_shared_research_gemini(
             "[yellow]Shared research Gemini skipped[/yellow] tenant=%s source_tenant=%s reason=missing_model_secret",
             tenant,
             source_tenant,
+            extra=event_extra(
+                "shared_research_gemini_skipped",
+                tenant_id=tenant,
+                source_tenant=source_tenant,
+                reason="missing_model_secret",
+            ),
         )
         return ""
 
@@ -143,6 +168,13 @@ def _apply_shared_research_gemini(
             source_tenant,
             model_secret_name,
             str(exc),
+            extra=failure_extra(
+                "shared_research_gemini_secret_load_failed",
+                exc,
+                tenant_id=tenant,
+                source_tenant=source_tenant,
+                secret_name=model_secret_name,
+            ),
         )
         return ""
 
@@ -153,6 +185,12 @@ def _apply_shared_research_gemini(
             "[yellow]Shared research Gemini skipped[/yellow] tenant=%s source_tenant=%s reason=missing_gemini_key",
             tenant,
             source_tenant,
+            extra=event_extra(
+                "shared_research_gemini_skipped",
+                tenant_id=tenant,
+                source_tenant=source_tenant,
+                reason="missing_gemini_key",
+            ),
         )
         return ""
 
@@ -163,6 +201,12 @@ def _apply_shared_research_gemini(
         "[cyan]Shared research Gemini applied[/cyan] tenant=%s source_tenant=%s",
         tenant,
         source_tenant,
+        extra=event_extra(
+            "shared_research_gemini_applied",
+            tenant_id=tenant,
+            source_tenant=source_tenant,
+            research_gemini_source="shared_live_tenant",
+        ),
     )
     return source_tenant
 
@@ -270,7 +314,20 @@ def _append_tenant_run_status(
             detail=detail or {},
         )
     except Exception as exc:
-        logger.warning("[yellow]Tenant run status append failed[/yellow] tenant=%s err=%s", tenant, str(exc))
+        logger.warning(
+            "[yellow]Tenant run status append failed[/yellow] tenant=%s err=%s",
+            tenant,
+            str(exc),
+            extra=failure_extra(
+                "tenant_run_status_append_failed",
+                exc,
+                tenant_id=tenant,
+                run_id=run_id,
+                run_type=run_type,
+                status=status,
+                stage=stage,
+            ),
+        )
 
 
 def _append_tenant_run_status_many(
@@ -322,7 +379,15 @@ def _resolve_batch_tenants(repo: BigQueryRepository, *, fallback: str = "local")
     try:
         tenants = list(repo.list_runtime_tenants(limit=500))
     except Exception as exc:
-        logger.warning("[yellow]Failed to list runtime tenants[/yellow] err=%s", str(exc))
+        logger.warning(
+            "[yellow]Failed to list runtime tenants[/yellow] err=%s",
+            str(exc),
+            extra=failure_extra(
+                "runtime_tenant_list_failed",
+                exc,
+                fallback=fallback,
+            ),
+        )
         tenants = []
     if tenants:
         if demo_tenant and demo_tenant not in tenants:
@@ -367,6 +432,13 @@ def _partition_tenants_for_task(tenants: list[str]) -> list[str]:
         count,
         len(assigned),
         len(clean),
+        extra=event_extra(
+            "task_shard_assignment",
+            shard_index=index,
+            shard_count=count,
+            assigned_count=len(assigned),
+            tenant_count=len(clean),
+        ),
     )
     return assigned
 
@@ -399,7 +471,15 @@ def _apply_tenant_runtime_credentials(
 
     row = repo.latest_runtime_credentials(tenant_id=tenant) or {}
     if not row:
-        logger.warning("[yellow]Tenant runtime credentials not found[/yellow] tenant=%s", tenant)
+        logger.warning(
+            "[yellow]Tenant runtime credentials not found[/yellow] tenant=%s",
+            tenant,
+            extra=event_extra(
+                "tenant_runtime_credentials_not_found",
+                tenant_id=tenant,
+                stage="runtime_credentials",
+            ),
+        )
         return None
 
     kis_secret_name = str(row.get("kis_secret_name") or "").strip()
@@ -424,6 +504,13 @@ def _apply_tenant_runtime_credentials(
                 tenant,
                 model_secret_name,
                 str(exc),
+                extra=failure_extra(
+                    "tenant_model_secret_load_failed",
+                    exc,
+                    tenant_id=tenant,
+                    secret_name=model_secret_name,
+                    stage="runtime_credentials",
+                ),
             )
             payload = {}
 
@@ -438,6 +525,15 @@ def _apply_tenant_runtime_credentials(
         "yes" if bool(settings.openai_api_key) else "no",
         "yes" if bool(settings.gemini_api_key) else "no",
         "yes" if bool(settings.anthropic_api_key) else "no",
+        extra=event_extra(
+            "tenant_runtime_credentials_applied",
+            tenant_id=tenant,
+            kis_secret_name=settings.kis_secret_name or None,
+            model_secret_name=model_secret_name or None,
+            has_openai=bool(settings.openai_api_key),
+            has_gemini=bool(settings.gemini_api_key),
+            has_anthropic=bool(settings.anthropic_api_key),
+        ),
     )
     cli.apply_distribution_mode(settings)
     return row
@@ -488,7 +584,16 @@ def _build_agents(settings: Settings, repo: BigQueryRepository, *, tenant_id: st
     agents = build_adk_agents(settings, repo, tenant_id=tenant_id)
     if not agents:
         raise SystemExit("ARENA_AGENT_MODE=adk requires OPENAI_API_KEY and/or GEMINI_API_KEY and/or ANTHROPIC_API_KEY with matching ARENA_AGENT_IDS")
-    logger.info("[green]ADK agent mode[/green] active_agents=%s", ",".join([a.agent_id for a in agents]))
+    logger.info(
+        "[green]ADK agent mode[/green] active_agents=%s",
+        ",".join([a.agent_id for a in agents]),
+        extra=event_extra(
+            "adk_agent_mode",
+            tenant_id=tenant_id,
+            active_agents=[a.agent_id for a in agents],
+            agent_count=len(agents),
+        ),
+    )
     return agents
 
 
@@ -549,10 +654,28 @@ def _build_runtime(
     if live:
         if settings.kis_order_endpoint:
             broker = cli.KISHttpBroker(settings=settings)
-            logger.info("[cyan]Live broker[/cyan] mode=http-endpoint")
+            logger.info(
+                "[cyan]Live broker[/cyan] mode=http-endpoint",
+                extra=event_extra(
+                    "live_broker_selected",
+                    tenant_id=tenant,
+                    broker_mode="http-endpoint",
+                    trading_mode="live",
+                ),
+            )
         else:
             broker = cli.KISOpenTradingBroker(settings=settings)
-            logger.info("[cyan]Live broker[/cyan] mode=open-trading-api env=%s", settings.kis_env)
+            logger.info(
+                "[cyan]Live broker[/cyan] mode=open-trading-api env=%s",
+                settings.kis_env,
+                extra=event_extra(
+                    "live_broker_selected",
+                    tenant_id=tenant,
+                    broker_mode="open-trading-api",
+                    kis_env=settings.kis_env,
+                    trading_mode="live",
+                ),
+            )
     else:
         broker = cli.PaperBroker()
 

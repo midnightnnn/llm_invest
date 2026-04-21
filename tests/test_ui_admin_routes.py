@@ -1570,12 +1570,12 @@ def test_api_board_prompt_returns_prompt_bundle(monkeypatch) -> None:
                         {
                             "phase": "board",
                             "analysis_funnel": {"pending_nonheld": 1},
-                            "tool_events": [{"tool": "recommend_opportunities", "phase": "draft"}],
+                            "tool_events": [{"tool": "recommend_opportunities", "phase": "explore"}],
                             "tool_mix": {"quant": 1, "macro": 0, "sentiment": 0, "performance": 0, "context": 0, "other": 0},
                             "prompt_bundle": {
                                 "system_prompt": "system body",
                                 "phases": [
-                                    {"phase": "draft", "session_id": "sid_1", "resume_session": False, "prompt": "draft body"},
+                                    {"phase": "explore", "session_id": "sid_1", "resume_session": False, "prompt": "explore body"},
                                     {"phase": "execution", "session_id": "sid_1", "resume_session": True, "prompt": "execution body"},
                                     {"phase": "board", "session_id": "sid_1", "resume_session": True, "prompt": "board body"},
                                 ],
@@ -1602,7 +1602,7 @@ def test_api_board_prompt_returns_prompt_bundle(monkeypatch) -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["prompt_bundle"]["system_prompt"] == "system body"
-    assert payload["prompt_bundle"]["phases"][0]["prompt"] == "draft body"
+    assert payload["prompt_bundle"]["phases"][0]["prompt"] == "explore body"
     assert payload["analysis_funnel"]["pending_nonheld"] == 1
     assert payload["tool_events"][0]["tool"] == "recommend_opportunities"
 
@@ -1632,15 +1632,15 @@ def test_api_board_prompt_prefers_llm_audit_tables(monkeypatch) -> None:
             if "FROM `proj.ds.agent_llm_interactions`" in sql and "CASE phase" in sql:
                 return [
                     {
-                        "llm_call_id": "llm_draft_1",
+                        "llm_call_id": "llm_explore_1",
                         "cycle_id": "cycle_1",
                         "created_at": "2026-03-29T01:00:00Z",
                         "agent_id": "gpt",
-                        "phase": "draft",
+                        "phase": "explore",
                         "session_id": "sid_1",
                         "resume_session": False,
                         "system_prompt": "system body",
-                        "user_prompt": "draft body",
+                        "user_prompt": "explore body",
                         "available_tools_json": json.dumps([{"tool_id": "recommend_opportunities"}]),
                         "context_payload_json": json.dumps({"analysis_funnel": {"screened_only_candidates": 1}}),
                         "context_sections_json": json.dumps({"market_context": [{"ticker": "AAPL"}]}),
@@ -1665,10 +1665,10 @@ def test_api_board_prompt_prefers_llm_audit_tables(monkeypatch) -> None:
             if "FROM `proj.ds.agent_llm_tool_events`" in sql:
                 return [
                     {
-                        "llm_call_id": "llm_draft_1",
+                        "llm_call_id": "llm_explore_1",
                         "tool_event_id": "tool_1",
                         "created_at": "2026-03-29T01:01:00Z",
-                        "phase": "draft",
+                        "phase": "explore",
                         "tool_name": "recommend_opportunities",
                         "source": "builtin",
                         "args_json": json.dumps({"limit": 3}),
@@ -1697,7 +1697,7 @@ def test_api_board_prompt_prefers_llm_audit_tables(monkeypatch) -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["prompt_bundle"]["system_prompt"] == "system body"
-    assert [row["phase"] for row in payload["prompt_bundle"]["phases"]] == ["draft", "board"]
+    assert [row["phase"] for row in payload["prompt_bundle"]["phases"]] == ["explore", "board"]
     assert payload["prompt_bundle"]["phases"][0]["context_sections"]["market_context"][0]["ticker"] == "AAPL"
     assert payload["tool_events"][0]["tool"] == "recommend_opportunities"
     assert payload["analysis_funnel"]["screened_only_candidates"] == 1

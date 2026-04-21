@@ -680,17 +680,17 @@ def test_record_execution_attaches_graph_metadata_to_memory_and_vector() -> None
     assert vector_store.saved[0]["causal_chain_id"] == "chain:intent:intent_graph"
 
 
-def test_react_tool_summary_index_policy_filters_low_signal_draft() -> None:
+def test_react_tool_summary_index_policy_filters_low_signal_explore() -> None:
     repo = _FakeRepo()
     vector_store = _FakeVectorStore()
     store = MemoryStore(repo=repo, vector_store=vector_store)
 
     store.record_memory(
         "gpt",
-        "Draft tools used: 1",
+        "Explore tools used: 1",
         event_type="react_tools_summary",
         score=0.6,
-        payload={"phase": "draft", "tool_events": [{"tool": "technical_signals"}]},
+        payload={"phase": "explore", "tool_events": [{"tool": "technical_signals"}]},
     )
     store.record_memory(
         "gpt",

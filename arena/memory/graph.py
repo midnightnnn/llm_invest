@@ -347,14 +347,14 @@ def build_intent_execution_edge(intent: OrderIntent, report: ExecutionReport) ->
 def build_board_post_graph_node(value: BoardPost | dict[str, Any]) -> dict[str, Any]:
     post_id = _text(value.post_id) if isinstance(value, BoardPost) else _text(value.get("post_id"))
     title = _text(value.title) if isinstance(value, BoardPost) else _text(value.get("title"))
-    draft_summary = _text(value.draft_summary) if isinstance(value, BoardPost) else _text(value.get("draft_summary"))
+    explore_summary = _text(value.explore_summary) if isinstance(value, BoardPost) else _text(value.get("explore_summary"))
     body = _text(value.body) if isinstance(value, BoardPost) else _text(value.get("body"))
-    summary = draft_summary or title or body[:180] or None
+    summary = explore_summary or title or body[:180] or None
     tickers = list(value.tickers) if isinstance(value, BoardPost) else list(value.get("tickers") or [])
     payload = {
         "title": title,
         "body": body,
-        "draft_summary": draft_summary or None,
+        "explore_summary": explore_summary or None,
         "tickers": [_upper(token) for token in tickers if _text(token)],
     }
     return {

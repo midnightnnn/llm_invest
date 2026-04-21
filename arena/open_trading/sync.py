@@ -1223,7 +1223,8 @@ class MarketDataSyncService:
                 self.settings.kis_target_market,
                 extra=event_extra(
                     "market_sync_no_tickers",
-                    target_market=self.settings.kis_target_market,
+                    market=self.settings.kis_target_market,
+                    stage="select_tickers",
                 ),
             )
             return MarketSyncResult(inserted_rows=0, attempted_tickers=0, failed_tickers=[])
@@ -1252,6 +1253,8 @@ class MarketDataSyncService:
                 extra=failure_extra(
                     "latest_feature_date_lookup_skipped",
                     exc,
+                    market=self.settings.kis_target_market,
+                    stage="lookup_latest_feature_dates",
                     ticker_count=len(tickers),
                 ),
             )
@@ -1318,7 +1321,8 @@ class MarketDataSyncService:
                         "market_sync_ticker_failed",
                         exc,
                         ticker=ticker,
-                        target_market=self.settings.kis_target_market,
+                        market=self.settings.kis_target_market,
+                        stage="sync_ticker",
                     ),
                 )
 
@@ -1350,7 +1354,8 @@ class MarketDataSyncService:
                     extra=failure_extra(
                         "market_sync_write_failed",
                         exc,
-                        target_market=self.settings.kis_target_market,
+                        market=self.settings.kis_target_market,
+                        stage="write_market_features",
                         attempted_tickers=len(symbols),
                         failed_tickers=len(failures),
                     ),
@@ -1382,7 +1387,8 @@ class MarketDataSyncService:
                 self.settings.kis_target_market,
                 extra=event_extra(
                     "quote_sync_no_tickers",
-                    target_market=self.settings.kis_target_market,
+                    market=self.settings.kis_target_market,
+                    stage="select_tickers",
                 ),
             )
             return MarketSyncResult(inserted_rows=0, attempted_tickers=0, failed_tickers=[])
@@ -1413,6 +1419,8 @@ class MarketDataSyncService:
                 extra=failure_extra(
                     "daily_feature_lookup_skipped",
                     exc,
+                    market=self.settings.kis_target_market,
+                    stage="lookup_daily_features",
                     ticker_count=len(tickers),
                 ),
             )
@@ -1501,7 +1509,8 @@ class MarketDataSyncService:
                         "quote_sync_ticker_failed",
                         exc,
                         ticker=ticker,
-                        target_market=self.settings.kis_target_market,
+                        market=self.settings.kis_target_market,
+                        stage="sync_ticker",
                     ),
                 )
 
@@ -1532,7 +1541,8 @@ class MarketDataSyncService:
                     extra=failure_extra(
                         "quote_sync_write_failed",
                         exc,
-                        target_market=self.settings.kis_target_market,
+                        market=self.settings.kis_target_market,
+                        stage="write_quote_features",
                         attempted_tickers=len(symbols),
                         failed_tickers=len(failures),
                     ),
@@ -1765,6 +1775,8 @@ class AccountSyncService:
                     extra=failure_extra(
                         "instrument_map_load_failed",
                         exc,
+                        market=self.settings.kis_target_market,
+                        stage="load_instrument_map",
                         ticker_count=len(tickers),
                     ),
                 )

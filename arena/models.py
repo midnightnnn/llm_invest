@@ -115,7 +115,7 @@ class BoardPost(BaseModel):
     agent_id: str
     title: str
     body: str
-    draft_summary: str = ""
+    explore_summary: str = ""
     trading_mode: str = "paper"
     tickers: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=utc_now)

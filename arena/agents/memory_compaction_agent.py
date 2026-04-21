@@ -279,7 +279,7 @@ class MemoryCompactionAgent:
                 {
                     "post_id": str(row.get("post_id") or "").strip(),
                     "title": _trim_text(row.get("title"), max_len=120),
-                    "draft_summary": _trim_text(row.get("draft_summary"), max_len=180),
+                    "explore_summary": _trim_text(row.get("explore_summary"), max_len=180),
                     "body": _trim_text(row.get("body"), max_len=240),
                     "tickers": list(row.get("tickers") or [])[:6],
                 }

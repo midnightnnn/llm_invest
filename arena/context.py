@@ -1301,6 +1301,13 @@ class ContextBuilder:
                 len(expanded),
                 max_hops,
                 max_nodes,
+                extra=event_extra(
+                    "graph_expansion",
+                    seed_count=len(seed_node_ids),
+                    expanded_count=len(expanded),
+                    max_hops=max_hops,
+                    max_nodes=max_nodes,
+                ),
             )
         return expanded
 
@@ -1621,6 +1628,13 @@ class ContextBuilder:
             "[cyan]memory search[/cyan] agent=%s mode=current_state queries=%s",
             agent_id,
             [q[:80] for q in deduped],
+            extra=event_extra(
+                "memory_search",
+                agent_id=agent_id,
+                mode="current_state",
+                query_count=len(deduped),
+                queries=[q[:80] for q in deduped],
+            ),
         )
         return deduped[:3]
 
@@ -2045,6 +2059,16 @@ class ContextBuilder:
             prompt.get("candidate", 0) / prompt_total,
             prompt.get("neutral", 0) / prompt_total,
             prompt.get("trade_execution", 0),
+            extra=event_extra(
+                "memory_balance",
+                agent_id=agent_id,
+                cycle_id=str(cycle_id or "").strip() or None,
+                retrieved_held_ratio=round(retrieved.get("held", 0) / retrieved_total, 4),
+                prompt_held_ratio=round(prompt.get("held", 0) / prompt_total, 4),
+                prompt_candidate_ratio=round(prompt.get("candidate", 0) / prompt_total, 4),
+                prompt_neutral_ratio=round(prompt.get("neutral", 0) / prompt_total, 4),
+                trade_execution_count=prompt.get("trade_execution", 0),
+            ),
         )
 
     def _log_memory_access_events(
@@ -2663,6 +2687,16 @@ class ContextBuilder:
             len(graph_rows),
             len(board_rows),
             memory_event_counts,
+            extra=event_extra(
+                "context_summary",
+                agent_id=agent_id,
+                cycle_id=str(cycle_id or "").strip() or None,
+                memory_count=len(memory_rows),
+                active_thesis_count=len(active_thesis_rows),
+                graph_count=len(graph_rows),
+                board_post_count=len(board_rows),
+                memory_event_counts=memory_event_counts,
+            ),
         )
 
         board_context = ""

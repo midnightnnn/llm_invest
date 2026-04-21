@@ -710,6 +710,12 @@ def test_account_sync_overseas_logs_instrument_map_failure(caplog) -> None:
 
     assert snapshot.positions["AAPL"].exchange_code == "NASD"
     assert "instrument_map load failed" in caplog.text
+    record = next(item for item in caplog.records if getattr(item, "event", "") == "instrument_map_load_failed")
+    assert record.market == "nasdaq"
+    assert record.stage == "load_instrument_map"
+    assert record.ticker_count == 1
+    assert record.err_type == "RuntimeError"
+    assert record.err == "boom"
 
 
 def test_quote_sync_us_rows_include_native_price_and_fx() -> None:

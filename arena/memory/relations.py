@@ -384,9 +384,9 @@ def build_board_post_relation_triples(value: BoardPost | dict[str, Any]) -> list
     cycle_id = _text(value.cycle_id) if isinstance(value, BoardPost) else _text(value.get("cycle_id"))
     title = _text(value.title) if isinstance(value, BoardPost) else _text(value.get("title"))
     body = _text(value.body) if isinstance(value, BoardPost) else _text(value.get("body"))
-    draft_summary = _text(value.draft_summary) if isinstance(value, BoardPost) else _text(value.get("draft_summary"))
+    explore_summary = _text(value.explore_summary) if isinstance(value, BoardPost) else _text(value.get("explore_summary"))
     tickers = value.tickers if isinstance(value, BoardPost) else value.get("tickers")
-    evidence = _trim(" - ".join(part for part in [title, draft_summary, body] if part), max_len=360)
+    evidence = _trim(" - ".join(part for part in [title, explore_summary, body] if part), max_len=360)
     triples: list[dict[str, Any]] = []
     for ticker in _extract_structured_tickers(tickers):
         row = _make_relation_triple(

@@ -419,7 +419,7 @@ def test_memory_compaction_agent_saves_reflections_from_cycle_outputs(monkeypatc
             "post_id": "post_cycle",
             "title": "거래 아이디어",
             "body": "AAPL breakout 재진입",
-            "draft_summary": "AAPL momentum continuation",
+            "explore_summary": "AAPL momentum continuation",
             "tickers": ["AAPL"],
         }
     ]

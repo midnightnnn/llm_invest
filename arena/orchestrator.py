@@ -87,25 +87,17 @@ class ArenaOrchestrator:
         return raw
 
     def _board_context_from_posts(self, posts: list[dict[str, Any]]) -> str:
-        """Builds compact board context from same-cycle shared explore posts.
-
-        Uses ``draft_summary`` when available (agent-written concise summary).
-        Falls back to truncated body when summary is missing.
-        """
+        """Builds compact board context from same-cycle shared explore posts."""
         if not posts:
             return ""
         lines: list[str] = ["[다른 에이전트 explore 요약 — 각 에이전트가 직접 작성한 핵심 요약입니다]"]
         limit = max(1, int(self.settings.context_max_board_posts))
         for row in posts[:limit]:
+            summary = str(row.get("explore_summary") or "").strip()
+            if not summary:
+                continue
             aid = self._trim_text(row.get("agent_id"), max_len=24)
-            summary = str(row.get("draft_summary") or "").strip()
-            if summary:
-                lines.append(f"[{aid}] {summary}")
-            else:
-                # Fallback: title + truncated body for agents that omit draft_summary.
-                title = self._trim_text(row.get("title"), max_len=120)
-                body = self._trim_text(row.get("body"), max_len=400)
-                lines.append(f"[{aid}] [fallback:title+body] {title} | {body}")
+            lines.append(f"[{aid}] {summary}")
         return "\n".join(lines)
 
     @staticmethod

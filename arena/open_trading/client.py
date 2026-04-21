@@ -13,6 +13,7 @@ from typing import Any
 import requests
 
 from arena.config import Settings
+from arena.logging_utils import event_extra, failure_extra
 from arena.open_trading.exchange_codes import normalize_us_order_exchange, target_market_default_us_order_exchange
 
 logger = logging.getLogger(__name__)
@@ -67,6 +68,18 @@ class OpenTradingClient:
         """Returns the REST base URL for selected live/mock environment."""
         return PAPER_BASE_URL if self.is_demo else PROD_BASE_URL
 
+    def _event_extra(self, event: str, /, **fields: Any) -> dict[str, Any]:
+        return event_extra(event, market=self.settings.kis_target_market, **fields)
+
+    def _failure_extra(
+        self,
+        event: str,
+        exc: BaseException | None = None,
+        /,
+        **fields: Any,
+    ) -> dict[str, Any]:
+        return failure_extra(event, exc, market=self.settings.kis_target_market, **fields)
+
     def _firestore_cache(self):
         """Returns Firestore cache helper when enabled."""
         backend = (os.getenv("KIS_TOKEN_CACHE_BACKEND", "memory") or "memory").strip().lower()
@@ -85,7 +98,16 @@ class OpenTradingClient:
                 collection=collection,
             )
         except Exception as exc:
-            logger.warning("[yellow]Firestore token cache disabled[/yellow] err=%s", str(exc))
+            logger.warning(
+                "[yellow]Firestore token cache disabled[/yellow] err=%s",
+                str(exc),
+                extra=self._failure_extra(
+                    "firestore_token_cache_disabled",
+                    exc,
+                    stage="firestore_token_cache_init",
+                    cache_backend=backend,
+                ),
+            )
             self._firestore_token_cache = None
         return self._firestore_token_cache
 
@@ -152,7 +174,17 @@ class OpenTradingClient:
                     suffix,
                 )
         except Exception as exc:
-            logger.warning("[yellow]KIS secret load skipped[/yellow] reason=%s", str(exc))
+            logger.warning(
+                "[yellow]KIS secret load skipped[/yellow] reason=%s",
+                str(exc),
+                extra=self._failure_extra(
+                    "kis_secret_load_skipped",
+                    exc,
+                    stage="load_secret_payload",
+                    secret_name=secret_name,
+                    project=project,
+                ),
+            )
 
     def _credentials(self) -> tuple[str, str]:
         """Returns active app key/secret pair for current environment."""
@@ -224,7 +256,17 @@ class OpenTradingClient:
             try:
                 rec = fs_cache.get(base_url=self.base_url, app_key=app_key)
             except Exception as exc:
-                logger.warning("[yellow]Token cache read skipped[/yellow] err=%s", str(exc))
+                logger.warning(
+                    "[yellow]Token cache read skipped[/yellow] err=%s",
+                    str(exc),
+                    extra=self._failure_extra(
+                        "token_cache_read_skipped",
+                        exc,
+                        stage="token_cache_read",
+                        cache_backend="firestore",
+                        base_url=self.base_url,
+                    ),
+                )
                 rec = None
             if rec and now < rec.expires_at - timedelta(minutes=3):
                 self._access_token = rec.token
@@ -270,6 +312,15 @@ class OpenTradingClient:
                     "[yellow]KIS auth retrying[/yellow] attempt=%d sleep=%.2fs reason=network",
                     attempt + 1,
                     sleep,
+                    extra=self._failure_extra(
+                        "kis_auth_retrying",
+                        exc,
+                        stage="authenticate",
+                        path="/oauth2/tokenP",
+                        attempt=attempt + 1,
+                        sleep_seconds=round(sleep, 2),
+                        reason="network",
+                    ),
                 )
                 time.sleep(sleep)
                 continue
@@ -299,7 +350,17 @@ class OpenTradingClient:
 
                         fs_cache.set(base_url=self.base_url, app_key=app_key, record=TokenRecord(token=token, expires_at=expires_at))
                     except Exception as exc:
-                        logger.warning("[yellow]Token cache write skipped[/yellow] err=%s", str(exc))
+                        logger.warning(
+                            "[yellow]Token cache write skipped[/yellow] err=%s",
+                            str(exc),
+                            extra=self._failure_extra(
+                                "token_cache_write_skipped",
+                                exc,
+                                stage="token_cache_write",
+                                cache_backend="firestore",
+                                base_url=self.base_url,
+                            ),
+                        )
                 return
 
             last_status = response.status_code
@@ -309,7 +370,17 @@ class OpenTradingClient:
                 try:
                     rec = fs_cache.get(base_url=self.base_url, app_key=app_key)
                 except Exception as exc:
-                    logger.warning("[yellow]Token cache read skipped[/yellow] err=%s", str(exc))
+                    logger.warning(
+                        "[yellow]Token cache read skipped[/yellow] err=%s",
+                        str(exc),
+                        extra=self._failure_extra(
+                            "token_cache_read_skipped",
+                            exc,
+                            stage="token_cache_read",
+                            cache_backend="firestore",
+                            base_url=self.base_url,
+                        ),
+                    )
                     rec = None
                 if rec and now < rec.expires_at - timedelta(minutes=1):
                     self._access_token = rec.token
@@ -344,6 +415,15 @@ class OpenTradingClient:
                         sleep,
                         response.status_code,
                         err_code or "-",
+                        extra=self._event_extra(
+                            "kis_auth_retrying",
+                            stage="authenticate",
+                            path="/oauth2/tokenP",
+                            attempt=attempt + 1,
+                            sleep_seconds=round(sleep, 2),
+                            status=response.status_code,
+                            code=err_code or "-",
+                        ),
                     )
                     time.sleep(sleep)
                     continue
@@ -415,6 +495,16 @@ class OpenTradingClient:
                     path,
                     attempt + 1,
                     sleep,
+                    extra=self._failure_extra(
+                        "kis_request_retrying",
+                        exc,
+                        stage="request",
+                        path=path,
+                        tr_id=self._to_tr_id(tr_id),
+                        attempt=attempt + 1,
+                        sleep_seconds=round(sleep, 2),
+                        reason="network",
+                    ),
                 )
                 time.sleep(sleep)
                 attempt += 1
@@ -438,6 +528,15 @@ class OpenTradingClient:
                     attempt + 1,
                     token_msg_cd,
                     token_msg or "-",
+                    extra=self._event_extra(
+                        "kis_token_refreshing",
+                        stage="token_refresh",
+                        path=path,
+                        tr_id=self._to_tr_id(tr_id),
+                        attempt=attempt + 1,
+                        msg_cd=token_msg_cd,
+                        msg=token_msg or "-",
+                    ),
                 )
                 refreshed = True
                 attempt += 1
@@ -457,6 +556,15 @@ class OpenTradingClient:
                     attempt + 1,
                     sleep,
                     response.status_code,
+                    extra=self._event_extra(
+                        "kis_request_retrying",
+                        stage="request",
+                        path=path,
+                        tr_id=self._to_tr_id(tr_id),
+                        attempt=attempt + 1,
+                        sleep_seconds=round(sleep, 2),
+                        status=response.status_code,
+                    ),
                 )
                 time.sleep(sleep)
                 attempt += 1
@@ -478,6 +586,15 @@ class OpenTradingClient:
                     path,
                     attempt + 1,
                     sleep,
+                    extra=self._failure_extra(
+                        "kis_json_decode_retrying",
+                        exc,
+                        stage="response_decode",
+                        path=path,
+                        tr_id=self._to_tr_id(tr_id),
+                        attempt=attempt + 1,
+                        sleep_seconds=round(sleep, 2),
+                    ),
                 )
                 time.sleep(sleep)
                 attempt += 1
@@ -494,6 +611,15 @@ class OpenTradingClient:
                         attempt + 1,
                         str(msg_cd),
                         str(msg1) or "-",
+                        extra=self._event_extra(
+                            "kis_token_refreshing",
+                            stage="response_validation",
+                            path=path,
+                            tr_id=self._to_tr_id(tr_id),
+                            attempt=attempt + 1,
+                            msg_cd=str(msg_cd),
+                            msg=str(msg1) or "-",
+                        ),
                     )
                     refreshed = True
                     attempt += 1
@@ -609,7 +735,17 @@ class OpenTradingClient:
                     raise
                 logger.warning(
                     "[yellow]period_rights pagination stopped[/yellow] ticker=%s page=%d err=%s",
-                    symbol, page, str(exc),
+                    symbol,
+                    page,
+                    str(exc),
+                    extra=self._failure_extra(
+                        "period_rights_pagination_stopped",
+                        exc,
+                        stage="period_rights_pagination",
+                        ticker=symbol,
+                        exchange=(excd or self.settings.kis_overseas_quote_excd).strip().upper(),
+                        page=page,
+                    ),
                 )
                 break
 

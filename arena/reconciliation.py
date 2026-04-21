@@ -10,6 +10,7 @@ from typing import Any, Callable
 from uuid import uuid4
 
 from arena.config import Settings
+from arena.logging_utils import event_extra, failure_extra
 from arena.models import AccountSnapshot, utc_now
 
 logger = logging.getLogger(__name__)
@@ -562,7 +563,17 @@ class StateReconciliationService:
         try:
             rows = loader(since=since, tenant_id=tenant_id)
         except Exception as exc:
-            logger.warning("[yellow]Broker cash coverage load skipped[/yellow] tenant=%s err=%s", tenant_id, str(exc))
+            logger.warning(
+                "[yellow]Broker cash coverage load skipped[/yellow] tenant=%s err=%s",
+                tenant_id,
+                str(exc),
+                extra=failure_extra(
+                    "broker_cash_coverage_load_skipped",
+                    exc,
+                    tenant_id=tenant_id,
+                    stage="cash_event_coverage",
+                ),
+            )
             return {
                 "cash_event_count": 0,
                 "raw_cash_event_count": 0,
@@ -1041,6 +1052,15 @@ class StateReconciliationService:
                 tenant,
                 status,
                 ",".join(recoveries) or "-",
+                extra=event_extra(
+                    "reconciliation_completed",
+                    tenant_id=tenant,
+                    stage="finalize",
+                    run_id=run_id,
+                    status=status,
+                    issue_count=len(issues),
+                    recoveries=list(recoveries),
+                ),
             )
         else:
             logger.warning(
@@ -1048,6 +1068,15 @@ class StateReconciliationService:
                 tenant,
                 len(issues),
                 ",".join(recoveries) or "-",
+                extra=event_extra(
+                    "reconciliation_failed",
+                    tenant_id=tenant,
+                    stage="finalize",
+                    run_id=run_id,
+                    status=status,
+                    issue_count=len(issues),
+                    recoveries=list(recoveries),
+                ),
             )
 
         return ReconciliationResult(
@@ -1110,7 +1139,17 @@ class StateReconciliationService:
                     },
                 ))
         except Exception as exc:
-            logger.warning("[yellow]execution fx integrity check skipped[/yellow] err=%s", str(exc))
+            logger.warning(
+                "[yellow]execution fx integrity check skipped[/yellow] err=%s",
+                str(exc),
+                extra=failure_extra(
+                    "execution_fx_integrity_check_skipped",
+                    exc,
+                    tenant_id=tenant_id,
+                    stage="execution_fx_integrity",
+                    agent_count=len(agent_ids),
+                ),
+            )
 
         # 2. Price divergence: execution vs broker_trade_events (>1%)
         try:
@@ -1163,7 +1202,17 @@ class StateReconciliationService:
                     },
                 ))
         except Exception as exc:
-            logger.warning("[yellow]execution price divergence check skipped[/yellow] err=%s", str(exc))
+            logger.warning(
+                "[yellow]execution price divergence check skipped[/yellow] err=%s",
+                str(exc),
+                extra=failure_extra(
+                    "execution_price_divergence_check_skipped",
+                    exc,
+                    tenant_id=tenant_id,
+                    stage="execution_price_divergence",
+                    agent_count=len(agent_ids),
+                ),
+            )
 
         return issues
 

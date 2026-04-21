@@ -117,22 +117,25 @@ def _system_prompt(
 _EXPLORE_SHARED_FORMAT = """\
 ## explore phase 규칙
 지금은 도구 탐색과 근거 수집 단계입니다. 거래를 실행하지 마십시오.
-핵심 논리, 계획된 행동과 행동의 근거를 간결하게 요약한 draft_summary 필드를 반드시 포함해야 합니다.
-이 요약은 다른 에이전트들과 공유되므로, 게시글 전체글이 아니라 execution에 필요한 핵심만 압축해서 적으십시오.
+**중요: 서로 독립적인 도구 호출은 반드시 하나의 턴에서 병렬로 동시에 호출하십시오.**
+순차 호출은 이전 결과가 다음 호출의 입력에 필요한 경우에만 사용하십시오.
+도구를 통해 투자 판단에 필요한 정보를 탐색하십시오.
+핵심 논리, 계획된 행동과 행동의 근거를 간결하게 요약한 explore_summary 필드를 반드시 포함해야 합니다.
+이 요약은 다른 에이전트들과 공유되므로 execution에 필요한 핵심만 압축해서 적으십시오.
 
 ## 출력 형식 (반드시 이 JSON 형식을 준수)
 ```json
 {
-  "board_title": "게시판 제목",
-  "board_body": "게시판 전체글",
-  "draft_summary": "핵심 논리와 계획 요약"
+  "explore_summary": "핵심 논리와 계획 요약"
 }
 ```"""
 
 _EXPLORE_SOLO_FORMAT = """\
 ## explore phase 규칙
 지금은 도구 탐색과 근거 수집 단계입니다. 거래를 실행하지 마십시오.
-single-agent cycle이므로 이 출력은 다른 에이전트와 공유되지 않습니다.
+**중요: 서로 독립적인 도구 호출은 반드시 하나의 턴에서 병렬로 동시에 호출하십시오.**
+순차 호출은 이전 결과가 다음 호출의 입력에 필요한 경우에만 사용하십시오.
+도구를 통해 투자 판단에 필요한 정보를 탐색하십시오.
 
 ## 출력 형식 (반드시 이 JSON 형식을 준수)
 ```json
@@ -151,11 +154,12 @@ EXECUTION_FORMAT = """\
 - BUY는 예상 추가 주식 수(max(sleeve_equity * target_weight - current_position_value, 0) / price_per_share)가 최소 1 이상이 되도록 설정하십시오. 1 미만이면 해당 티커는 HOLD를 사용하십시오.
 - sleeve_state.buy_blocked가 true이거나 order_budget.max_buy_notional_krw가 0 또는 0에 가까우면 BUY를 내지 말고 SELL 또는 HOLD만 사용하십시오.
 - orders 배열에는 여러 종목의 주문을 넣을 수 있습니다. 거래가 필요 없으면 빈 배열 []로 반환하십시오.
+- 도구의 출력은 최종 판단을 대체하지 않습니다. 도구의 근거와 자신의 분석을 종합해 최적의 투자 결정을 내리십시오.
 
 ## 출력 형식 (반드시 이 JSON 형식을 준수)
 ```json
 {
-  "draft_summary": "핵심 논리와 계획 요약",
+  "explore_summary": "핵심 논리와 계획 요약",
   "orders": [
     {
       "ticker": "AAPL",
