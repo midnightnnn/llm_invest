@@ -401,6 +401,8 @@ class UIRuntime:
                 ac_entry["disabled_tools"] = [str(x).strip() for x in ac.disabled_tools if str(x).strip()]
             if ac.target_market:
                 ac_entry["target_market"] = str(ac.target_market).strip().lower()
+            if isinstance(ac.llm_params, dict) and ac.llm_params:
+                ac_entry["llm_params"] = dict(ac.llm_params)
             agents_config.append(ac_entry)
         if active_agent_ids:
             agent_ids = active_agent_ids

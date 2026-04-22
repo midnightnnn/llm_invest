@@ -17,7 +17,6 @@ from arena.agents.adk_agents import (
     _compact_tool_result_for_prompt,
     _ContextTools,
     _has_credentials,
-    _is_gemini_quota_error,
     _load_disabled_tool_ids,
     _resolve_disabled_tool_ids,
     _resolve_model,
@@ -82,19 +81,6 @@ def test_vertex_model_access_error_detects_quota_exhausted() -> None:
 def test_vertex_model_access_error_ignores_unrelated_errors() -> None:
     exc = RuntimeError("rate limit exceeded 429")
     assert _is_vertex_model_access_error(exc) is False
-
-
-def test_gemini_quota_error_detects_resource_exhausted() -> None:
-    exc = RuntimeError(
-        "google.genai.errors.ClientError: 429 RESOURCE_EXHAUSTED. "
-        "Resource exhausted. Please try again later."
-    )
-    assert _is_gemini_quota_error(exc) is True
-
-
-def test_gemini_quota_error_ignores_non_quota_errors() -> None:
-    exc = RuntimeError("invalid_argument: malformed function call schema")
-    assert _is_gemini_quota_error(exc) is False
 
 
 def test_apply_tool_schema_metadata_prefers_registry_description() -> None:
@@ -1762,6 +1748,7 @@ def test_agent_config_payload_serializes_dataclass() -> None:
         "system_prompt": "focus on risk",
         "risk_overrides": {"max_position_ratio": 0.2},
         "disabled_tools": ["save_memory"],
+        "llm_params": None,
     }
 
 

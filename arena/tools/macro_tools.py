@@ -8,13 +8,12 @@ from typing import Any
 import requests
 
 from arena.config import Settings
+from arena.tools._market_scope import MarketScope
 
 logger = logging.getLogger(__name__)
 
 _FRED_BASE = "https://api.stlouisfed.org/fred/series/observations"
 _ECOS_BASE = "https://ecos.bok.or.kr/api/KeyStatisticList"
-
-_US_MARKETS: set[str] = {"nasdaq", "nyse", "amex", "us"}
 
 # ECOS KeyStatisticList KEYSTAT_NAME -> our indicator key mapping
 _ECOS_INDICATORS: dict[str, str] = {
@@ -60,23 +59,20 @@ class MacroTools:
     def set_context(self, context: dict[str, Any]) -> None:
         self._context = context
 
+    def _scope(self) -> MarketScope:
+        return MarketScope.from_context(
+            self._context,
+            fallback=getattr(self.settings, "kis_target_market", None),
+        )
+
     def _effective_markets(self) -> set[str]:
-        if self._context:
-            tm = str(self._context.get("target_market") or "").strip().lower()
-            if tm:
-                parts = {m.strip() for m in tm.split(",") if m.strip()}
-                if parts:
-                    return parts
-        global_market = str(self.settings.kis_target_market or "").strip().lower()
-        if not global_market:
-            raise ValueError("target_market is not configured for this agent.")
-        return {m.strip() for m in global_market.split(",") if m.strip()}
+        return self._scope().as_set()
 
     def _has_us_market(self) -> bool:
-        return bool(self._effective_markets() & _US_MARKETS)
+        return self._scope().has_us
 
     def _has_kospi_market(self) -> bool:
-        return "kospi" in self._effective_markets()
+        return self._scope().has_kospi
 
     # ── FRED helpers ──
 

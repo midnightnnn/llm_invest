@@ -75,70 +75,87 @@ def _normalize_gemini_model(model_id: str) -> str:
     return token
 
 
-def _anthropic_model_tier(model_id: str) -> tuple[bool, bool]:
-    """Returns (is_opus_4_7_plus, supports_effort_param) for an Anthropic model id."""
+def _anthropic_model_tier(model_id: str) -> tuple[bool, bool, bool]:
+    """Returns (is_opus_4_7, supports_effort_param, supports_max_effort) for an Anthropic model id.
+
+    - supports_effort: Opus 4.5+, Sonnet 4.6+
+    - supports_max_effort: Opus 4.7/4.6 + Sonnet 4.6 (NOT Opus 4.5)
+    - xhigh: Opus 4.7 only (checked via is_opus_4_7)
+    """
     token = str(model_id or "").strip().lower()
     if token.startswith("anthropic/") or token.startswith("vertex_ai/"):
         token = token.split("/", 1)[1]
     is_opus_4_7 = token.startswith("claude-opus-4-7")
-    # effort param supported on Opus 4.5+ and Sonnet 4.6+
     supports_effort = (
         token.startswith("claude-opus-4-")
         or token.startswith("claude-sonnet-4-6")
     )
-    return is_opus_4_7, supports_effort
+    is_opus_4_5 = token.startswith("claude-opus-4-5")
+    supports_max_effort = supports_effort and not is_opus_4_5
+    return is_opus_4_7, supports_effort, supports_max_effort
 
 
-def _anthropic_runtime_kwargs(model_id: str) -> dict[str, Any]:
-    """Builds per-model LiteLLM runtime kwargs for Anthropic (effort, thinking).
+def _clamp_anthropic_effort(effort: str, *, is_opus_4_7: bool, supports_max: bool) -> str:
+    """Clamps user-supplied effort to the closest value the model actually supports."""
+    value = str(effort or "").strip().lower()
+    if value == "xhigh" and not is_opus_4_7:
+        return "high"
+    if value == "max" and not supports_max:
+        return "xhigh" if is_opus_4_7 else "high"
+    if value not in {"low", "medium", "high", "xhigh", "max"}:
+        return ""
+    return value
 
-    On Opus 4.7+: inject output_config={effort: xhigh} + adaptive thinking.
-    Docs note "fewer tool calls by default" — higher effort restores tool usage.
+
+def _anthropic_runtime_kwargs(model_id: str, overrides: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Builds per-model LiteLLM runtime kwargs for Anthropic (effort, thinking, sampling).
+
+    Without overrides: Opus 4.7 → effort=xhigh + adaptive thinking; others → effort=high.
+    With overrides: user-supplied effort replaces the default (clamped per-tier);
+    Opus 4.7 keeps thinking=adaptive always (budget_tokens is removed per API docs).
     """
-    is_opus_4_7, supports_effort = _anthropic_model_tier(model_id)
+    is_opus_4_7, supports_effort, supports_max = _anthropic_model_tier(model_id)
     extra: dict[str, Any] = {}
+    ov = overrides or {}
+
+    user_effort = _clamp_anthropic_effort(
+        str(ov.get("effort") or ""),
+        is_opus_4_7=is_opus_4_7,
+        supports_max=supports_max,
+    )
     if supports_effort:
-        effort_value = "xhigh" if is_opus_4_7 else "high"
-        extra["output_config"] = {"effort": effort_value}
+        default_effort = "xhigh" if is_opus_4_7 else "high"
+        extra["output_config"] = {"effort": user_effort or default_effort}
         extra["allowed_openai_params"] = ["output_config"]
+
+    # Opus 4.7 mandates adaptive thinking; budget_tokens is rejected by the API.
     if is_opus_4_7:
         extra["thinking"] = {"type": "adaptive"}
+
+    # Sampling / length — Anthropic has no top_k.
+    if (t := ov.get("temperature")) is not None:
+        extra["temperature"] = float(t)
+    if (p := ov.get("top_p")) is not None:
+        extra["top_p"] = float(p)
+    if (mx := ov.get("max_tokens")) is not None:
+        extra["max_tokens"] = int(mx)
     return extra
 
 
-def _is_gemini_quota_error(exc: Exception) -> bool:
-    """Returns True for Gemini quota/rate-limit style transient errors."""
-    text = f"{type(exc).__name__}: {exc}".strip().lower()
-    if not text:
-        return False
-    markers = [
-        "resource_exhausted",
-        "resource exhausted",
-        "429",
-        "rate limit",
-        "too many requests",
-        "quota",
-    ]
-    return any(marker in text for marker in markers)
+def _resolve_model(
+    provider: str,
+    settings: Settings,
+    *,
+    model_override: str = "",
+    llm_params: dict[str, Any] | None = None,
+) -> Any:
+    """Builds ADK model objects per provider configuration.
 
-
-def _resolve_model(provider: str, settings: Settings, *, model_override: str = "") -> Any:
-    """Builds ADK model objects per provider configuration."""
+    llm_params is provider-native (already sanitized by arena.agents.llm_params).
+    For Gemini the per-agent sampling/thinking flows through GenerateContentConfig
+    in build_agent(), not here — we only keep the model object construction here.
+    """
     key = str(provider or "").strip().lower()
-    if key == "gemini_direct":
-        model_id = _normalize_gemini_model(
-            (model_override.strip() if model_override else "")
-            or default_model_for_provider(settings, "gemini")
-        )
-        if not model_id:
-            raise ValueError("GEMINI_MODEL is required for gemini agent")
-        litellm_model = model_id if "/" in model_id else f"gemini/{model_id}"
-        kwargs: dict[str, Any] = {}
-        api_key = provider_api_key_from_settings(settings, "gemini")
-        if api_key:
-            kwargs["api_key"] = api_key
-        return LiteLlm(litellm_model, **kwargs)
-
     spec = get_provider_spec(key)
     if spec is None or not spec.supports_adk:
         raise ValueError(f"Unsupported ADK provider: {provider}")
@@ -165,7 +182,7 @@ def _resolve_model(provider: str, settings: Settings, *, model_override: str = "
                 {"location": "message", "role": "system"},
             ],
         }
-        kwargs.update(_anthropic_runtime_kwargs(model_id))
+        kwargs.update(_anthropic_runtime_kwargs(model_id, llm_params))
         if settings.anthropic_use_vertexai:
             model_id = _normalize_vertex_anthropic_model(model_id)
             if settings.google_cloud_project and not os.getenv("VERTEX_PROJECT"):
@@ -199,6 +216,13 @@ def _resolve_model(provider: str, settings: Settings, *, model_override: str = "
         base_url = provider_base_url_from_settings(settings, spec.provider_id)
         if base_url:
             kwargs["base_url"] = base_url
+        ov = llm_params or {}
+        if (eff := ov.get("reasoning_effort")):
+            kwargs["reasoning_effort"] = str(eff)
+        if (vb := ov.get("verbosity")):
+            kwargs["verbosity"] = str(vb)
+        if (mx := ov.get("max_completion_tokens")) is not None:
+            kwargs["max_completion_tokens"] = int(mx)
         return LiteLlm(model_id, **kwargs)
 
     raise ValueError(

@@ -574,10 +574,29 @@ def test_latest_opportunity_ranker_scores_reads_fresh_latest_batch() -> None:
     assert "s.bucket IN UNNEST(@buckets)" in sql
     assert "profile_rn <= @per_profile_limit" in sql
     assert "global_rn <= @limit" in sql
+    assert "PARTITION BY market" in sql
+    assert "s.market = b.market" in sql
     assert params["max_age_hours"] == 12
     assert params["buckets"] == ["momentum"]
     assert params["per_profile_limit"] == 2
     assert params["max_return_rows"] == 19
+    assert "markets" not in params
+
+
+def test_latest_opportunity_ranker_scores_filters_by_market() -> None:
+    store = _make_market_store([[{"ticker": "AAPL", "market": "us"}]])
+
+    rows = store.latest_opportunity_ranker_scores(
+        markets=["us"],
+        limit=5,
+        max_age_hours=6,
+    )
+
+    assert rows[0]["ticker"] == "AAPL"
+    sql, params = store.session.call_pairs[-1]
+    assert "s.market IN UNNEST(@markets)" in sql
+    assert "market IN UNNEST(@markets)" in sql
+    assert params["markets"] == ["us"]
 
 
 def test_insert_opportunity_ranker_scores_latest_appends_json_rows() -> None:

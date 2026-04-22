@@ -535,7 +535,7 @@ class OpenTradingClient:
                         tr_id=self._to_tr_id(tr_id),
                         attempt=attempt + 1,
                         msg_cd=token_msg_cd,
-                        msg=token_msg or "-",
+                        kis_msg=token_msg or "-",
                     ),
                 )
                 refreshed = True
@@ -618,7 +618,7 @@ class OpenTradingClient:
                             tr_id=self._to_tr_id(tr_id),
                             attempt=attempt + 1,
                             msg_cd=str(msg_cd),
-                            msg=str(msg1) or "-",
+                            kis_msg=str(msg1) or "-",
                         ),
                     )
                     refreshed = True

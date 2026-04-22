@@ -15,11 +15,8 @@ _forecast_built_dates: set[str] = set()
 
 from arena.config import Settings
 from arena.data.bq import BigQueryRepository
-from arena.market_sources import (
-    KOSPI_MARKETS as _KOSPI_MARKETS,
-    US_MARKETS as _US_MARKETS,
-    live_market_sources_for_markets,
-)
+from arena.market_sources import live_market_sources_for_markets
+from arena.tools._market_scope import MarketScope, MarketScopeError
 from arena.market_feature_normalization import (
     daily_history_sources,
     normalize_market_feature_rows,
@@ -202,31 +199,35 @@ class QuantTools:
             self._cached_universe = None
         self._discovery_cache = None
 
+    def _scope(self) -> MarketScope:
+        """Builds a MarketScope from the current cycle context."""
+        return MarketScope.from_context(
+            self._context,
+            fallback=getattr(self.settings, "kis_target_market", None),
+        )
+
     def _effective_market(self) -> str:
-        """Returns the calling agent's target market. Raises if not configured."""
+        """Returns the calling agent's raw target_market string (comma-list ok)."""
         if self._context:
             tm = str(self._context.get("target_market") or "").strip().lower()
             if tm:
                 return tm
-        # No per-agent market — require explicit configuration
         global_market = str(self.settings.kis_target_market or "").strip().lower()
         if not global_market:
-            raise ValueError("target_market is not configured for this agent. Set target_market in agent config.")
+            raise MarketScopeError(
+                "target_market is not configured for this agent. "
+                "Set target_market in agent config."
+            )
         return global_market
 
     def _effective_markets(self) -> set[str]:
-        """Returns the set of markets the calling agent targets (supports comma-separated multi-market)."""
-        market = self._effective_market()  # raises if not configured
-        parts = {m.strip().lower() for m in market.split(",") if m.strip()}
-        if not parts:
-            raise ValueError("target_market is not configured for this agent. Set target_market in agent config.")
-        return parts
+        return self._scope().as_set()
 
     def _has_us_market(self) -> bool:
-        return bool(self._effective_markets() & _US_MARKETS)
+        return self._scope().has_us
 
     def _has_kospi_market(self) -> bool:
-        return bool(self._effective_markets() & _KOSPI_MARKETS)
+        return self._scope().has_kospi
 
     def _us_fundamentals_exchange_candidates(self, requested_exchange: object) -> list[str]:
         requested = str(requested_exchange or "").strip().upper()
@@ -557,6 +558,17 @@ class QuantTools:
         if not allowed:
             return []
         return [t for t in tokens if t in allowed]
+
+    def _partition_tickers_by_scope(
+        self, tickers: list[str] | None
+    ) -> tuple[list[str], list[dict[str, str]]]:
+        """Splits input tickers into (in_scope, excluded_with_reasons) via MarketScope."""
+        try:
+            scope = self._scope()
+        except MarketScopeError:
+            tokens = [str(t).strip().upper() for t in (tickers or []) if str(t).strip()]
+            return list(dict.fromkeys(tokens)), []
+        return scope.filter_tickers(tickers or [])
 
     def _forecast_mode(self, override: str | None = None) -> str:
         default_mode = str(self.settings.forecast_mode or "all").strip().lower() or "all"
@@ -1089,6 +1101,8 @@ class QuantTools:
             "max_score_age_hours": max_score_age_hours,
             "warnings": [],
         }
+        scope = self._scope()
+        market_filter = scope.row_market_filter()
         bucket_tokens = [
             str(bucket or "").strip().lower()
             for bucket in (buckets or [])
@@ -1105,6 +1119,7 @@ class QuantTools:
             "global_limit": global_limit,
             "per_profile_limit": per_profile_limit,
             "requested_buckets": bucket_tokens,
+            "markets": market_filter,
         }
         learned_rows: list[dict[str, Any]] = []
         loader = getattr(self.repo, "latest_opportunity_ranker_scores", None)
@@ -1114,6 +1129,7 @@ class QuantTools:
                     limit=global_limit,
                     max_age_hours=max(1, min(int(max_score_age_hours), 24 * 14)),
                     buckets=bucket_tokens or None,
+                    markets=market_filter or None,
                     per_profile_limit=per_profile_limit,
                 ) or []
             except Exception as exc:
@@ -1171,14 +1187,26 @@ class QuantTools:
         if strategy not in {"sharpe", "risk_parity", "forecast"}:
             return {"error": f"unknown strategy '{strategy}'; choose sharpe, risk_parity, or forecast"}
 
+        in_scope, excluded_scope = self._partition_tickers_by_scope(tickers or [])
+        if not in_scope:
+            return {
+                "status": "unusable",
+                "strategy_requested": strategy,
+                "error": "all requested tickers are outside the agent market scope",
+                "excluded_from_market_scope": excluded_scope,
+            }
+
         logger.info(
-            "[cyan]TOOL[/cyan] optimize_portfolio strategy=%s tickers=%d lookback_days=%d",
+            "[cyan]TOOL[/cyan] optimize_portfolio strategy=%s tickers=%d lookback_days=%d excluded_scope=%d",
             strategy,
-            len(tickers),
+            len(in_scope),
             int(lookback_days),
+            len(excluded_scope),
         )
 
-        keep, rets, quality = self._load_aligned_returns(tickers, lookback_days=lookback_days)
+        keep, rets, quality = self._load_aligned_returns(in_scope, lookback_days=lookback_days)
+        if excluded_scope:
+            quality["excluded_from_market_scope"] = excluded_scope
 
         if quality["status"] == "unusable":
             return {
@@ -1345,8 +1373,18 @@ class QuantTools:
         mode = self._forecast_mode(forecast_mode)
         table_id = str(self.settings.forecast_table or "").strip() or None
         filt: list[str] | None = None
+        excluded_scope: list[dict[str, str]] = []
         if tickers is not None:
-            filt = self._normalize_tickers(tickers)
+            in_scope, excluded_scope = self._partition_tickers_by_scope(tickers)
+            if excluded_scope:
+                logger.warning(
+                    "[yellow]forecast_returns dropped out-of-market tickers[/yellow] excluded=%d sample=%s",
+                    len(excluded_scope),
+                    excluded_scope[:5],
+                )
+            if not in_scope:
+                return []
+            filt = self._normalize_tickers(in_scope)
             if not filt:
                 return []
         else:
@@ -1354,9 +1392,10 @@ class QuantTools:
             if default_tickers:
                 filt = default_tickers
         logger.info(
-            "[cyan]TOOL[/cyan] forecast_returns tickers=%s mode=%s",
+            "[cyan]TOOL[/cyan] forecast_returns tickers=%s mode=%s excluded_scope=%d",
             str(len(filt)) if filt else "all",
             mode,
+            len(excluded_scope),
         )
         rows = self.repo.get_predicted_returns(
             tickers=filt,
@@ -1624,35 +1663,47 @@ class QuantTools:
         lookback_days: int = 180,
     ) -> dict[str, Any]:
         """Calculates RSI/MACD/Bollinger/SMA signals for one or more tickers."""
-        tokens: list[str] = []
+        raw_tokens: list[str] = []
 
         if tickers is not None:
-            tokens.extend(self._normalize_tickers(tickers, restrict_to_universe=False))
+            raw_tokens.extend(self._normalize_tickers(tickers, restrict_to_universe=False))
         elif str(ticker or "").strip():
-            tokens.append(str(ticker).strip().upper())
+            raw_tokens.append(str(ticker).strip().upper())
         elif bool(getattr(self.settings, "autonomy_tool_default_candidates_enabled", False)):
-            tokens.extend(self._analysis_default_tickers(limit=10))
+            raw_tokens.extend(self._analysis_default_tickers(limit=10))
 
-        tokens = list(dict.fromkeys([t for t in tokens if t]))
-        if not tokens:
+        raw_tokens = list(dict.fromkeys([t for t in raw_tokens if t]))
+        if not raw_tokens:
             return {"error": "ticker or tickers is required"}
 
+        tokens, excluded = self._partition_tickers_by_scope(raw_tokens)
+        if not tokens:
+            return {
+                "error": "all requested tickers are outside the agent market scope",
+                "tickers": raw_tokens,
+                "excluded_from_market_scope": excluded,
+            }
+
         lookback = max(60, min(int(lookback_days), 600))
-        if len(tokens) == 1:
+        if len(tokens) == 1 and not excluded:
             return self._technical_signals_one(tokens[0], lookback_days=lookback)
 
         logger.info(
-            "[cyan]TOOL[/cyan] technical_signals tickers=%d lookback_days=%d",
+            "[cyan]TOOL[/cyan] technical_signals tickers=%d lookback_days=%d excluded_scope=%d",
             len(tokens),
             lookback,
+            len(excluded),
         )
         rows = [self._technical_signals_one(token, lookback_days=lookback) for token in tokens]
         self._log_tool_result("technical_signals", rows, key_fields=["ticker", "rsi_state", "trend_state"])
-        return {
+        result: dict[str, Any] = {
             "tickers": tokens,
             "rows": rows,
             "count": len(rows),
         }
+        if excluded:
+            result["excluded_from_market_scope"] = excluded
+        return result
 
     def sector_summary(self, period: str = "20d") -> list[dict]:
         """Summarizes average return/volatility by sector from latest features."""
@@ -1719,9 +1770,17 @@ class QuantTools:
         if not requested:
             return {"error": "no tickers provided", "rows": []}
 
+        in_scope, excluded_scope = self._partition_tickers_by_scope(requested)
+        if not in_scope:
+            return {
+                "error": "all requested tickers are outside the agent market scope",
+                "rows": [],
+                "excluded_from_market_scope": excluded_scope,
+            }
+
         allowed = set(self._target_universe())
-        eligible = [t for t in requested if t in allowed] if allowed else requested
-        excluded = [t for t in requested if t not in set(eligible)]
+        eligible = [t for t in in_scope if t in allowed] if allowed else in_scope
+        excluded = [t for t in in_scope if t not in set(eligible)]
         eligible = eligible[: max(1, min(int(max_items), 50))]
 
         # Split tickers by market type
@@ -1815,13 +1874,16 @@ class QuantTools:
             except Exception as exc:
                 errors.append({"ticker": ticker, "error": str(exc)[:240]})
 
-        return {
+        result: dict[str, Any] = {
             "requested": requested,
             "eligible": eligible,
             "excluded": excluded,
             "rows": rows,
             "errors": errors,
         }
+        if excluded_scope:
+            result["excluded_from_market_scope"] = excluded_scope
+        return result
 
     def _fetch_fred_latest(self, series_id: str) -> tuple[str, float | None]:
         """Fetches the latest valid observation from FRED API."""
@@ -1856,11 +1918,11 @@ class QuantTools:
         lookback_days: int = 30,
     ) -> dict[str, Any]:
         """주요 시장지수, 원자재, 채권 수익률 요약을 반환한다. 에이전트의 타겟 마켓에 따라 적절한 지수를 선택한다."""
-        markets = self._effective_markets()
-        has_us = bool(markets & _US_MARKETS)
-        has_kospi = bool(markets & _KOSPI_MARKETS)
+        scope = self._scope()
+        has_us = scope.has_us
+        has_kospi = scope.has_kospi
 
-        _VALID_SYMS = set(_INDEX_MAP) | set(_FRED_INDICATORS)
+        _VALID_SYMS = set(_INDEX_MAP) | set(_FRED_INDICATORS) | set(_OVERSEAS_COMMODITY_ETFS)
 
         if indices is None:
             targets: list[str] = []
@@ -1875,6 +1937,10 @@ class QuantTools:
             for sym in _FRED_INDICATORS:
                 if sym in _FRED_US_INDEX_SYMS and not has_us:
                     continue
+                targets.append(sym)
+            # Gold (via GLD ETF) is a global commodity — include for all agents,
+            # same as WTI/US10Y/US30Y from FRED which are market-agnostic macros.
+            for sym in _OVERSEAS_COMMODITY_ETFS:
                 targets.append(sym)
         else:
             raw = [str(s).strip().upper() for s in indices if str(s).strip()]
@@ -1902,7 +1968,7 @@ class QuantTools:
         targets = targets[:12]
 
         lookback = max(5, min(int(lookback_days), 120))
-        logger.info("[cyan]TOOL[/cyan] index_snapshot indices=%s lookback=%d markets=%s", ",".join(targets), lookback, ",".join(sorted(markets)))
+        logger.info("[cyan]TOOL[/cyan] index_snapshot indices=%s lookback=%d markets=%s", ",".join(targets), lookback, ",".join(sorted(scope.markets)))
 
         from datetime import datetime, timedelta
 
@@ -1914,7 +1980,7 @@ class QuantTools:
 
         # Stock indices via KIS API
         for sym in targets:
-            if sym in _FRED_INDICATORS:
+            if sym in _FRED_INDICATORS or sym in _OVERSEAS_COMMODITY_ETFS:
                 continue
             info = _INDEX_MAP.get(sym)
             label = info[1] if info else sym
@@ -1959,7 +2025,7 @@ class QuantTools:
 
         # Indices, commodities & bonds via FRED API
         _FRED_INDEX_SYMS = {"SPX", "COMP", "DJI"}
-        _FRED_COMMODITY_SYMS = {"WTI", "GOLD"}
+        _FRED_COMMODITY_SYMS = {"WTI"}
         for sym in targets:
             if sym not in _FRED_INDICATORS:
                 continue
@@ -1982,6 +2048,35 @@ class QuantTools:
                 })
             else:
                 errors.append({"symbol": sym, "error": "FRED data unavailable"})
+
+        # Overseas commodity ETFs via KIS overseas price API (gold via GLD, etc.)
+        for sym in targets:
+            if sym not in _OVERSEAS_COMMODITY_ETFS:
+                continue
+            etf_ticker, label, unit = _OVERSEAS_COMMODITY_ETFS[sym]
+            try:
+                exchange, raw = self._fetch_us_fundamental_snapshot(
+                    client=client,
+                    ticker=etf_ticker,
+                    requested_exchange=None,
+                )
+            except Exception as exc:
+                errors.append({"symbol": sym, "error": f"{etf_ticker}: {str(exc)[:160]}"})
+                continue
+            last = _to_float(raw.get("last"), default=None)
+            if last is None or last <= 0:
+                errors.append({"symbol": sym, "error": f"{etf_ticker}: price unavailable"})
+                continue
+            results.append({
+                "symbol": sym,
+                "name": label,
+                "proxy_ticker": etf_ticker,
+                "exchange": exchange or "",
+                "value": round(last, 2),
+                "date": str(raw.get("xymd") or "").strip(),
+                "unit": unit,
+                "type": "commodity",
+            })
 
         return {
             "indices": results,
@@ -2008,8 +2103,15 @@ _FRED_INDICATORS: dict[str, tuple[str, str, str]] = {
     "COMP": ("NASDAQCOM", "NASDAQ Composite", "pt"),
     "DJI": ("DJIA", "Dow Jones Industrial", "pt"),
     # Commodities & bonds
+    # FRED gold series (GOLDPMGBD228NLBM / GOLDAMGBD228NLBM) discontinued in 2015.
+    # Gold is sourced via GLD ETF through KIS overseas API — see _OVERSEAS_COMMODITY_ETFS.
     "WTI": ("DCOILWTICO", "Crude Oil WTI", "$/bbl"),
-    "GOLD": ("GOLDPMGBD228NLBM", "Gold London PM Fix", "$/oz"),
     "US10Y": ("DGS10", "US 10Y Treasury Yield", "%"),
     "US30Y": ("DGS30", "US 30Y Treasury Yield", "%"),
+}
+
+# US commodity proxies sourced via KIS overseas price API (ETFs that track spot).
+# (etf_ticker, display_name, unit)
+_OVERSEAS_COMMODITY_ETFS: dict[str, tuple[str, str, str]] = {
+    "GOLD": ("GLD", "SPDR Gold Shares (ETF, tracks gold spot)", "$/share"),
 }

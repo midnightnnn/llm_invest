@@ -11,6 +11,7 @@ import requests
 
 from arena.config import Settings
 from arena.open_trading.client import OpenTradingClient
+from arena.tools._market_scope import MarketScope
 
 logger = logging.getLogger(__name__)
 
@@ -37,9 +38,6 @@ def _safe_get(url: str, *, headers: dict | None = None, timeout: int = 10) -> re
         return None
 
 
-_US_MARKETS: set[str] = {"nasdaq", "nyse", "amex", "us"}
-
-
 @dataclass(slots=True)
 class SentimentTools:
     """External unstructured data tools for LLM-driven sentiment analysis."""
@@ -54,24 +52,20 @@ class SentimentTools:
         """Stores current cycle context for market-aware tool filtering."""
         self._context = context
 
+    def _scope(self) -> MarketScope:
+        return MarketScope.from_context(
+            self._context,
+            fallback=getattr(self.settings, "kis_target_market", None),
+        )
+
     def _effective_markets(self) -> set[str]:
-        """Returns the set of markets the calling agent targets. Raises if not configured."""
-        if self._context:
-            tm = str(self._context.get("target_market") or "").strip().lower()
-            if tm:
-                parts = {m.strip() for m in tm.split(",") if m.strip()}
-                if parts:
-                    return parts
-        global_market = str(self.settings.kis_target_market or "").strip().lower()
-        if not global_market:
-            raise ValueError("target_market is not configured for this agent. Set target_market in agent config.")
-        return {m.strip() for m in global_market.split(",") if m.strip()}
+        return self._scope().as_set()
 
     def _has_us_market(self) -> bool:
-        return bool(self._effective_markets() & _US_MARKETS)
+        return self._scope().has_us
 
     def _has_kospi_market(self) -> bool:
-        return bool(self._effective_markets() & {"kospi", "kosdaq"})
+        return self._scope().has_kospi
 
     def _analysis_default_ticker(self) -> str:
         """Resolves one self-discovered or portfolio ticker for single-name analysis tools."""

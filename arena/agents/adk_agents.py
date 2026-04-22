@@ -27,7 +27,6 @@ from arena.agents.adk_agent_flow import (
 from arena.agents.adk_context_tools import _ContextTools
 from arena.agents.adk_models import (
     _has_credentials,
-    _is_gemini_quota_error,
     _normalize_gemini_model,
     _resolve_model,
 )
@@ -406,8 +405,6 @@ class _ADKDecisionRunner:
         if self._agent_config and str(self._agent_config.model or "").strip():
             return str(self._agent_config.model or "").strip()
         provider_token = str(self.provider or "").strip().lower()
-        if provider_token == "gemini_direct":
-            provider_token = "gemini"
         spec = get_provider_spec(provider_token)
         provider_id = spec.provider_id if spec is not None else provider_token
         return default_model_for_provider(self.settings, provider_id)
@@ -1329,7 +1326,6 @@ class AdkTradingAgent:
         self.sleeve_capital_krw = settings.agent_capitals.get(agent_id, settings.sleeve_capital_krw)
         self.default_universe = settings.default_universe
         self._runner_settings = settings
-        self._gemini_direct_fallback_used = False
         self._explore_session_id: str | None = None
         self._execution_session_id: str | None = None
         self._board_ticker_names: dict[str, str] = {}
@@ -1346,39 +1342,6 @@ class AdkTradingAgent:
             tenant_id=self.tenant_id,
             agent_config=self.agent_config,
         )
-
-    def _fallback_gemini_to_direct(self, exc: Exception) -> bool:
-        """Switches Gemini to direct API when Vertex path is rate-limited."""
-        if self.provider.strip().lower() not in {"gemini", "google"}:
-            return False
-        if self._gemini_direct_fallback_used:
-            return False
-        if not _is_gemini_quota_error(exc):
-            return False
-        if not self.settings.gemini_api_key:
-            logger.warning(
-                "[yellow]Gemini direct fallback skipped[/yellow] agent=%s reason=no_gemini_api_key",
-                self.agent_id,
-            )
-            return False
-        try:
-            self.provider = "gemini_direct"
-            self._gemini_direct_fallback_used = True
-            self.runner = self._build_runner(settings=self._runner_settings)
-        except Exception as fallback_exc:
-            logger.warning(
-                "[yellow]Gemini direct fallback init failed[/yellow] agent=%s err=%s",
-                self.agent_id,
-                str(fallback_exc),
-            )
-            return False
-        logger.warning(
-            "[yellow]Gemini quota exhausted, switching to direct Gemini API[/yellow] agent=%s model=%s err=%s",
-            self.agent_id,
-            self.settings.gemini_model,
-            str(exc),
-        )
-        return True
 
     def generate(self, context: dict[str, Any]) -> AgentOutput:
         """Generates one board post and optional trade intent."""
@@ -1424,8 +1387,6 @@ class AdkTradingAgent:
                 break
             except Exception as exc:
                 last_exc = exc
-                if self._fallback_gemini_to_direct(exc):
-                    continue
                 llm_call_lookup = getattr(self.runner, "llm_call_id_for_phase", None)
                 llm_call_id = llm_call_lookup(phase) if callable(llm_call_lookup) else ""
                 token_usage = getattr(self.runner, "_last_token_usage", None)

@@ -71,7 +71,30 @@ def test_validate_settings_requires_api_key_for_registry_backed_adk_provider() -
     with pytest.raises(SettingsError) as exc_info:
         validate_settings(settings, require_llm=True)
 
-    assert "API key is required for agent_ids including 'deepseek'" in str(exc_info.value)
+    assert "No agents have usable credentials" in str(exc_info.value)
+
+
+def test_validate_settings_skips_missing_claude_credentials_gracefully(caplog) -> None:
+    """Tenants that inherit a global ARENA_AGENT_IDS but lack a provider's key
+    should have that agent silently dropped (with a warning), not fail the cycle."""
+    import logging
+
+    settings = load_settings()
+    settings.agent_ids = ["gpt", "claude"]
+    settings.agent_configs = {}
+    settings.openai_api_key = "test-openai-key"
+    settings.gemini_api_key = ""
+    settings.anthropic_api_key = ""
+    settings.anthropic_use_vertexai = False
+    settings.research_enabled = False
+
+    with caplog.at_level(logging.WARNING, logger="arena.config"):
+        validate_settings(settings, require_llm=True)
+
+    assert "claude" not in settings.agent_ids
+    assert settings.agent_ids == ["gpt"]
+    assert any("Agent skipped: no credentials" in r.message and "claude" in r.message
+               for r in caplog.records)
 
 
 def test_load_settings_paper_only_forces_demo_and_live(monkeypatch) -> None:

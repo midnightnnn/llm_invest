@@ -114,6 +114,8 @@ def register_admin_settings_routes(app: FastAPI, *, deps: AdminSettingsRouteDeps
                 db_entry["risk_policy"] = entry["risk_policy"]
             if isinstance(entry.get("disabled_tools"), list):
                 db_entry["disabled_tools"] = [str(x).strip() for x in entry["disabled_tools"] if str(x).strip()]
+            if isinstance(entry.get("llm_params"), dict) and entry["llm_params"]:
+                db_entry["llm_params"] = entry["llm_params"]
             agents_config_for_db.append(db_entry)
         return agents_config_for_db
 
@@ -361,6 +363,7 @@ def register_admin_settings_routes(app: FastAPI, *, deps: AdminSettingsRouteDeps
         system_prompt = str(agent_data.get("system_prompt") if "system_prompt" in agent_data else current.get("system_prompt") or "").strip()
         risk_policy = agent_data.get("risk_policy") if "risk_policy" in agent_data else current.get("risk_policy")
         disabled_tools_raw = agent_data.get("disabled_tools") if "disabled_tools" in agent_data else current.get("disabled_tools")
+        llm_params_raw = agent_data.get("llm_params") if "llm_params" in agent_data else current.get("llm_params")
 
         entry: dict[str, Any] = {
             "id": aid,
@@ -376,6 +379,11 @@ def register_admin_settings_routes(app: FastAPI, *, deps: AdminSettingsRouteDeps
             entry["risk_policy"] = risk_policy
         if isinstance(disabled_tools_raw, list):
             entry["disabled_tools"] = [str(x).strip() for x in disabled_tools_raw if str(x).strip()]
+        if isinstance(llm_params_raw, dict) and llm_params_raw:
+            from arena.agents.llm_params import sanitize_llm_params
+            cleaned = sanitize_llm_params(provider, llm_params_raw)
+            if cleaned:
+                entry["llm_params"] = cleaned
 
         raw_api_key = str(agent_data.get("api_key") or "").strip()
         return aid, provider, entry, raw_api_key

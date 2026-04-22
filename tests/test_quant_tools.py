@@ -516,13 +516,14 @@ def test_recommend_opportunities_uses_precomputed_learned_scores() -> None:
             super().__init__()
             self.last_ranker_kwargs = None
 
-        def latest_opportunity_ranker_scores(self, *, limit=50, max_age_hours=30, tickers=None, profiles=None, buckets=None, per_profile_limit=None):
+        def latest_opportunity_ranker_scores(self, *, limit=50, max_age_hours=30, tickers=None, profiles=None, buckets=None, markets=None, per_profile_limit=None):
             self.last_ranker_kwargs = {
                 "limit": limit,
                 "max_age_hours": max_age_hours,
                 "tickers": tickers,
                 "profiles": profiles,
                 "buckets": buckets,
+                "markets": markets,
                 "per_profile_limit": per_profile_limit,
             }
             return [
@@ -532,6 +533,7 @@ def test_recommend_opportunities_uses_precomputed_learned_scores() -> None:
                     "ranker_version": "opportunity_ranker_20260417_test",
                     "score_source": "learned",
                     "ticker": "MSFT",
+                    "market": "us",
                     "profile": "defensive",
                     "bucket": "defensive",
                     "recommendation_rank": 1,
@@ -559,10 +561,12 @@ def test_recommend_opportunities_uses_precomputed_learned_scores() -> None:
     assert out["recommendations"][0]["predicted_excess_return_20d"] == 0.032
     assert repo.last_ranker_kwargs["limit"] == 3
     assert repo.last_ranker_kwargs["per_profile_limit"] == 3
+    assert repo.last_ranker_kwargs["markets"] == ["us"]
     assert out["diagnostics"]["selection_scope"]["mode"] == "ranked_union"
     assert out["diagnostics"]["selection_scope"]["global_limit"] == 3
     assert out["diagnostics"]["selection_scope"]["per_profile_limit"] == 3
     assert out["diagnostics"]["selection_scope"]["loaded_rows"] == 1
+    assert out["diagnostics"]["selection_scope"]["markets"] == ["us"]
 
 
 def test_recommend_opportunities_uses_bucket_filter_with_profile_context() -> None:
@@ -571,13 +575,14 @@ def test_recommend_opportunities_uses_bucket_filter_with_profile_context() -> No
             super().__init__()
             self.last_ranker_kwargs = None
 
-        def latest_opportunity_ranker_scores(self, *, limit=50, max_age_hours=30, tickers=None, profiles=None, buckets=None, per_profile_limit=None):
+        def latest_opportunity_ranker_scores(self, *, limit=50, max_age_hours=30, tickers=None, profiles=None, buckets=None, markets=None, per_profile_limit=None):
             self.last_ranker_kwargs = {
                 "limit": limit,
                 "max_age_hours": max_age_hours,
                 "tickers": tickers,
                 "profiles": profiles,
                 "buckets": buckets,
+                "markets": markets,
                 "per_profile_limit": per_profile_limit,
             }
             return [
@@ -587,6 +592,7 @@ def test_recommend_opportunities_uses_bucket_filter_with_profile_context() -> No
                     "ranker_version": "opportunity_ranker_20260417_test",
                     "score_source": "learned_ic",
                     "ticker": "MSFT",
+                    "market": "us",
                     "profile": "defensive",
                     "bucket": "defensive",
                     "recommendation_rank": 1,

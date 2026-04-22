@@ -312,11 +312,56 @@ class AgentConfig:
     system_prompt: str | None = None                     # None → use global prompt
     risk_overrides: dict[str, float | int] | None = None # None → use global risk
     disabled_tools: list[str] | None = None              # None → use global tool config
+    llm_params: dict[str, Any] | None = None             # provider-native SDK params (effort/thinking_level/temperature/…)
 
 
 def _default_model_for_provider(settings: Settings, provider: str) -> str:
     """Returns the default model token for a canonical provider."""
     return default_model_for_provider(settings, provider)
+
+
+def _provider_has_usable_credentials(settings: Settings, provider_id: str) -> bool:
+    """Checks whether a provider has credentials OR an equivalent transport fallback."""
+    token = str(provider_id or "").strip().lower()
+    if not token:
+        return False
+    if token == "claude" and settings.anthropic_use_vertexai:
+        return bool(settings.google_cloud_project.strip())
+    return provider_has_credentials(settings, token)
+
+
+def _drop_agents_missing_credentials(settings: Settings) -> list[str]:
+    """Removes agents whose providers have no usable credentials.
+
+    Behavior: silently skipping a missing key is graceful when a tenant simply
+    doesn't want that provider (e.g., gpt-only tenants inherit a global
+    ARENA_AGENT_IDS=gemini,gpt,claude). A warning is emitted per drop so
+    operator typos aren't hidden. Returns the dropped agent_ids.
+    """
+    dropped: list[str] = []
+    kept_ids: list[str] = []
+    for agent_id in list(settings.agent_ids):
+        config = settings.agent_configs.get(agent_id)
+        provider = str(config.provider).strip().lower() if config else ""
+        if not provider:
+            kept_ids.append(agent_id)
+            continue
+        if _provider_has_usable_credentials(settings, provider):
+            kept_ids.append(agent_id)
+            continue
+        dropped.append(agent_id)
+        logger.warning(
+            "[yellow]Agent skipped: no credentials[/yellow] agent_id=%s provider=%s "
+            "(drop this agent from ARENA_AGENT_IDS or set the provider's API key)",
+            agent_id,
+            provider,
+        )
+    if dropped:
+        settings.agent_ids = kept_ids
+        for aid in dropped:
+            settings.agent_configs.pop(aid, None)
+            settings.agent_capitals.pop(aid, None)
+    return dropped
 
 
 def normalize_agent_settings(settings: Settings) -> Settings:
@@ -339,6 +384,7 @@ def normalize_agent_settings(settings: Settings) -> Settings:
         system_prompt: str | None = None
         risk_overrides: dict[str, float | int] | None = None
         disabled_tools: list[str] | None = None
+        llm_params: dict[str, Any] | None = None
 
         if existing is not None:
             provider = str(existing.provider or "").strip().lower()
@@ -351,6 +397,8 @@ def normalize_agent_settings(settings: Settings) -> Settings:
             if isinstance(existing.disabled_tools, list):
                 cleaned_tools = [str(x).strip() for x in existing.disabled_tools if str(x).strip()]
                 disabled_tools = cleaned_tools or None
+            if isinstance(existing.llm_params, dict) and existing.llm_params:
+                llm_params = dict(existing.llm_params)
             try:
                 existing_capital = float(existing.capital_krw)
                 if existing_capital > 0:
@@ -381,6 +429,7 @@ def normalize_agent_settings(settings: Settings) -> Settings:
             system_prompt=system_prompt,
             risk_overrides=risk_overrides,
             disabled_tools=disabled_tools,
+            llm_params=llm_params,
         )
 
     settings.agent_ids = normalized_ids
@@ -873,6 +922,16 @@ def apply_runtime_overrides(settings: Settings, repo: Any, tenant_id: str) -> Se
             # Per-agent target_market
             agent_market = str(entry.get("target_market") or "").strip().lower()
 
+            # Per-agent llm_params (provider-native SDK keys; validation happens in llm_params module)
+            llm_raw = entry.get("llm_params")
+            llm_params: dict[str, Any] | None = None
+            if isinstance(llm_raw, dict) and llm_raw:
+                try:
+                    from arena.agents.llm_params import sanitize_llm_params
+                    llm_params = sanitize_llm_params(provider, llm_raw) or None
+                except Exception:
+                    llm_params = None
+
             if provider:
                 parsed_agent_configs[aid] = AgentConfig(
                     agent_id=aid,
@@ -883,6 +942,7 @@ def apply_runtime_overrides(settings: Settings, repo: Any, tenant_id: str) -> Se
                     system_prompt=sys_prompt,
                     risk_overrides=risk_overrides if risk_overrides else None,
                     disabled_tools=disabled_tools,
+                    llm_params=llm_params,
                 )
 
         settings.agent_ids = parsed_ids
@@ -948,6 +1008,8 @@ def validate_settings(
 
     if require_llm and settings.agent_mode == "adk":
         normalize_agent_settings(settings)
+        _drop_agents_missing_credentials(settings)
+
         agent_providers = {
             str(ac.provider).strip().lower()
             for aid in settings.agent_ids
@@ -961,39 +1023,11 @@ def validate_settings(
             if spec.provider_id in agent_providers
         ]
 
-        for spec in configured_adk_specs:
-            if spec.provider_id == "claude" and settings.anthropic_use_vertexai:
-                if not settings.google_cloud_project.strip():
-                    errors.append("GOOGLE_CLOUD_PROJECT is required when ANTHROPIC_USE_VERTEXAI=true")
-                continue
-
-            if provider_has_credentials(settings, spec.provider_id):
-                continue
-
-            if spec.provider_id == "gpt":
-                errors.append("OPENAI_API_KEY is required for agent_ids including 'gpt'")
-                continue
-            if spec.provider_id == "gemini":
-                errors.append(
-                    "GEMINI_API_KEY is required for agent_ids including 'gemini' "
-                    "(or set GOOGLE_GENAI_USE_VERTEXAI=true)"
-                )
-                continue
-            if spec.provider_id == "claude":
-                errors.append(
-                    "ANTHROPIC_API_KEY is required for agent_ids including 'claude' "
-                    "(or set ANTHROPIC_USE_VERTEXAI=true)"
-                )
-                continue
-            errors.append(
-                f"API key is required for agent_ids including '{spec.provider_id}'"
-            )
-
         if not configured_adk_specs:
             supported_tokens = ", ".join(spec.provider_id for spec in list_adk_provider_specs())
             errors.append(
-                "ARENA_AGENT_IDS must include at least one of: "
-                f"{supported_tokens} (or configure agent_configs with valid ADK-capable providers)"
+                "No agents have usable credentials. ARENA_AGENT_IDS must include at least one of: "
+                f"{supported_tokens} whose provider has API credentials (or vertex fallback configured)."
             )
 
     if require_kis:

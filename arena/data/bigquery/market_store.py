@@ -1591,6 +1591,7 @@ class MarketStore:
         tickers: list[str] | None = None,
         profiles: list[str] | None = None,
         buckets: list[str] | None = None,
+        markets: list[str] | None = None,
         per_profile_limit: int | None = None,
         limit: int = 50,
         max_age_hours: int = 30,
@@ -1629,15 +1630,22 @@ class MarketStore:
                 batch_filters.append("bucket IN UNNEST(@buckets)")
                 row_filters.append("s.bucket IN UNNEST(@buckets)")
                 params["buckets"] = list(dict.fromkeys(bucket_tokens))
+        if markets:
+            market_tokens = [str(m).strip().lower() for m in markets if str(m).strip()]
+            if market_tokens:
+                batch_filters.append("market IN UNNEST(@markets)")
+                row_filters.append("s.market IN UNNEST(@markets)")
+                params["markets"] = list(dict.fromkeys(market_tokens))
 
         batch_where = "WHERE " + " AND ".join(batch_filters)
         row_where = "WHERE " + " AND ".join(row_filters)
         sql = f"""
         WITH latest_batch AS (
-          SELECT ranker_version, computed_at
+          SELECT market, ranker_version, computed_at
           FROM `{self.session.dataset_fqn}.opportunity_ranker_scores_latest`
           {batch_where}
           QUALIFY ROW_NUMBER() OVER (
+            PARTITION BY market
             ORDER BY computed_at DESC, ranker_version DESC
           ) = 1
         ),
@@ -1645,7 +1653,8 @@ class MarketStore:
           SELECT s.*
           FROM `{self.session.dataset_fqn}.opportunity_ranker_scores_latest` s
           JOIN latest_batch b
-            ON s.ranker_version = b.ranker_version
+            ON s.market = b.market
+           AND s.ranker_version = b.ranker_version
            AND s.computed_at = b.computed_at
           {row_where}
           QUALIFY ROW_NUMBER() OVER (

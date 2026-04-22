@@ -97,6 +97,10 @@ def _build_agent_card_context(
         for risk_key, risk_label, risk_default in risk_fields_meta
     ]
 
+    llm_params = entry.get("llm_params") or {}
+    if not isinstance(llm_params, dict):
+        llm_params = {}
+
     return {
         "aid": aid,
         "provider": provider,
@@ -107,6 +111,7 @@ def _build_agent_card_context(
         "display_prompt": display_prompt,
         "risk_inputs": risk_inputs,
         "api_key_help": provider_key_help.get(provider, provider_api_key_help_html(provider)),
+        "llm_params": {str(k): str(v) for k, v in llm_params.items()},
     }
 
 

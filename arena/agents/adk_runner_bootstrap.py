@@ -232,12 +232,17 @@ def build_agent(
     adk_tools: list[Any],
 ) -> Agent:
     model_override = (agent_config.model if agent_config else "") or ""
-    model = _resolve_model(provider, settings, model_override=model_override)
-    generate_cfg = types.GenerateContentConfig(
-        automatic_function_calling=types.AutomaticFunctionCallingConfig(
-            disable=False,
-            maximum_remote_calls=max_tool_events,
-        )
+    llm_params = (agent_config.llm_params if agent_config else None) or {}
+    model = _resolve_model(
+        provider,
+        settings,
+        model_override=model_override,
+        llm_params=llm_params,
+    )
+    generate_cfg = _build_generate_content_config(
+        provider=provider,
+        llm_params=llm_params,
+        max_tool_events=max_tool_events,
     )
     return Agent(
         name=f"{agent_id}_react",
@@ -252,6 +257,51 @@ def build_agent(
         tools=adk_tools,
         generate_content_config=generate_cfg,
     )
+
+
+def _build_generate_content_config(
+    *,
+    provider: str,
+    llm_params: dict[str, Any],
+    max_tool_events: int,
+) -> "types.GenerateContentConfig":
+    """Assembles a GenerateContentConfig with Gemini-specific overrides.
+
+    For non-Gemini providers we only keep automatic_function_calling — the
+    thinking/sampling knobs live inside LiteLlm kwargs instead (see
+    _resolve_model). Gemini flows through google.genai.types.ThinkingConfig.
+    """
+    afc = types.AutomaticFunctionCallingConfig(
+        disable=False,
+        maximum_remote_calls=max_tool_events,
+    )
+    canonical = str(provider or "").strip().lower()
+    if canonical not in {"gemini", "google"}:
+        return types.GenerateContentConfig(automatic_function_calling=afc)
+
+    ov = llm_params or {}
+    thinking_cfg = None
+    level = str(ov.get("thinking_level") or "").strip().lower()
+    if level in {"low", "medium", "high"}:
+        thinking_cfg = types.ThinkingConfig(thinking_level=level.upper())
+    elif "thinking_budget" in ov:
+        try:
+            thinking_cfg = types.ThinkingConfig(thinking_budget=int(ov["thinking_budget"]))
+        except (TypeError, ValueError):
+            thinking_cfg = None
+
+    kwargs: dict[str, Any] = {"automatic_function_calling": afc}
+    if thinking_cfg is not None:
+        kwargs["thinking_config"] = thinking_cfg
+    if (t := ov.get("temperature")) is not None:
+        kwargs["temperature"] = float(t)
+    if (p := ov.get("top_p")) is not None:
+        kwargs["top_p"] = float(p)
+    if (k := ov.get("top_k")) is not None:
+        kwargs["top_k"] = int(k)
+    if (mx := ov.get("max_output_tokens")) is not None:
+        kwargs["max_output_tokens"] = int(mx)
+    return types.GenerateContentConfig(**kwargs)
 
 
 def build_runner_runtime(
