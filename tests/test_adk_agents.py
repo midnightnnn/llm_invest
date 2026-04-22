@@ -2362,11 +2362,13 @@ def test_has_credentials_unknown() -> None:
 def test_resolve_model_openai_uses_instance_scoped_api_key() -> None:
     settings = load_settings()
     settings.openai_api_key = "tenant-openai"
+    settings.llm_timeout_seconds = 1500
 
     model = _resolve_model("gpt", settings, model_override="gpt-5.4")
 
     assert model.model == "openai/gpt-5.4"
     assert model._additional_args["api_key"] == "tenant-openai"
+    assert model._additional_args["timeout"] == 1500
 
 
 def test_resolve_model_claude_direct_uses_instance_scoped_api_key() -> None:
@@ -2374,11 +2376,13 @@ def test_resolve_model_claude_direct_uses_instance_scoped_api_key() -> None:
     settings.anthropic_api_key = "tenant-anthropic"
     settings.anthropic_use_vertexai = False
     settings.anthropic_model = "claude-sonnet-4-6"
+    settings.llm_timeout_seconds = 1500
 
     model = _resolve_model("claude", settings)
 
     assert model.model == "anthropic/claude-sonnet-4-6"
     assert model._additional_args["api_key"] == "tenant-anthropic"
+    assert model._additional_args["timeout"] == 1500
     assert model._additional_args["cache_control_injection_points"] == [
         {"location": "message", "role": "system"},
     ]

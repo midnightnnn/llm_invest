@@ -177,10 +177,12 @@ def _resolve_model(
         model_id = configured_model.strip()
         if not model_id:
             raise ValueError("ANTHROPIC_MODEL is required for claude agent")
+        llm_timeout = max(1, int(settings.llm_timeout_seconds))
         kwargs: dict[str, Any] = {
             "cache_control_injection_points": [
                 {"location": "message", "role": "system"},
             ],
+            "timeout": llm_timeout,
         }
         kwargs.update(_anthropic_runtime_kwargs(model_id, llm_params))
         if settings.anthropic_use_vertexai:
@@ -206,10 +208,11 @@ def _resolve_model(
         model_id = configured_model.strip()
         if not model_id:
             raise ValueError(f"model is required for provider '{spec.provider_id}'")
+        llm_timeout = max(1, int(settings.llm_timeout_seconds))
         litellm_provider = str(spec.litellm_provider or spec.provider_id).strip() or spec.provider_id
         if "/" not in model_id:
             model_id = f"{litellm_provider}/{model_id}"
-        kwargs: dict[str, Any] = {}
+        kwargs: dict[str, Any] = {"timeout": llm_timeout}
         api_key = provider_api_key_from_settings(settings, spec.provider_id)
         if api_key:
             kwargs["api_key"] = api_key
