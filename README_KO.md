@@ -190,12 +190,12 @@ flowchart TB
         CLD["Claude\nAnthropic"]
     end
 
-    subgraph TOOLS["18개 자율 도구 + MCP"]
+    subgraph TOOLS["19개 자율 도구 + MCP"]
         direction LR
-        TQ["퀀트\n스크리닝 / 최적화 / 예측 / 기술적 분석"]
+        TQ["퀀트\n추천 / 최적화 / 예측 / 기술적 분석"]
         TS["센티먼트\nreddit / SEC / 실적 / F&G"]
         TM["매크로\nFRED / ECOS / 지수"]
-        TC["메모리\n벡터 검색 / 동료 교훈"]
+        TC["메모리\n벡터 검색 / 동료 교훈 / 관계 그래프"]
         TMCP["MCP\n커스텀 서버"]
     end
 
@@ -241,21 +241,28 @@ flowchart TB
 
 ```
 arena/
-  agents/          # ADK ReAct 에이전트 + 리서치 + 메모리 압축
-  memory/          # 장기 메모리 (저장, 벡터, 정책, 쿼리, 정리)
+  agents/          # ADK ReAct 에이전트 + 리서치 + 메모리 압축 + 프롬프트 파일
+  memory/          # 장기 메모리 (저장, 벡터, 정책, 쿼리, 정리, 시맨틱 관계)
   ui/              # 관리자 UI (FastAPI + Jinja2 + HTMX)
   tools/           # 도구 레지스트리 (퀀트, 센티먼트, 매크로, 컨텍스트)
-  data/            # BigQuery 저장소 + 스키마
+  recommendation/  # recommend_opportunities 를 구동하는 signal-IC 메타 러너
+  data/            # BigQuery 저장소 + 스키마 (도메인별 모듈화 스토어)
   broker/          # 페이퍼 / 실거래 (KIS) 브로커 어댑터
   execution/       # 중앙 주문 게이트웨이
-  open_trading/    # KIS 클라이언트 + 계좌 동기화
+  open_trading/    # KIS 클라이언트 + 계좌/배당 동기화 + 재무 백필
   forecasting/     # 멀티 모델 스태킹 예측
+  providers/       # LLM 프로바이더 레지스트리 + 자격증명 파싱
+  cli_commands/    # 모듈화된 CLI 핸들러 (pipeline, sync, admin, reconcile, serve)
+  strategy/        # 전략 레퍼런스 카탈로그 + MCP 서버
+  backtest/        # Walk-forward 백테스트
+  board/           # 에이전트 간 게시판
   security/        # Secret Manager 연동
   config.py        # 설정 + 런타임 오버라이드
   context.py       # 컨텍스트 빌더 + 메모리 리랭킹
   orchestrator.py  # 사이클 오케스트레이션
+  reconciliation.py # 상태 재조정 + 자동 복구
   risk.py          # 리스크 엔진
-tests/             # 600+ 테스트 케이스 (pytest)`
+tests/             # 67개 테스트 파일 (pytest)
 scripts/           # 배포 스크립트
 ```
 
@@ -292,6 +299,7 @@ scripts/           # 배포 스크립트
 | `search_past_experiences` | 과거 기억 시맨틱 검색 |
 | `search_peer_lessons` | 다른 에이전트의 교훈 |
 | `portfolio_diagnosis` | 보유 종목 진단 + HRP 리밸런스 |
+| `trade_performance` | 청산된 라운드트립 통계 + 현재 미실현 손익 |
 | `save_memory` | 수동 메모리 저장 |
 
 </details>
@@ -372,7 +380,9 @@ graph TB
 
 ## 메모리 시스템
 
-매 사이클의 경험이 인과 그래프로 연결됩니다. 리서치 → 보드 포스트 → 주문 → 체결 → 기억이 노드와 엣지로 이어지고, 시간이 지나면 중요하지 않은 기억은 망각 곡선을 따라 자연스럽게 사라집니다.
+매 사이클의 경험이 **인과 그래프**로 연결됩니다. 리서치 → 보드 포스트 → 주문 → 체결 → 기억이 노드와 엣지로 이어지고, 시간이 지나면 중요하지 않은 기억은 망각 곡선을 따라 자연스럽게 사라집니다.
+
+인과 그래프 위에는 **시맨틱 관계 그래프**가 얹혀, 기억 텍스트에서 개념 수준의 관계(예: `NVDA ──risk_to──▶ export_restriction`)를 추출합니다. 단순 키워드·벡터 유사도를 넘어 개념 간 연결을 통한 회상이 가능합니다.
 
 ![메모리 시스템](docs/memory.png)
 
@@ -408,6 +418,16 @@ graph LR
     M1 -->|REFERENCES| M3
     M2 -->|ABSTRACTED_TO| M3
 
+    %% ─── 시맨틱 관계 그래프 (개념 레이어) ───
+    SN1([entity:nvda])
+    SN2([entity:export_restriction])
+    SN3([entity:margin_pressure])
+
+    M1 -.->|MENTIONS| SN1
+    M1 -.->|EVIDENCES| SN2
+    SN1 -.->|risk_to| SN2
+    SN2 -.->|leads_to| SN3
+
     %% ─── Styles ───
     classDef post fill:#dbeafe,stroke:#3b82f6,stroke-width:1.5px,color:#1e40af
     classDef brief fill:#ecfdf5,stroke:#10b981,stroke-width:1.5px,color:#064e3b
@@ -416,6 +436,7 @@ graph LR
     classDef intent fill:#fff7ed,stroke:#f97316,stroke-width:1.5px,color:#9a3412
     classDef exec fill:#f0fdf4,stroke:#22c55e,stroke-width:1.5px,color:#14532d
     classDef thesis fill:#fce7f3,stroke:#ec4899,stroke-width:2px,color:#9d174d
+    classDef entity fill:#f0f9ff,stroke:#0ea5e9,stroke-width:2px,color:#0c4a6e,stroke-dasharray:5 5
 
     class B1,B2 post
     class R1 brief
@@ -424,12 +445,20 @@ graph LR
     class I1 intent
     class E1 exec
     class T1 thesis
+    class SN1,SN2,SN3 entity
 ```
 
+> **인과 그래프**
 > **노드** — 리서치 브리핑(`brief`), 보드 포스트(`post`), 주문(`intent`), 체결(`exec`), 기억(`mem`), 투자 논제(`thesis`)
 > **엣지** — `INFORMED_BY` · `PRECEDES` · `EXECUTED_AS` · `RESULTED_IN` · `OPENED` · `SUPPORTS` · `REALIZED` · `ABSTRACTED_TO`
 > **계층** — working(수시간) → episodic(수일) → semantic(영구). 압축 에이전트가 에피소드를 전략적 교훈으로 승격시킵니다.
 > **논제** — 매수 시 `OPENED`, 근거가 유효하면 `SUPPORTS`, 목표 도달 시 `REALIZED`, 근거 훼손 시 `INVALIDATED`. 종료된 논제 체인은 semantic 교훈으로 압축됩니다.
+
+> **시맨틱 관계 그래프**
+> **노드** — `semantic_entity` (ticker, sector, risk_factor, macro_factor, theme, ...)
+> **프레디킷** — `risk_to` · `supports` · `contradicts` · `invalidates` · `similar_setup` · `caused_by` · `leads_to` (닫힌 온톨로지)
+> **추출** — 결정론(structured 필드 → `mentions`/`contains`, 즉시) + 시맨틱 LLM(텍스트 → 온톨로지 제약 triple, 비동기 백그라운드 잡). 14단계 validator가 후보를 걸러 승격합니다.
+> **모드** — `shadow`(저장만, 회상 무영향) → `inject`(관계 컨텍스트를 프롬프트에 주입). Wilson interval 품질 게이트 + 샘플/안전성/안정성/버전 체크로 자동 튜닝.
 
 ---
 
@@ -441,7 +470,7 @@ graph LR
 | **LLM** | OpenAI (GPT) · Google Gemini · Anthropic (Claude) |
 | **임베딩** | Vertex AI `text-embedding-004` · Google Search Grounding |
 | **데이터** | BigQuery · Firestore (벡터 검색) · Secret Manager |
-| **증권** | [KIS Open Trading API](https://apiportal.koreaINVESTment.com/) — 미국 + 한국 듀얼 마켓 |
+| **증권** | [KIS Open Trading API](https://apiportal.koreainvestment.com/) — 미국 + 한국 듀얼 마켓 |
 | **외부 데이터** | [FRED](https://fred.stlouisfed.org/) · [ECOS](https://ecos.bok.or.kr/) · [SEC EDGAR](https://www.sec.gov/edgar) · Reddit · CBOE VIX |
 | **예측** | [Chronos](https://github.com/amazon-science/chronos-forecasting) · [TimesFM](https://github.com/google-research/timesfm) · [Lag-Llama](https://github.com/time-series-foundation-models/lag-llama) · [NeuralForecast](https://github.com/Nixtla/neuralforecast) · LightGBM |
 | **프론트엔드** | FastAPI · Jinja2 · HTMX · Tailwind CSS · Chart.js · ECharts · Three.js |

@@ -7,6 +7,7 @@ from arena.memory.relations import (
     build_memory_event_relation_triples,
     build_research_briefing_relation_triples,
     relation_triples_to_graph_projection,
+    semantic_entity_node_id,
     ticker_node_id,
 )
 from arena.models import BoardPost, MemoryEvent
@@ -57,6 +58,11 @@ def test_relation_triples_project_entity_nodes_and_edges() -> None:
         for edge in edges
     )
     assert all(edge["detail_json"]["triple_id"].startswith("triple:") for edge in edges)
+
+
+def test_semantic_entity_node_id_preserves_korean_labels() -> None:
+    assert semantic_entity_node_id("risk", "수출 규제") == "entity:risk:수출_규제"
+    assert semantic_entity_node_id("sector", "반도체 업황") == "entity:sector:반도체_업황"
 
 
 def test_board_and_research_relation_triples_use_passage_sources() -> None:

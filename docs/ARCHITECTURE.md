@@ -36,26 +36,27 @@
 ```
 arena/                           Core business logic
 ├── agents/                       ADK ReAct agents (modular decomposition)
-│   ├── adk_agents.py            Main agent class + builder (1,034L)
-│   ├── adk_agent_flow.py        Draft/execution phase orchestration (88L)
-│   ├── adk_context_tools.py     Per-cycle context tools for agents (1,012L)
-│   ├── adk_decision_flow.py     Decision prompting + board comm (182L)
-│   ├── adk_models.py            ADK model wrapper/routing (179L)
-│   ├── adk_order_support.py     Order placement utilities (525L)
-│   ├── adk_prompting.py         Prompt building + JSON parsing (253L)
-│   ├── adk_runner_bootstrap.py  Runner initialization (304L)
-│   ├── adk_runner_runtime.py    Runtime execution logic (266L)
+│   ├── adk_agents.py            Main agent class + builder (1,702L)
+│   ├── adk_agent_flow.py        Draft/execution phase orchestration (89L)
+│   ├── adk_context_tools.py     Per-cycle context tools for agents (1,029L)
+│   ├── adk_decision_flow.py     Decision prompting + board comm (191L)
+│   ├── adk_models.py            ADK model wrapper/routing (238L)
+│   ├── adk_order_support.py     Order placement utilities (529L)
+│   ├── adk_prompting.py         Prompt building + JSON parsing (276L)
+│   ├── adk_runner_bootstrap.py  Runner initialization (354L)
+│   ├── adk_runner_runtime.py    Runtime execution logic (285L)
 │   ├── adk_runner_state.py      Mutable execution state tracking (545L)
 │   ├── adk_tool_compaction.py   Tool result compaction (484L)
 │   ├── adk_tool_config.py       Tool configuration/selection (140L)
 │   ├── base.py                  TradingAgent protocol (24L)
-│   ├── memory_compaction_agent.py  Post-cycle lesson synthesis (774L)
+│   ├── llm_params.py            Per-provider sampling/token params (165L)
+│   ├── memory_compaction_agent.py  Post-cycle lesson synthesis (786L)
 │   ├── research_agent.py        Gemini + Google Search Grounding (323L)
 │   ├── support_model.py         Helper model builder (105L)
 │   └── prompts/                  Default system/core prompt text files
 ├── memory/                       Multi-tier long-term memory system
 │   ├── policy.py                Single source for all memory controls — 10 groups (2,817L)
-│   ├── store.py                 Write/retrieve events with tier + tagging + graph (886L)
+│   ├── store.py                 Write/retrieve events with tier + tagging + graph (887L)
 │   ├── vector.py                Vertex AI embeddings + Firestore search (288L)
 │   ├── thesis.py                Investment thesis lifecycle tracking (170L)
 │   ├── graph.py                 Causal graph node/edge builders (478L)
@@ -68,22 +69,22 @@ arena/                           Core business logic
 │   ├── relations.py             Deterministic triple extraction + graph projection (566L)
 │   ├── relation_ontology.py     Closed predicate/entity type vocabulary (193L)
 │   ├── relation_validation.py   14-step triple validator (235L)
-│   ├── semantic_extractor.py    LLM triple extractor + run audit (424L)
+│   ├── semantic_extractor.py    LLM triple extractor + run audit (429L)
 │   └── semantic_tuning.py       Shadow↔inject auto-tuner with quality gates (638L)
 ├── ui/                           Admin dashboard (FastAPI, modular routes)
 │   ├── app.py                   Main FastAPI router (637L)
 │   ├── routes/                   Route modules
 │   │   ├── auth.py              Google OAuth (269L)
-│   │   ├── board.py             Board viewer (259L)
+│   │   ├── board.py             Board viewer (268L)
 │   │   ├── nav.py               NAV charts (374L)
 │   │   ├── trades.py            Trade history (135L)
 │   │   ├── sleeves.py           Sleeve management (859L)
 │   │   ├── ops.py               Operations page (224L)
 │   │   ├── showcase.py          Public showcase page (564L)
 │   │   ├── settings_page.py     Settings page render (456L)
-│   │   ├── settings_admin.py    Settings CRUD API (1,094L)
+│   │   ├── settings_admin.py    Settings CRUD API (1,102L)
 │   │   ├── settings_render.py   Render dispatcher (21L)
-│   │   ├── settings_render_agents.py    Agent config panel (170L)
+│   │   ├── settings_render_agents.py    Agent config panel (175L)
 │   │   ├── settings_render_capital.py   Capital management (51L)
 │   │   ├── settings_render_credentials.py  KIS/API credentials (638L)
 │   │   ├── settings_render_scripts.py   Script management (205L)
@@ -92,7 +93,7 @@ arena/                           Core business logic
 │   ├── templates/               Jinja2 templates (23 files)
 │   ├── vendor/                   Bundled JS libs (three.min.js, 3d-force-graph.min.js)
 │   ├── memory.py                3D memory graph builder + routes (968L)
-│   ├── viewer_data.py           Viewer data assembly (757L)
+│   ├── viewer_data.py           Viewer data assembly (1,024L)
 │   ├── viewer_analytics.py      Analytics computations (96L)
 │   ├── layout.py                Base layout helpers (96L)
 │   ├── http.py                  JSON/HTML response helpers (22L)
@@ -100,37 +101,39 @@ arena/                           Core business logic
 │   ├── provisioning.py          Tenant auto-provisioning (194L)
 │   ├── app_support.py           App startup support (156L)
 │   ├── run_status.py            Run status tracking (144L)
-│   ├── runtime.py               UI runtime context (456L)
+│   ├── runtime.py               UI runtime context (458L)
 │   ├── templating.py            Template engine setup (28L)
 │   └── server.py                Startup wrapper (5L)
 ├── tools/                        Agent tool registry (19 core + MCP)
 │   ├── default_registry.py      Build registry with all tools (427L)
-│   ├── quant_tools.py           Recommend, screen, optimize, forecast, technical, trade perf (2,015L)
-│   ├── sentiment_tools.py       Reddit, SEC EDGAR, earnings, VIX, news (634L)
-│   ├── macro_tools.py           FRED (US), ECOS (Korea) (244L)
+│   ├── quant_tools.py           Recommend, screen, optimize, forecast, technical, trade perf (2,117L)
+│   ├── sentiment_tools.py       Reddit, SEC EDGAR, earnings, VIX, news (628L)
+│   ├── macro_tools.py           FRED (US), ECOS (Korea) (240L)
 │   ├── allocation.py            Portfolio optimization — Sharpe, HRP, forecast (499L)
 │   ├── screening.py             Momentum + discovery ranking (517L)
 │   ├── sector_map.py            US 101 + KOSPI 579 sector mapping (688L)
+│   ├── _market_scope.py         Per-market ticker/universe scoping helper (152L)
 │   └── registry.py              ToolRegistry with two-phase selection (90L)
 ├── recommendation/               Signal-IC meta-learner + Layer 1 signals
 │   ├── ranker.py                Builds opportunity_ranker_scores_latest (713L)
 │   └── signals.py               Layer 1 signal definitions + regime features (205L)
 ├── data/                         BigQuery repository layer (modular stores)
-│   ├── bq.py                   BigQueryRepository facade (141L)
-│   ├── protocols.py             Store protocols/interfaces (191L)
-│   ├── schema.py                Table DDLs + auto-migration (992L)
+│   ├── bq.py                   BigQueryRepository facade (144L)
+│   ├── protocols.py             Store protocols/interfaces (209L)
+│   ├── schema.py                Table DDLs + auto-migration (1,106L)
 │   └── bigquery/                Store implementations
-│       ├── session.py           BigQuerySession connection management (245L)
-│       ├── memory_bq_store.py   Memory events, board posts, graph, briefings, triples (1,765L)
-│       ├── market_store.py      Price/feature/signals/IC queries (2,368L)
-│       ├── sleeve_store.py      Virtual account operations + NAV (2,483L)
-│       ├── execution_store.py   Order intent/execution repository (361L)
+│       ├── session.py           BigQuerySession connection management (277L)
+│       ├── memory_bq_store.py   Memory events, board posts, graph, briefings, triples (1,809L)
+│       ├── market_store.py      Price/feature/signals/IC queries (2,497L)
+│       ├── sleeve_store.py      Virtual account operations + NAV (2,576L)
+│       ├── execution_store.py   Order intent/execution repository (363L)
 │       ├── ledger_store.py      Append-only event ledger (381L)
+│       ├── llm_audit_store.py   LLM call/prompt/response audit log (209L)
 │       ├── runtime_store.py     Config/credential storage (604L)
 │       └── backtest_store.py    Backtest persistence (161L)
 ├── open_trading/                 Korea Investment API client + fundamentals ingest
-│   ├── client.py                REST wrapper — OAuth, account, market data (2,113L)
-│   ├── sync.py                  Market data, account, dividend sync (2,966L)
+│   ├── client.py                REST wrapper — OAuth, account, market data (2,249L)
+│   ├── sync.py                  Market data, account, dividend sync (3,375L)
 │   ├── kis_fundamentals_ingestor.py  KIS-based KR fundamentals backfill (262L)
 │   ├── sec_fundamentals_ingestor.py  SEC EDGAR companyfacts ingest (605L)
 │   ├── fmp_fundamentals_ingestor.py  Optional FMP fundamentals source (305L)
@@ -138,25 +141,26 @@ arena/                           Core business logic
 │   └── token_cache.py           Firestore-backed OAuth token (71L)
 ├── broker/                       Order execution abstraction
 │   ├── base.py                  BrokerClient protocol (13L)
-│   ├── open_trading.py          Live KIS trading — US + KOSPI (564L)
+│   ├── open_trading.py          Live KIS trading — US + KOSPI (567L)
 │   └── paper.py                 Paper + HTTP broker (97L)
 ├── execution/                    Centralized order gateway
-│   └── gateway.py               Risk check → broker → memory recording (431L)
+│   └── gateway.py               Risk check → broker → memory recording (460L)
 ├── providers/                    LLM provider registry
 │   ├── registry.py              4 providers — GPT/Gemini/Claude/DeepSeek (209L)
+│   ├── anthropic_patches.py     Anthropic SDK compatibility patches (69L)
 │   └── credentials.py           Secret Manager credential parsing (130L)
 ├── security/                     Secrets management
 │   └── credential_store.py      Secret Manager + BQ (377L)
 ├── cli_commands/                 Modular CLI command handlers
 │   ├── run.py                   Command dispatch routing (48L)
-│   ├── run_agent.py             Agent cycle execution (564L)
-│   ├── run_pipeline.py          Full sync→forecast→ranker→agent pipeline (517L)
-│   ├── run_shared.py            Shared sync/forecast/ranker operations (469L)
+│   ├── run_agent.py             Agent cycle execution (704L)
+│   ├── run_pipeline.py          Full sync→forecast→ranker→agent pipeline (1,496L)
+│   ├── run_shared.py            Shared sync/forecast/ranker operations (534L)
 │   ├── run_reconcile.py         Reconciliation + post-cycle maintenance (330L)
-│   ├── serve.py                 UI and MCP server startup (265L)
-│   ├── sync.py                  Market/account/fundamentals/ranker sync (635L)
+│   ├── serve.py                 UI and MCP server startup (267L)
+│   ├── sync.py                  Market/account/fundamentals/ranker sync (647L)
 │   ├── admin.py                 Admin operations — tenant, memory (336L)
-│   └── memory_relations.py      Semantic triple extraction CLI (147L)
+│   └── memory_relations.py      Semantic triple extraction CLI (148L)
 ├── strategy/                     Strategy reference catalog
 │   ├── catalog.py               Strategy cards for agents (164L)
 │   └── mcp_server.py            MCP server for strategy tool (51L)
@@ -167,21 +171,21 @@ arena/                           Core business logic
 ├── universe/                     Ticker universe presets
 ├── forecasting/                  ML forecast pipeline
 │   └── stacked.py               7-model ensemble stacking (679L)
-├── config.py                     Settings + runtime overrides (1,060L)
-├── context.py                    Per-agent context builder (2,642L)
-├── orchestrator.py               Multi-agent cycle orchestration (482L)
+├── config.py                     Settings + runtime overrides (1,137L)
+├── context.py                    Per-agent context builder (2,756L)
+├── orchestrator.py               Multi-agent cycle orchestration (571L)
 ├── risk.py                       Risk engine policy checks (119L)
-├── reconciliation.py             State reconciliation + recovery (1,374L)
+├── reconciliation.py             State reconciliation + recovery (1,423L)
 ├── market_hours.py               Market windows + holidays (318L)
 ├── market_sources.py             Market source resolution (52L)
 ├── market_feature_normalization.py  Market feature normalization helpers (150L)
-├── runtime_universe.py           Runtime universe resolution (61L)
-├── cli.py                        CLI entry point (392L)
-├── cli_runtime.py                CLI runtime bootstrap (575L)
+├── runtime_universe.py           Runtime universe resolution (75L)
+├── cli.py                        CLI entry point (399L)
+├── cli_runtime.py                CLI runtime bootstrap (698L)
 ├── cloud_run_jobs.py             Cloud Run job dispatch (47L)
 ├── tenant_leases.py              Firestore execution lease (134L)
-├── models.py                     Core data classes (152L)
-├── logging_utils.py              JSON logging for Cloud Run (124L)
+├── models.py                     Core data classes (156L)
+├── logging_utils.py              JSON logging for Cloud Run (170L)
 └── __main__.py
 
 scripts/                          Operational scripts
@@ -193,7 +197,7 @@ scripts/                          Operational scripts
 ├── daily_mtm_score.py            Memory score update
 └── db_migrations/                Schema migration scripts
 
-tests/                            61 test files, pytest
+tests/                            67 test files, pytest
 ├── test_*.py                     Unit + integration
 ├── conftest.py                   Pytest fixtures
 ├── direct_route_client.py        Route testing client
@@ -257,7 +261,7 @@ tests/                            61 test files, pytest
 데이터 레이어는 모듈화된 store 패턴으로 구성:
 
 ```
-BigQueryRepository (bq.py, 141L)  ← 얇은 facade
+BigQueryRepository (bq.py, 144L)  ← 얇은 facade
   │
   └── bigquery/ (store 구현체)
       ├── session.py         BigQuerySession — 연결 관리 + 테넌트 격리
@@ -266,6 +270,7 @@ BigQueryRepository (bq.py, 141L)  ← 얇은 facade
       ├── sleeve_store.py    SleeveStore — 가상 계좌/NAV/포지션
       ├── execution_store.py ExecutionStore — 주문/체결
       ├── ledger_store.py    LedgerStore — append-only 원장
+      ├── llm_audit_store.py LlmAuditStore — LLM 호출 감사 로그
       ├── runtime_store.py   RuntimeStore — 설정/자격증명
       └── backtest_store.py  BacktestStore — 백테스트
 ```
@@ -370,8 +375,9 @@ AdkTradingAgent.generate(context)
   │
   ├── adk_order_support.py      주문 지원 유틸리티 (시장 데이터, 거래소 코드)
   ├── adk_models.py             LLM 모델 래핑/라우팅
+  ├── llm_params.py             프로바이더별 샘플링/토큰 파라미터
   │
-  └── adk_agents.py             최상위 클래스 + 빌더 (1,034L)
+  └── adk_agents.py             최상위 클래스 + 빌더 (1,702L)
 ```
 
 기본 프롬프트 텍스트는 `agents/prompts/{core_prompt,system_prompt}.txt`에 파일로 보관되며, tenant 오버라이드는 `arena_config.system_prompt`로 관리.
@@ -621,7 +627,7 @@ Causal graph 위에 얹힌 concept-level 의미 관계 레이어. 투자 LLM과 
 
 ## 7. Context Builder
 
-`arena/context.py` (2,642L) — 에이전트별, 사이클별 컨텍스트 조립.
+`arena/context.py` (2,756L) — 에이전트별, 사이클별 컨텍스트 조립.
 
 ### Input → Output
 
@@ -699,7 +705,7 @@ Per-agent 오버라이드: `AgentConfig.risk_overrides` 병합 후 평가.
 
 ## 10. Reconciliation & Recovery
 
-`arena/reconciliation.py` (1,374L)
+`arena/reconciliation.py` (1,423L)
 
 ### StateReconciliationService
 
@@ -725,7 +731,7 @@ Per-agent 오버라이드: `AgentConfig.risk_overrides` 병합 후 평가.
 
 ## 11. Open Trading Integration (KIS)
 
-### 11.1 OpenTradingClient (`client.py`, 2,113L)
+### 11.1 OpenTradingClient (`client.py`, 2,249L)
 
 - OAuth 토큰 관리 (Firestore 캐시)
 - US + KR 시장 데이터 (일봉, 호가, 지수)
@@ -734,7 +740,7 @@ Per-agent 오버라이드: `AgentConfig.risk_overrides` 병합 후 평가.
 - 배당 (period_rights, KSD)
 - Fundamentals (재무비율, EPS/ROE)
 
-### 11.2 Sync Services (`sync.py`, 2,966L)
+### 11.2 Sync Services (`sync.py`, 3,375L)
 
 | Service | Function |
 |---------|----------|
@@ -807,7 +813,7 @@ FastAPI Admin Dashboard — 모듈화된 라우트 구조.
 
 ## 14. Configuration & Runtime Overrides
 
-`arena/config.py` (1,060L)
+`arena/config.py` (1,137L)
 
 ### Precedence Contract
 
@@ -853,7 +859,7 @@ FastAPI Admin Dashboard — 모듈화된 라우트 구조.
 
 ## 15. CLI Interface
 
-Entry point: `arena/cli.py` (392L) → `arena/cli_commands/` (9개 모듈)
+Entry point: `arena/cli.py` (399L) → `arena/cli_commands/` (9개 모듈)
 
 ```bash
 # Setup
@@ -908,14 +914,14 @@ llm-arena backfill-tenant-markets --tenant <id>  # kis_target_market 백필
 
 | Module | Lines | Purpose |
 |--------|-------|---------|
-| `run_agent.py` | 564 | agent cycle only |
-| `run_pipeline.py` | 517 | sync → forecast → ranker → agent |
-| `run_shared.py` | 469 | shared sync/forecast/ranker |
-| `sync.py` | 635 | market/account/fundamentals/ranker sync |
+| `run_agent.py` | 704 | agent cycle only |
+| `run_pipeline.py` | 1,496 | sync → forecast → ranker → agent |
+| `run_shared.py` | 534 | shared sync/forecast/ranker |
+| `sync.py` | 647 | market/account/fundamentals/ranker sync |
 | `admin.py` | 336 | tenant/memory admin |
 | `run_reconcile.py` | 330 | reconciliation + post-cycle maintenance |
-| `serve.py` | 265 | UI + MCP server |
-| `memory_relations.py` | 147 | semantic triple 추출 |
+| `serve.py` | 267 | UI + MCP server |
+| `memory_relations.py` | 148 | semantic triple 추출 |
 | `run.py` | 48 | dispatch routing |
 
 ---
@@ -959,7 +965,7 @@ Cloud Run Service
 
 ## 17. Test Structure
 
-65개 테스트 파일, pytest. 100% pass 필수.
+67개 테스트 파일, pytest. 100% pass 필수.
 
 ### Key Test Files
 
@@ -1090,9 +1096,9 @@ class TradingAgent(Protocol):
 3. **Ledger replay** — 항상 checkpoint부터 리플레이로 상태 재계산.
 4. **Memory features mostly OFF by default** — hierarchy, tagging, forgetting, graph, cleanup 전부 기본 OFF. 실제 동작: 벡터검색 + thesis + compaction + REACT injection.
 5. **thesis_id ≠ graph_node_id** — thesis_id는 비즈니스 키(포지션 묶기), graph_node_id는 그래프 주소(인과관계).
-6. **Data layer split** — 기존 `bq.py`(1200L+) → `bq.py`(141L facade) + `bigquery/` 디렉토리(7개 store).
+6. **Data layer split** — 기존 `bq.py`(1200L+) → `bq.py`(144L facade) + `bigquery/` 디렉토리(8개 store + session).
 7. **Agent decomposition** — 기존 `adk_agents.py`(~3000L) → 12개 `adk_*` 파일 + helper/research/compaction 3개.
-8. **CLI modularization** — 기존 `cli.py`(~2700L) → `cli.py`(392L) + `cli_commands/`(9개 모듈).
+8. **CLI modularization** — 기존 `cli.py`(~2700L) → `cli.py`(399L) + `cli_commands/`(9개 모듈).
 9. **PnL backfeed** — SELL 시 과거 BUY 기억의 outcome_score를 실제 수익률로 역업데이트.
 10. **Risk per-agent** — `Settings.risk_policy` + `AgentConfig.risk_overrides` 병합.
 11. **ADK tools are async** — LLM 호출은 ReAct 루프에서 블로킹. 동시 에이전트는 ThreadPoolExecutor.
@@ -1105,22 +1111,22 @@ class TradingAgent(Protocol):
 
 | Layer | Key Files | Lines |
 |-------|-----------|-------|
-| **Models** | `arena/models.py` | 152 |
-| **Config** | `arena/config.py` | 1,060 |
-| **Data** | `arena/data/bq.py` + `bigquery/` (7 stores + session) | 141 + 8,508 |
-| **Schema** | `arena/data/schema.py` | 992 |
-| **Agents** | `arena/agents/` (12 adk_* + base + support/research/compaction) | 5,334 + 1,226 |
-| **Memory** | `arena/memory/` (16 files) | 8,658 |
-| **Tools** | `arena/tools/` (8 files) | 5,114 |
+| **Models** | `arena/models.py` | 156 |
+| **Config** | `arena/config.py` | 1,137 |
+| **Data** | `arena/data/bq.py` + `bigquery/` (8 stores + session) | 144 + 8,877 |
+| **Schema** | `arena/data/schema.py` | 1,106 |
+| **Agents** | `arena/agents/` (12 adk_* + base + llm_params + support/research/compaction) | 5,862 + 1,403 |
+| **Memory** | `arena/memory/` (16 files) | 8,859 |
+| **Tools** | `arena/tools/` (9 files) | 5,358 |
 | **Recommendation** | `arena/recommendation/` (ranker + signals) | 918 |
-| **Context** | `arena/context.py` | 2,642 |
-| **Orchestration** | `arena/orchestrator.py` | 482 |
-| **Execution** | `arena/execution/gateway.py` + `risk.py` | 431 + 119 |
-| **Broker** | `arena/broker/` (3 files) | 674 |
-| **Open Trading** | `arena/open_trading/` (7 files) | 6,419 |
-| **Reconciliation** | `arena/reconciliation.py` | 1,374 |
-| **CLI** | `arena/cli.py` + `cli_commands/` (9 files) | 392 + 3,311 |
-| **UI** | `arena/ui/` (routes + core) | ~8,700 |
-| **Providers** | `arena/providers/` (2 files) | 339 |
+| **Context** | `arena/context.py` | 2,756 |
+| **Orchestration** | `arena/orchestrator.py` | 571 |
+| **Execution** | `arena/execution/gateway.py` + `risk.py` | 460 + 119 |
+| **Broker** | `arena/broker/` (3 files) | 677 |
+| **Open Trading** | `arena/open_trading/` (7 files) | 6,964 |
+| **Reconciliation** | `arena/reconciliation.py` | 1,423 |
+| **CLI** | `arena/cli.py` + `cli_commands/` (9 files) | 399 + 4,510 |
+| **UI** | `arena/ui/` (routes + core) | ~9,500 |
+| **Providers** | `arena/providers/` (3 files) | 408 |
 | **Forecasting** | `arena/forecasting/stacked.py` | 679 |
-| **Tests** | `tests/` (61 files) | — |
+| **Tests** | `tests/` (67 files) | — |

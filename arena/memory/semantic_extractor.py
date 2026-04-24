@@ -26,7 +26,7 @@ from arena.providers.registry import canonical_provider, get_provider_spec
 logger = logging.getLogger(__name__)
 
 EXTRACTOR_VERSION = "semantic_relation_extractor_v1"
-PROMPT_VERSION = "semantic_relation_prompt_v1"
+PROMPT_VERSION = "semantic_relation_prompt_v2"
 
 DEFAULT_MEMORY_EVENT_TYPES: tuple[str, ...] = (
     "strategy_reflection",
@@ -198,7 +198,8 @@ def build_extraction_prompt(source: RelationSource, *, max_triples: int = 6) -> 
             + " high-signal semantic relation triples.",
             "Prefer causal, risk, support, contradiction, invalidation, and outcome relations. Use mentions only when no stronger predicate is justified.",
             "Every evidence_text must be copied verbatim from the source text. Do not use outside knowledge.",
-            "Use uppercase labels for ticker entities.",
+            "Use ticker type only for actual ticker symbols or exchange codes, such as NVDA or 005930. Use company for company names.",
+            "Use uppercase labels for ticker entities when the ticker has letters.",
             ontology_prompt_block(),
             "Return JSON matching this schema:\n" + json.dumps(schema, ensure_ascii=False),
             "Source:\n" + json.dumps(source_payload, ensure_ascii=False, default=str),

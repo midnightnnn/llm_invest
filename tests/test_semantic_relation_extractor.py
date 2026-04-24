@@ -121,6 +121,27 @@ def test_validate_extracted_relations_accepts_minor_evidence_rephrase() -> None:
     assert result.rejected == []
 
 
+def test_validate_extracted_relations_accepts_non_ascii_concept_labels() -> None:
+    result = validate_extracted_relations(
+        [
+            {
+                "subject": {"label": "수출 규제", "type": "risk"},
+                "predicate": "risk_to",
+                "object": {"label": "NVDA", "type": "ticker"},
+                "confidence": 0.86,
+                "evidence_text": "수출 규제는 NVDA 매출에 부담이다.",
+            }
+        ],
+        source=_source("수출 규제는 NVDA 매출에 부담이다."),
+        extractor_version="semantic_relation_extractor_v1",
+        prompt_version="semantic_relation_prompt_v1",
+    )
+
+    assert len(result.accepted) == 1
+    assert result.accepted[0]["subject_node_id"] == "entity:risk:수출_규제"
+    assert result.rejected == []
+
+
 def test_validate_extracted_relations_applies_predicate_confidence_threshold() -> None:
     result = validate_extracted_relations(
         [

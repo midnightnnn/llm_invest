@@ -26,7 +26,7 @@ ALLOWED_RELATION_PREDICATES = frozenset(
     }
 )
 
-_SLUG_RE = re.compile(r"[^a-z0-9_.:-]+")
+_SLUG_RE = re.compile(r"[^\w.:-]+", re.UNICODE)
 _TICKER_RE = re.compile(r"^[A-Z0-9][A-Z0-9._-]{0,14}$")
 _SOURCE_NODE_PREFIXES = ("mem:", "post:", "brief:", "intent:", "exec:")
 

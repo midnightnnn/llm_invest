@@ -208,7 +208,7 @@ def test_relation_tuner_canonicalizes_model_provider_order_for_version_compare()
         previous_state={
             "versions": {
                 "extractor_version": "semantic_relation_extractor_v1",
-                "prompt_version": "semantic_relation_prompt_v1",
+                "prompt_version": "semantic_relation_prompt_v2",
                 "ontology_version": "semantic_relation_ontology_v1",
                 "models": ["openai/gpt-5.2", "anthropic/claude-sonnet-4-6"],
                 "providers": ["gpt", "claude"],

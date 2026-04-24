@@ -262,7 +262,7 @@ arena/
   orchestrator.py  # Cycle orchestration
   reconciliation.py # State reconciliation + auto-recovery
   risk.py          # Risk engine
-tests/             # 61 test files (pytest)
+tests/             # 67 test files (pytest)
 scripts/           # Deployment scripts
 ```
 

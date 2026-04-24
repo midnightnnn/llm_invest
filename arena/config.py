@@ -593,7 +593,7 @@ def load_settings() -> Settings:
         research_max_tickers=_to_int(os.getenv("ARENA_RESEARCH_MAX_TICKERS"), 5),
         research_mover_top_n=_to_int(os.getenv("ARENA_RESEARCH_MOVER_TOP_N"), 3),
         research_earnings_lookahead_days=_to_int(os.getenv("ARENA_RESEARCH_EARNINGS_LOOKAHEAD_DAYS"), 7),
-        adk_max_tool_events=_to_int(os.getenv("ARENA_ADK_MAX_TOOL_EVENTS"), 120),
+        adk_max_tool_events=_to_int(os.getenv("ARENA_ADK_MAX_TOOL_EVENTS"), 60),
         universe_run_top_n=_to_int(os.getenv("ARENA_UNIVERSE_RUN_TOP_N"), 400),
         universe_per_exchange_cap=_to_int(os.getenv("ARENA_UNIVERSE_PER_EXCHANGE_CAP"), 200),
         us_quote_exchanges=[
