@@ -55,6 +55,7 @@ from arena.agents.adk_decision_flow import (
     tag_phase_tool_events,
 )
 from arena.agents.adk_runner_runtime import (
+    AdkToolBudgetExceeded,
     collect_response_text,
     persist_tool_summary_memory,
     search_tool_memories,
@@ -174,6 +175,13 @@ def _is_retryable_adk_error(exc: Exception) -> bool:
     """Returns True when ADK/model failure looks transient."""
     text = f"{type(exc).__name__}: {exc}".strip().lower()
     if not text:
+        return False
+    if (
+        "adk coroutine timed out after" in text
+        or "adk call timed out after" in text
+        or "adk tool-budget finalization timed out" in text
+        or "adk tool budget exceeded" in text
+    ):
         return False
     markers = [
         "resource_exhausted",
@@ -1013,7 +1021,7 @@ class _ADKDecisionRunner:
         """Schedules a coroutine on the shared ADK loop and waits for result."""
         if self._loop.is_closed():
             self._loop = self._acquire_shared_loop()
-        timeout = max(float(self.settings.llm_timeout_seconds) + 30.0, 60.0)
+        timeout = max(float(self.settings.timeout_for("trading")) + 30.0, 60.0)
         future = None
         try:
             future = asyncio.run_coroutine_threadsafe(coro, self._loop)
@@ -1031,14 +1039,51 @@ class _ADKDecisionRunner:
                 raise RuntimeError("Failed to schedule coroutine on shared ADK loop") from exc
             raise
 
-    async def _collect_response_text(self, runner: Runner, session_id: str, prompt: str) -> str:
+    def _tool_budget_closing_prompt(self) -> str:
+        """Builds a one-shot finalization prompt after the ReAct tool budget is exhausted."""
+        phase = str(getattr(self, "_current_phase", "") or "execution").strip().lower() or "execution"
+        if phase == "board":
+            schema = '{\n  "board_title": "게시판 제목",\n  "board_body": "게시판 전체글"\n}'
+        elif phase == "explore":
+            schema = '{\n  "explore_summary": "지금까지 확인한 핵심 근거와 다음 행동 계획"\n}'
+        else:
+            schema = (
+                '{\n'
+                '  "explore_summary": "지금까지 확인한 핵심 근거와 주문 판단",\n'
+                '  "orders": []\n'
+                '}'
+            )
+        return "\n".join(
+            [
+                f"cycle_phase: {phase}",
+                "",
+                "도구 호출 예산이 끝났습니다. 더 이상 도구를 호출하지 마십시오.",
+                "이미 같은 세션에 있는 컨텍스트와 도구 결과만 사용해 지금 최종 JSON을 반환하십시오.",
+                "확신이 부족하면 새 도구를 호출하지 말고 보수적으로 HOLD 또는 빈 orders를 선택하십시오.",
+                "",
+                "## 출력 형식 (JSON only)",
+                "```json",
+                schema,
+                "```",
+            ]
+        )
+
+    async def _collect_response_text(
+        self,
+        runner: Runner,
+        session_id: str,
+        prompt: str,
+        *,
+        max_tool_events: int | None = None,
+        run_config: Any | None = None,
+    ) -> str:
         last_text, token_usage = await collect_response_text(
             runner=runner,
             user_id=self._user_id,
             session_id=session_id,
             prompt=prompt,
-            run_config=self._run_config,
-            max_tool_events=self._max_tool_events,
+            run_config=run_config or self._run_config,
+            max_tool_events=self._max_tool_events if max_tool_events is None else max_tool_events,
             wrapped_tool_names=self._wrapped_tool_names,
             tool_events=self._tool_events,
             agent_id=self.agent_id,
@@ -1048,13 +1093,36 @@ class _ADKDecisionRunner:
 
     async def _run_async(self, runner: Runner, session_id: str, prompt: str) -> str:
         """Runs one ADK call with a hard timeout and returns final text."""
+        trading_timeout = int(self.settings.timeout_for("trading"))
         try:
             return await asyncio.wait_for(
                 self._collect_response_text(runner, session_id, prompt),
-                timeout=self.settings.llm_timeout_seconds,
+                timeout=trading_timeout,
             )
+        except AdkToolBudgetExceeded as exc:
+            closing_timeout = min(max(float(trading_timeout) * 0.2, 60.0), 300.0)
+            logger.warning(
+                "[yellow]ADK tool budget exhausted; requesting final JSON[/yellow] agent=%s provider=%s timeout=%.0fs err=%s",
+                self.agent_id,
+                self.provider,
+                closing_timeout,
+                str(exc),
+            )
+            try:
+                return await asyncio.wait_for(
+                    self._collect_response_text(
+                        runner,
+                        session_id,
+                        self._tool_budget_closing_prompt(),
+                        max_tool_events=0,
+                        run_config=build_run_config(1),
+                    ),
+                    timeout=closing_timeout,
+                )
+            except asyncio.TimeoutError as close_exc:
+                raise TimeoutError(f"ADK tool-budget finalization timed out after {int(closing_timeout)}s") from close_exc
         except asyncio.TimeoutError as exc:
-            raise TimeoutError(f"ADK call timed out after {self.settings.llm_timeout_seconds}s") from exc
+            raise TimeoutError(f"ADK call timed out after {trading_timeout}s") from exc
 
     def decide_orders(
         self,

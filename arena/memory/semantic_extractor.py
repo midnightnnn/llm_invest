@@ -232,10 +232,11 @@ class SemanticRelationExtractor:
         self.max_triples_per_source = max(1, min(int(max_triples_per_source), 12))
 
     async def _collect_response_text(self, *, prompt: str) -> str:
+        extractor_timeout = int(self.settings.timeout_for("compaction"))
         request_kwargs: dict[str, Any] = {
             "model": self.model,
             "api_key": self.api_key,
-            "timeout": self.settings.llm_timeout_seconds,
+            "timeout": extractor_timeout,
             "messages": [
                 {"role": "system", "content": _SYSTEM_INSTRUCTION},
                 {"role": "user", "content": prompt},
@@ -252,7 +253,7 @@ class SemanticRelationExtractor:
             try:
                 response = await asyncio.wait_for(
                     litellm.acompletion(**request_kwargs),
-                    timeout=self.settings.llm_timeout_seconds,
+                    timeout=extractor_timeout,
                 )
                 text = _extract_response_text(response)
                 if not text:

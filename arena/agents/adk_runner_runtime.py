@@ -16,6 +16,10 @@ from arena.models import MemoryEvent, utc_now
 logger = logging.getLogger(__name__)
 
 
+class AdkToolBudgetExceeded(RuntimeError):
+    """Raised when an ADK ReAct run keeps calling tools past its budget."""
+
+
 def truncate_tool_result(value: Any, max_list: int = 30, max_str: int = 2000) -> Any:
     """Truncates large nested tool payloads before event logging."""
     if isinstance(value, dict):
@@ -235,7 +239,9 @@ async def collect_response_text(
                 )
                 if tool_calls > max_tool_events:
                     logger.warning("[yellow]ReAct loop hit max tool calls (%d)[/yellow]", max_tool_events)
-                    break
+                    raise AdkToolBudgetExceeded(
+                        f"ADK tool budget exceeded after {tool_calls} tool calls (limit={max_tool_events})"
+                    )
             text = getattr(part, "text", None)
             if text:
                 last_text = text

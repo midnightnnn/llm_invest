@@ -42,6 +42,13 @@ def _to_int(value: str | None, default: int) -> int:
     return int(value)
 
 
+def _to_optional_int(value: str | None) -> int | None:
+    """Parses integer returning None when unset or blank."""
+    if value is None or not value.strip():
+        return None
+    return int(value)
+
+
 def _csv(value: str | None, default: list[str]) -> list[str]:
     """Parses delimited values into a clean list (comma/pipe/semicolon)."""
     if value is None or not value.strip():
@@ -144,6 +151,13 @@ class Settings:
     research_gemini_source: str = ""
     research_gemini_source_tenant: str = ""
 
+    # Role-specific LLM timeout overrides. None falls back to llm_timeout_seconds.
+    llm_timeout_trading_seconds: int | None = None
+    llm_timeout_research_seconds: int | None = None
+    llm_timeout_compaction_seconds: int | None = None
+    # Runtime override (e.g., CLI --timeout flag). Highest precedence when set.
+    llm_timeout_runtime_override_seconds: int | None = None
+
     research_enabled: bool = True
     research_max_tickers: int = 5
     research_mover_top_n: int = 3
@@ -178,6 +192,24 @@ class Settings:
     autonomy_working_set_enabled: bool = True
     autonomy_tool_default_candidates_enabled: bool = True
     autonomy_opportunity_context_enabled: bool = True
+
+    def timeout_for(self, role: str) -> int:
+        """Resolves LLM timeout (seconds) for a given agent role.
+
+        Precedence: runtime override (CLI --timeout) > role-specific env var >
+        llm_timeout_seconds fallback. Unknown roles use the same chain.
+        """
+        runtime = self.llm_timeout_runtime_override_seconds
+        if runtime is not None and runtime > 0:
+            return int(runtime)
+        override = {
+            "trading": self.llm_timeout_trading_seconds,
+            "research": self.llm_timeout_research_seconds,
+            "compaction": self.llm_timeout_compaction_seconds,
+        }.get(role)
+        if override is not None and override > 0:
+            return int(override)
+        return int(self.llm_timeout_seconds)
 
 
 # Provider alias mapping: agent_id keyword -> canonical provider name
@@ -549,6 +581,9 @@ def load_settings() -> Settings:
         research_gemini_api_key=os.getenv("ARENA_RESEARCH_GEMINI_API_KEY", "").strip(),
         research_gemini_source=("env" if os.getenv("ARENA_RESEARCH_GEMINI_API_KEY", "").strip() else ""),
         llm_timeout_seconds=_to_int(os.getenv("ARENA_LLM_TIMEOUT_SECONDS"), 90),
+        llm_timeout_trading_seconds=_to_optional_int(os.getenv("ARENA_LLM_TIMEOUT_TRADING_SECONDS")),
+        llm_timeout_research_seconds=_to_optional_int(os.getenv("ARENA_LLM_TIMEOUT_RESEARCH_SECONDS")),
+        llm_timeout_compaction_seconds=_to_optional_int(os.getenv("ARENA_LLM_TIMEOUT_COMPACTION_SECONDS")),
         default_universe=[],
         allow_live_trading=_to_bool(os.getenv("ARENA_ALLOW_LIVE_TRADING"), False),
         live_slippage_bps_base=_to_float(os.getenv("ARENA_LIVE_SLIPPAGE_BPS_BASE"), 8.0),
@@ -1067,6 +1102,14 @@ def validate_settings(
             errors.append("KIS_HTTP_BACKOFF_BASE_SECONDS must be positive")
         if settings.kis_http_backoff_max_seconds < settings.kis_http_backoff_base_seconds:
             errors.append("KIS_HTTP_BACKOFF_MAX_SECONDS must be >= KIS_HTTP_BACKOFF_BASE_SECONDS")
+
+        for role_var, value in (
+            ("ARENA_LLM_TIMEOUT_TRADING_SECONDS", settings.llm_timeout_trading_seconds),
+            ("ARENA_LLM_TIMEOUT_RESEARCH_SECONDS", settings.llm_timeout_research_seconds),
+            ("ARENA_LLM_TIMEOUT_COMPACTION_SECONDS", settings.llm_timeout_compaction_seconds),
+        ):
+            if value is not None and int(value) <= 0:
+                errors.append(f"{role_var} must be positive when set")
 
         if settings.max_daily_orders < 0:
             errors.append("ARENA_MAX_DAILY_ORDERS must be >= 0")

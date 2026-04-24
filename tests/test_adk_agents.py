@@ -17,6 +17,7 @@ from arena.agents.adk_agents import (
     _compact_tool_result_for_prompt,
     _ContextTools,
     _has_credentials,
+    _is_retryable_adk_error,
     _load_disabled_tool_ids,
     _resolve_disabled_tool_ids,
     _resolve_model,
@@ -40,11 +41,12 @@ from arena.agents.adk_decision_flow import (
 from arena.agents.adk_order_support import (
     build_order_intents,
     fetch_market_row_from_bq,
+    format_execution_summary,
     format_orders_summary,
     resolve_order_price,
 )
 from arena.agents.adk_runner_bootstrap import resolve_max_tool_events, runner_identity
-from arena.agents.adk_runner_runtime import collect_response_text
+from arena.agents.adk_runner_runtime import AdkToolBudgetExceeded, collect_response_text
 from arena.config import AgentConfig, load_settings
 from arena.memory.query_builders import build_memory_query
 from arena.models import BoardPost, ExecutionReport, ExecutionStatus, OrderIntent, Side, utc_now
@@ -226,6 +228,13 @@ def test_retry_policy_from_env_clamps_extreme_values(monkeypatch) -> None:
     assert retry_delay == 10.0
 
 
+def test_adk_own_timeout_is_not_retryable() -> None:
+    assert _is_retryable_adk_error(TimeoutError("ADK coroutine timed out after 1530s")) is False
+    assert _is_retryable_adk_error(TimeoutError("ADK tool-budget finalization timed out after 60s")) is False
+    assert _is_retryable_adk_error(AdkToolBudgetExceeded("ADK tool budget exceeded after 121 tool calls")) is False
+    assert _is_retryable_adk_error(RuntimeError("429 RESOURCE_EXHAUSTED")) is True
+
+
 class _RepoForMarketLookup:
     def __init__(self, rows: list[dict[str, object]]) -> None:
         self.rows = rows
@@ -401,6 +410,32 @@ def test_format_orders_summary_uses_known_kospi_ticker_name() -> None:
     )
 
     assert "남해화학(025860) BUY 3.0주" in summary
+
+
+def test_format_execution_summary_includes_error_reference_price() -> None:
+    intent = OrderIntent(
+        agent_id="claude",
+        ticker="001510",
+        side=Side.SELL,
+        quantity=10.0,
+        price_krw=1880.0,
+        rationale="거래정지 리스크 축소.",
+    )
+    report = ExecutionReport(
+        status=ExecutionStatus.ERROR,
+        order_id="err_1",
+        filled_qty=0.0,
+        avg_price_krw=1861.0,
+        avg_price_native=1861.0,
+        quote_currency="KRW",
+        fx_rate=1.0,
+        message="거래정지종목(주식)은 취소주문만 가능(정정불가)합니다.",
+    )
+
+    summary = format_execution_summary([intent], [report], ticker_names={"001510": "SK증권"})
+
+    assert "SK증권(001510) SELL 10주 ERROR 시도호가 @₩1,861" in summary
+    assert "거래정지종목" in summary
 
 
 def test_extract_decision_payload_normalizes_non_list_orders() -> None:
@@ -2192,6 +2227,60 @@ class _AsyncRunnerForResponseCollection:
         )
 
 
+class _AsyncRunnerExceedsToolBudget:
+    async def run_async(self, *, user_id, session_id, new_message, run_config):
+        _ = (user_id, session_id, new_message, run_config)
+        for ticker in ("AAPL", "MSFT"):
+            yield SimpleNamespace(
+                usage_metadata=None,
+                content=SimpleNamespace(
+                    parts=[
+                        SimpleNamespace(
+                            function_call=SimpleNamespace(name="remote_macro_tool", args={"ticker": ticker}),
+                            text=None,
+                        )
+                    ]
+                ),
+            )
+
+
+class _AsyncRunnerBudgetThenFinal:
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
+
+    async def run_async(self, *, user_id, session_id, new_message, run_config):
+        _ = (user_id, session_id, run_config)
+        prompt = str(getattr(new_message.parts[0], "text", "") or "")
+        self.prompts.append(prompt)
+        if "도구 호출 예산이 끝났습니다" in prompt:
+            yield SimpleNamespace(
+                usage_metadata=SimpleNamespace(
+                    prompt_token_count=40,
+                    candidates_token_count=12,
+                    cached_content_token_count=0,
+                    thoughts_token_count=0,
+                ),
+                content=SimpleNamespace(
+                    parts=[
+                        SimpleNamespace(function_call=None, text='{"explore_summary":"budget closed"}'),
+                    ]
+                ),
+            )
+            return
+        for ticker in ("AAPL", "MSFT"):
+            yield SimpleNamespace(
+                usage_metadata=None,
+                content=SimpleNamespace(
+                    parts=[
+                        SimpleNamespace(
+                            function_call=SimpleNamespace(name="remote_macro_tool", args={"ticker": ticker}),
+                            text=None,
+                        )
+                    ]
+                ),
+            )
+
+
 def test_collect_response_text_records_mcp_calls_and_token_usage() -> None:
     tool_events: list[dict] = []
 
@@ -2226,6 +2315,47 @@ def test_collect_response_text_records_mcp_calls_and_token_usage() -> None:
             "source": "mcp",
         }
     ]
+
+
+def test_collect_response_text_aborts_when_tool_budget_exceeded() -> None:
+    tool_events: list[dict] = []
+
+    with pytest.raises(AdkToolBudgetExceeded):
+        asyncio.run(
+            collect_response_text(
+                runner=_AsyncRunnerExceedsToolBudget(),
+                user_id="arena",
+                session_id="sid_1",
+                prompt="cycle_phase: execution",
+                run_config=object(),
+                max_tool_events=1,
+                wrapped_tool_names=set(),
+                tool_events=tool_events,
+                agent_id="gpt",
+            )
+        )
+
+    assert [event["args"]["ticker"] for event in tool_events] == ["AAPL", "MSFT"]
+
+
+def test_run_async_requests_final_json_when_tool_budget_exceeded() -> None:
+    decision_runner = _ADKDecisionRunner.__new__(_ADKDecisionRunner)
+    decision_runner._user_id = "arena"
+    decision_runner._run_config = object()
+    decision_runner._max_tool_events = 1
+    decision_runner._wrapped_tool_names = set()
+    decision_runner._tool_events = []
+    decision_runner.agent_id = "gpt"
+    decision_runner.provider = "gpt"
+    decision_runner._current_phase = "explore"
+    decision_runner.settings = SimpleNamespace(timeout_for=lambda role: 10)
+    fake_runner = _AsyncRunnerBudgetThenFinal()
+
+    text = asyncio.run(decision_runner._run_async(fake_runner, "sid_1", "initial prompt"))
+
+    assert text == '{"explore_summary":"budget closed"}'
+    assert len(fake_runner.prompts) == 2
+    assert "더 이상 도구를 호출하지 마십시오" in fake_runner.prompts[1]
 
 
 def test_save_memory_tool_creates_manual_note() -> None:

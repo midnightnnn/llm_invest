@@ -18,4 +18,5 @@ def test_kospi_scheduler_defaults_align_with_runtime_schedule_guard() -> None:
     assert '--message-body "${body}"' in script
     assert '--role "roles/run.jobsExecutorWithOverrides"' in script
     assert "ARENA_LLM_TIMEOUT_SECONDS=1500" in script
-    assert 'AGENT_TASK_TIMEOUT="${AGENT_TASK_TIMEOUT:-5400s}"' in script
+    assert "ARENA_LLM_TIMEOUT_TRADING_SECONDS=3000" in script
+    assert 'AGENT_TASK_TIMEOUT="${AGENT_TASK_TIMEOUT:-7200s}"' in script

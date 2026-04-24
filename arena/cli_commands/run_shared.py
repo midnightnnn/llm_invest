@@ -2,7 +2,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from datetime import date
+from datetime import date, timedelta
 
 from arena.config import Settings
 from arena.data.bq import BigQueryRepository
@@ -127,6 +127,58 @@ def _daily_history_sources_for_markets(markets: list[str] | set[str] | tuple[str
     ]
 
 
+def _probe_daily_coverage(
+    repo: BigQueryRepository,
+    markets_to_probe: list[str],
+    *,
+    trading_day: date,
+) -> tuple[str | None, int]:
+    """Returns the best same-day daily-history coverage across candidate sources."""
+    sources = _daily_history_sources_for_markets(markets_to_probe)
+    if not sources:
+        return None, 0
+
+    coverage_fn = getattr(repo, "market_daily_ticker_coverage", None)
+    if not callable(coverage_fn):
+        distinct_fn = getattr(repo, "market_source_distinct_tickers", None)
+        if not callable(distinct_fn):
+            return None, 0
+        best_source = None
+        best_coverage = 0
+        for source in sources:
+            coverage = int(distinct_fn(source=source) or 0)
+            if coverage > best_coverage:
+                best_source = source
+                best_coverage = coverage
+        return best_source, best_coverage
+
+    best_source = None
+    best_coverage = 0
+    for source in sources:
+        coverage = int(coverage_fn(source=source, day=trading_day) or 0)
+        if coverage > best_coverage:
+            best_source = source
+            best_coverage = coverage
+    return best_source, best_coverage
+
+
+def _probe_recent_daily_coverage(
+    repo: BigQueryRepository,
+    markets_to_probe: list[str],
+    *,
+    anchor_day: date,
+    lookback_days: int = 7,
+) -> tuple[str | None, date | None, int]:
+    """Returns the most recent non-empty daily-history coverage within a short lookback window."""
+    clean_lookback = max(int(lookback_days or 0), 0)
+    for offset in range(clean_lookback + 1):
+        probe_day = anchor_day - timedelta(days=offset)
+        source, coverage = _probe_daily_coverage(repo, markets_to_probe, trading_day=probe_day)
+        if coverage > 0:
+            return source, probe_day if source else None, coverage
+    return None, None, 0
+
+
 def _tenant_lease_enabled() -> bool:
     """Enables tenant execution leases by default in Cloud Run jobs only."""
     cli = _cli()
@@ -237,23 +289,10 @@ def _batch_phase(
         return "general", None
 
     now = cli.utc_now()
-
-    def _probe_source_ticker_count(markets_to_probe: list[str]) -> int:
-        sources = _daily_history_sources_for_markets(markets_to_probe)
-        if not sources:
-            return 0
-        return max(repo.market_source_distinct_tickers(source=source) for source in sources)
-
-    def _probe_daily_coverage(markets_to_probe: list[str], *, trading_day: date) -> tuple[str | None, int]:
-        sources = _daily_history_sources_for_markets(markets_to_probe)
-        best_source = None
-        best_coverage = 0
-        for source in sources:
-            coverage = repo.market_daily_ticker_coverage(source=source, day=trading_day)
-            if coverage > best_coverage:
-                best_source = source
-                best_coverage = coverage
-        return best_source, best_coverage
+    try:
+        recent_lookback_days = int(os.getenv("ARENA_BATCH_DAILY_FRESHNESS_LOOKBACK_DAYS", "7") or "7")
+    except ValueError:
+        recent_lookback_days = 7
 
     if has_kr and not has_us:
         window = cli.kospi_window(now)
@@ -263,8 +302,21 @@ def _batch_phase(
             window.now_local.strftime("%Y-%m-%d %H:%M"),
             extra={"event": "market_window", "phase": window.phase, "trading_date_kst": window.trading_date.isoformat()},
         )
-        daily_tickers = _probe_source_ticker_count(["kospi"])
+        daily_source, daily_day, daily_tickers = _probe_recent_daily_coverage(
+            repo,
+            ["kospi"],
+            anchor_day=window.trading_date,
+            lookback_days=recent_lookback_days,
+        )
         if daily_tickers < 30:
+            logger.info(
+                "[cyan]Daily history missing or stale; seeding[/cyan] phase=%s source=%s freshest_day=%s coverage=%d lookback_days=%d",
+                window.phase,
+                daily_source or "-",
+                daily_day.isoformat() if daily_day else "-",
+                daily_tickers,
+                recent_lookback_days,
+            )
             return "seed", window
 
         disable_guard = str(os.getenv("ARENA_KOSPI_DISABLE_SCHEDULE_GUARD", "")).strip().lower() in {"1", "true", "yes", "y", "on"}
@@ -301,9 +353,21 @@ def _batch_phase(
         extra={"event": "market_window", "phase": window.phase, "trading_date_et": window.trading_date.isoformat()},
     )
 
-    daily_tickers = _probe_source_ticker_count(sorted(markets & _US_MARKET_KEYS))
+    daily_source, daily_day, daily_tickers = _probe_recent_daily_coverage(
+        repo,
+        sorted(markets & _US_MARKET_KEYS),
+        anchor_day=window.trading_date,
+        lookback_days=recent_lookback_days,
+    )
     if daily_tickers < 80:
-        logger.info("[cyan]Daily history missing; seeding[/cyan] phase=%s", window.phase)
+        logger.info(
+            "[cyan]Daily history missing or stale; seeding[/cyan] phase=%s source=%s freshest_day=%s coverage=%d lookback_days=%d",
+            window.phase,
+            daily_source or "-",
+            daily_day.isoformat() if daily_day else "-",
+            daily_tickers,
+            recent_lookback_days,
+        )
         return "seed", window
 
     disable_schedule_guard = str(os.getenv("ARENA_NASDAQ_DISABLE_SCHEDULE_GUARD", "")).strip().lower() in {"1", "true", "yes", "y", "on"}
@@ -368,16 +432,16 @@ def _batch_market_sync(
     settings: Settings,
     repo: BigQueryRepository,
     window: MarketWindow | None,
-) -> None:
+) -> object | None:
     """Runs shared market data sync once based on batch phase."""
     cli = _cli()
     market_service = cli.MarketDataSyncService(settings=settings, repo=repo)
 
     if phase in ("seed", "general"):
-        market_service.sync_market_features()
-    elif phase == "open_cycle":
-        market_service.sync_market_quotes()
-    elif phase == "report" and window is not None:
+        return market_service.sync_market_features()
+    if phase == "open_cycle":
+        return market_service.sync_market_quotes()
+    if phase == "report" and window is not None:
         markets = _parse_cli_markets(settings)
         if _has_kr(markets) and not _has_us(markets):
             probe_markets = ["kospi"]
@@ -385,7 +449,7 @@ def _batch_market_sync(
         else:
             probe_markets = sorted(markets & _US_MARKET_KEYS)
             threshold = 80
-        source, coverage = _probe_daily_coverage(probe_markets, trading_day=window.trading_date)
+        source, coverage = _probe_daily_coverage(repo, probe_markets, trading_day=window.trading_date)
         if coverage < threshold:
             logger.info(
                 "[cyan]Daily sync required[/cyan] date=%s source=%s coverage=%d",
@@ -393,7 +457,8 @@ def _batch_market_sync(
                 source or "-",
                 coverage,
             )
-            market_service.sync_market_features()
+            return market_service.sync_market_features()
+    return None
 
 
 def _run_mtm_score_update(settings: Settings) -> int:

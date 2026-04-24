@@ -67,6 +67,7 @@ def cmd_extract_memory_relations(
 
     if timeout_seconds > 0:
         settings.llm_timeout_seconds = int(timeout_seconds)
+        settings.llm_timeout_runtime_override_seconds = int(timeout_seconds)
 
     settings.trading_mode = getattr(settings, "trading_mode", "paper").strip().lower()
     cli._validate_or_exit(settings, require_kis=False, require_llm=True, live=False)

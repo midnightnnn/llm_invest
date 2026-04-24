@@ -177,7 +177,7 @@ def _resolve_model(
         model_id = configured_model.strip()
         if not model_id:
             raise ValueError("ANTHROPIC_MODEL is required for claude agent")
-        llm_timeout = max(1, int(settings.llm_timeout_seconds))
+        llm_timeout = max(1, int(settings.timeout_for("trading")))
         kwargs: dict[str, Any] = {
             "cache_control_injection_points": [
                 {"location": "message", "role": "system"},
@@ -208,7 +208,7 @@ def _resolve_model(
         model_id = configured_model.strip()
         if not model_id:
             raise ValueError(f"model is required for provider '{spec.provider_id}'")
-        llm_timeout = max(1, int(settings.llm_timeout_seconds))
+        llm_timeout = max(1, int(settings.timeout_for("trading")))
         litellm_provider = str(spec.litellm_provider or spec.provider_id).strip() or spec.provider_id
         if "/" not in model_id:
             model_id = f"{litellm_provider}/{model_id}"

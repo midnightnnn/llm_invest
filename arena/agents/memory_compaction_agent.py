@@ -514,10 +514,11 @@ class MemoryCompactionAgent:
         )
 
     async def _collect_response_text(self, *, prompt: str) -> str:
+        compaction_timeout = int(self.settings.timeout_for("compaction"))
         request_kwargs: dict[str, Any] = {
             "model": self.model,
             "api_key": self.api_key,
-            "timeout": self.settings.llm_timeout_seconds,
+            "timeout": compaction_timeout,
             "messages": [
                 {"role": "system", "content": _COMPACTION_INSTRUCTION},
                 {"role": "user", "content": prompt},
@@ -533,7 +534,7 @@ class MemoryCompactionAgent:
             try:
                 response = await asyncio.wait_for(
                     litellm.acompletion(**request_kwargs),
-                    timeout=self.settings.llm_timeout_seconds,
+                    timeout=compaction_timeout,
                 )
                 text = _extract_response_text(response)
                 if not text.strip():

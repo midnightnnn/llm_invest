@@ -551,14 +551,17 @@ class KISOpenTradingBroker:
             return confirmed or report
         except Exception as exc:
             logger.exception("[red]KIS live order failed[/red] tenant=%s intent=%s", _runtime_tenant(), intent.intent_id)
+            attempted_price_krw = float(locals().get("limit_price_krw", 0.0) or intent.price_krw or 0.0)
+            attempted_price_native = float(locals().get("limit_price", 0.0) or 0.0) or None
+            attempted_fx = float(intent.fx_rate if intent.fx_rate > 0 else (locals().get("resolved_fx", 0.0) or 0.0))
             return ExecutionReport(
                 status=ExecutionStatus.ERROR,
                 order_id=f"err_{uuid4().hex[:10]}",
                 filled_qty=0.0,
-                avg_price_krw=0.0,
-                avg_price_native=None,
+                avg_price_krw=attempted_price_krw,
+                avg_price_native=attempted_price_native,
                 quote_currency=intent.quote_currency,
-                fx_rate=intent.fx_rate if intent.fx_rate > 0 else (resolved_fx if 'resolved_fx' in locals() else 0.0),
+                fx_rate=attempted_fx,
                 message=str(exc),
                 created_at=utc_now(),
             )

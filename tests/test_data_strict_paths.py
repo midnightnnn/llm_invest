@@ -247,6 +247,27 @@ def test_rebuild_universe_candidates_skips_rows_without_daily_history_features()
     assert written == {"ZERO", "GOOD"}
 
 
+def test_latest_universe_candidate_tickers_scopes_latest_run_by_market() -> None:
+    session = _FakeSession(
+        responses=[
+            [
+                {"ticker": "AAPL"},
+                {"ticker": "MSFT"},
+            ]
+        ]
+    )
+    store = MarketStore(session)
+
+    out = store.latest_universe_candidate_tickers(limit=10, markets=["nasdaq"])
+
+    assert out == ["AAPL", "MSFT"]
+    sql, params = session.call_pairs[0]
+    assert "FROM scoped" in sql
+    assert "IN UNNEST(@markets)" in sql
+    assert params["markets"] == ["us"]
+    assert params["limit"] == 10
+
+
 # ---------------------------------------------------------------------------
 # SleeveStore subclasses (override methods the tests customise)
 # ---------------------------------------------------------------------------

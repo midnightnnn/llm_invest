@@ -199,7 +199,7 @@ class ResearchAgent:
                                 text += part.text
                 return text.strip()
 
-            summary = await asyncio.wait_for(_run(), timeout=self.settings.llm_timeout_seconds)
+            summary = await asyncio.wait_for(_run(), timeout=self.settings.timeout_for("research"))
 
             if not summary:
                 return None

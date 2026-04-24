@@ -130,3 +130,67 @@ def test_validate_settings_allows_multi_market_combo_for_kis(monkeypatch) -> Non
     settings.kis_account_no = "12345678-01"
 
     validate_settings(settings, require_kis=True)
+
+
+def test_timeout_for_falls_back_when_role_override_unset(monkeypatch) -> None:
+    for env in (
+        "ARENA_LLM_TIMEOUT_TRADING_SECONDS",
+        "ARENA_LLM_TIMEOUT_RESEARCH_SECONDS",
+        "ARENA_LLM_TIMEOUT_COMPACTION_SECONDS",
+    ):
+        monkeypatch.delenv(env, raising=False)
+    monkeypatch.setenv("ARENA_LLM_TIMEOUT_SECONDS", "120")
+
+    settings = load_settings()
+
+    assert settings.llm_timeout_seconds == 120
+    assert settings.llm_timeout_trading_seconds is None
+    assert settings.timeout_for("trading") == 120
+    assert settings.timeout_for("research") == 120
+    assert settings.timeout_for("compaction") == 120
+    assert settings.timeout_for("unknown-role") == 120
+
+
+def test_timeout_for_uses_role_override_when_set(monkeypatch) -> None:
+    monkeypatch.setenv("ARENA_LLM_TIMEOUT_SECONDS", "90")
+    monkeypatch.setenv("ARENA_LLM_TIMEOUT_TRADING_SECONDS", "900")
+    monkeypatch.setenv("ARENA_LLM_TIMEOUT_RESEARCH_SECONDS", "60")
+    monkeypatch.setenv("ARENA_LLM_TIMEOUT_COMPACTION_SECONDS", "300")
+
+    settings = load_settings()
+
+    assert settings.timeout_for("trading") == 900
+    assert settings.timeout_for("research") == 60
+    assert settings.timeout_for("compaction") == 300
+    assert settings.timeout_for("other") == 90
+
+
+def test_timeout_for_runtime_override_takes_precedence(monkeypatch) -> None:
+    monkeypatch.setenv("ARENA_LLM_TIMEOUT_SECONDS", "90")
+    monkeypatch.setenv("ARENA_LLM_TIMEOUT_RESEARCH_SECONDS", "60")
+    monkeypatch.setenv("ARENA_LLM_TIMEOUT_TRADING_SECONDS", "900")
+
+    settings = load_settings()
+
+    assert settings.timeout_for("research") == 60
+    assert settings.timeout_for("trading") == 900
+
+    settings.llm_timeout_runtime_override_seconds = 15
+
+    assert settings.timeout_for("research") == 15, "runtime override must beat role env"
+    assert settings.timeout_for("trading") == 15
+    assert settings.timeout_for("unknown") == 15
+
+
+def test_validate_settings_rejects_non_positive_role_timeout(monkeypatch) -> None:
+    monkeypatch.setenv("ARENA_LLM_TIMEOUT_RESEARCH_SECONDS", "0")
+
+    settings = load_settings()
+    settings.kis_env = "demo"
+    settings.kis_secret_name = "KISAPI"
+    settings.kis_account_no = "12345678-01"
+
+    with pytest.raises(SettingsError) as exc_info:
+        validate_settings(settings, require_kis=True)
+
+    assert "ARENA_LLM_TIMEOUT_RESEARCH_SECONDS must be positive" in str(exc_info.value)

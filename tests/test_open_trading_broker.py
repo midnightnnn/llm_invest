@@ -520,3 +520,39 @@ def test_place_order_adjusts_kospi_limit_to_live_tick_and_logs_tenant(monkeypatc
     assert captured["limit_price"] == 2395.0
     assert "tenant=cxznms" in caplog.text
     assert report.order_id == "krx123"
+
+
+def test_place_order_error_preserves_attempted_kospi_limit(monkeypatch) -> None:
+    settings = _settings()
+    settings.kis_target_market = "kospi"
+    settings.live_slippage_bps_base = 8.0
+    settings.live_slippage_bps_impact = 12.0
+    settings.live_slippage_bps_max = 80.0
+    broker = KISOpenTradingBroker(settings=settings)
+    intent = OrderIntent(
+        agent_id="claude",
+        ticker="001510",
+        side=Side.SELL,
+        quantity=10.0,
+        price_krw=1880.0,
+        rationale="거래정지 리스크 축소.",
+        fx_rate=1.0,
+    )
+
+    monkeypatch.setattr(
+        broker.client,
+        "get_domestic_price",
+        lambda **kw: {"stck_prpr": "1863"},
+    )
+
+    def _fail_place(**kwargs):
+        raise RuntimeError("거래정지종목(주식)은 취소주문만 가능(정정불가)합니다.")
+
+    monkeypatch.setattr(broker.client, "place_domestic_cash_order", _fail_place)
+
+    report = broker.place_order(intent)
+
+    assert report.status.value == "ERROR"
+    assert report.avg_price_krw == 1861.0
+    assert report.avg_price_native == 1861.0
+    assert "거래정지종목" in report.message

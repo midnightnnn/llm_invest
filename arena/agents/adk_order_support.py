@@ -255,17 +255,21 @@ def format_execution_summary(
         if status in {"FILLED", "SIMULATED"}:
             filled_qty = max(float(report.filled_qty or 0.0), 0.0)
             avg_price = float(report.avg_price_krw or intent.price_krw or 0.0)
-            lines.append(f"- {display_ticker} {intent.side.value} {filled_qty:g}주 {status} @₩{avg_price:,.0f}")
+            lines.append(f"- {display_ticker} {intent.side.value} {filled_qty:g}주 {status} 체결가 @₩{avg_price:,.0f}")
             continue
         if status == "SUBMITTED":
-            lines.append(f"- {display_ticker} {intent.side.value} {qty_text} SUBMITTED (주문번호: {report.order_id})")
+            ref_price = float(report.avg_price_krw or intent.price_krw or 0.0)
+            price_text = f" 주문가 @₩{ref_price:,.0f}" if ref_price > 0 else ""
+            lines.append(f"- {display_ticker} {intent.side.value} {qty_text} SUBMITTED{price_text} (주문번호: {report.order_id})")
             continue
 
         reason = str(report.message or "").strip()
+        ref_price = float(report.avg_price_krw or intent.price_krw or 0.0)
+        price_text = f" 시도호가 @₩{ref_price:,.0f}" if ref_price > 0 else ""
         if reason:
-            lines.append(f"- {display_ticker} {intent.side.value} {qty_text} {status} (사유: {reason[:120]})")
+            lines.append(f"- {display_ticker} {intent.side.value} {qty_text} {status}{price_text} (사유: {reason[:120]})")
         else:
-            lines.append(f"- {display_ticker} {intent.side.value} {qty_text} {status}")
+            lines.append(f"- {display_ticker} {intent.side.value} {qty_text} {status}{price_text}")
 
     return "이번 사이클 실제 실행 결과:\n" + "\n".join(lines)
 

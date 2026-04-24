@@ -160,6 +160,7 @@ def cmd_smoke_research(provider: str, *, prompt: str = "", timeout_seconds: int 
 
     if timeout_seconds > 0:
         settings.llm_timeout_seconds = int(timeout_seconds)
+        settings.llm_timeout_runtime_override_seconds = int(timeout_seconds)
 
     smoke_prompt = (
         str(prompt or "").strip()
@@ -200,6 +201,7 @@ def cmd_smoke_thesis_compaction(
 
     if timeout_seconds > 0:
         settings.llm_timeout_seconds = int(timeout_seconds)
+        settings.llm_timeout_runtime_override_seconds = int(timeout_seconds)
 
     settings.trading_mode = getattr(settings, "trading_mode", "paper").strip().lower()
     cli._validate_or_exit(settings, require_kis=False, require_llm=True, live=False)

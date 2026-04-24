@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import logging
 from typing import Any
 
@@ -48,8 +49,21 @@ def resolve_runtime_universe(
     if not callable(loader):
         return []
 
+    supports_markets = False
     try:
-        discovered = loader(limit=limit)
+        signature = inspect.signature(loader)
+        supports_markets = "markets" in signature.parameters or any(
+            param.kind == inspect.Parameter.VAR_KEYWORD
+            for param in signature.parameters.values()
+        )
+    except (TypeError, ValueError):
+        supports_markets = False
+
+    try:
+        if supports_markets:
+            discovered = loader(limit=limit, markets=market_tokens)
+        else:
+            discovered = loader(limit=limit)
     except Exception as exc:
         logger.warning(
             "[yellow]runtime_universe load failed[/yellow] markets=%s err=%s",

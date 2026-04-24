@@ -69,6 +69,22 @@ def _finite_float_or_none(value: object) -> float | None:
     return float(parsed)
 
 
+def _normalize_universe_markets(markets: Any) -> list[str]:
+    """Normalizes runtime market tokens to the universe-candidate storage scope."""
+    tokens: list[str] = []
+    for raw in list(markets or []):
+        token = str(raw or "").strip().lower()
+        if token in {"nasdaq", "nyse", "amex", "us"}:
+            token = "us"
+        elif token == "kospi":
+            token = "kospi"
+        else:
+            continue
+        if token not in tokens:
+            tokens.append(token)
+    return tokens
+
+
 class MarketStore:
     """Market feature / price history repository operations."""
 
@@ -1356,6 +1372,56 @@ class MarketStore:
                     data[key] = {"raw": value} if key == "detail_json" else [value]
         return self._append_json_rows_via_load_job(table_id, [data])
 
+    def insert_shared_prep_session(self, row: dict[str, Any]) -> int:
+        """Records one shared-prep session marker (slow or fast) used by the
+        fast-stage readiness gate. Fails closed: caller must treat zero-return
+        as failure because the fast guard relies on this row to exist.
+        """
+        if not row:
+            return 0
+        table_id = f"{self.session.dataset_fqn}.shared_prep_sessions"
+        data = dict(row)
+        value = data.get("detail_json")
+        if isinstance(value, str):
+            try:
+                data["detail_json"] = json.loads(value)
+            except json.JSONDecodeError:
+                data["detail_json"] = {"raw": value}
+        return self._append_json_rows_via_load_job(table_id, [data])
+
+    def get_latest_shared_prep_session(
+        self,
+        *,
+        market: str,
+        trading_date: Any,
+        stage: str,
+    ) -> dict[str, Any] | None:
+        """Returns the most recent session marker for (market, trading_date, stage).
+
+        Returns None when no row exists. Caller is responsible for checking
+        status == 'ok' and the artifact counts before treating as ready.
+        """
+        market_key = str(market or "").strip().lower()
+        stage_key = str(stage or "").strip().lower()
+        if not market_key or not stage_key:
+            return None
+        sql = (
+            f"SELECT session_id, market, trading_date, stage, status, "
+            f"       forecast_run_id, forecast_rows_written, ranker_run_id, "
+            f"       ranker_scores_written, created_at, detail_json "
+            f"FROM `{self.session.dataset_fqn}.shared_prep_sessions` "
+            f"WHERE market = @market AND trading_date = @trading_date AND stage = @stage "
+            f"ORDER BY created_at DESC "
+            f"LIMIT 1"
+        )
+        params: dict[str, Any] = {
+            "market": market_key,
+            "trading_date": trading_date,
+            "stage": stage_key,
+        }
+        rows = list(self.session.fetch_rows(sql, params))
+        return rows[0] if rows else None
+
     def insert_fundamentals_history_raw(self, rows: list[dict[str, Any]]) -> int:
         if not rows:
             return 0
@@ -2201,31 +2267,61 @@ class MarketStore:
             raise RuntimeError(f"universe_candidates insert failed: {errors}")
         return len(payloads)
 
-    def latest_universe_candidates(self, *, limit: int = 200) -> list[dict[str, Any]]:
-        """Loads the most recent universe candidate run."""
+    def latest_universe_candidates(
+        self,
+        *,
+        limit: int = 200,
+        markets: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Loads the most recent universe candidate run for the requested market scope."""
         lim = max(1, min(int(limit), 2_000))
+        market_tokens = _normalize_universe_markets(markets)
+        filters: list[str] = []
+        params: dict[str, Any] = {"limit": lim}
+        if market_tokens and set(market_tokens) != {"us", "kospi"}:
+            filters.append(
+                "("
+                "CASE "
+                "WHEN SAFE_CAST(ticker AS INT64) IS NOT NULL AND LENGTH(ticker) = 6 THEN 'kospi' "
+                "ELSE 'us' "
+                "END"
+                ") IN UNNEST(@markets)"
+            )
+            params["markets"] = market_tokens
+
+        where = "WHERE " + " AND ".join(filters) if filters else ""
         sql = f"""
-        WITH last_run AS (
-          SELECT run_id, MAX(created_at) AS max_created
+        WITH scoped AS (
+          SELECT run_id, created_at, as_of_ts, rank, score, instrument_id, ticker, ticker_name, exchange_code, reasons
           FROM `{self.session.dataset_fqn}.universe_candidates`
+          {where}
+        ),
+        last_run AS (
+          SELECT run_id, MAX(created_at) AS max_created
+          FROM scoped
           GROUP BY run_id
           ORDER BY max_created DESC
           LIMIT 1
         )
         SELECT run_id, created_at, as_of_ts, rank, score, instrument_id, ticker, ticker_name, exchange_code, reasons
-        FROM `{self.session.dataset_fqn}.universe_candidates`
+        FROM scoped
         WHERE run_id = (SELECT run_id FROM last_run)
         ORDER BY rank ASC
         LIMIT @limit
         """
         try:
-            return self.session.fetch_rows(sql, {"limit": lim})
+            return self.session.fetch_rows(sql, params)
         except Exception:
             return []
 
-    def latest_universe_candidate_tickers(self, *, limit: int = 200) -> list[str]:
-        """Returns ticker list from latest universe run."""
-        rows = self.latest_universe_candidates(limit=limit)
+    def latest_universe_candidate_tickers(
+        self,
+        *,
+        limit: int = 200,
+        markets: list[str] | None = None,
+    ) -> list[str]:
+        """Returns ticker list from the latest universe run for the requested markets."""
+        rows = self.latest_universe_candidates(limit=limit, markets=markets)
         out: list[str] = []
         for row in rows:
             t = str(row.get("ticker", "")).strip().upper()

@@ -211,6 +211,12 @@ def build_parser() -> argparse.ArgumentParser:
     run_shared_prep.add_argument("--live", action="store_true", help="Use live broker")
     run_shared_prep.add_argument("--market", type=str, default="", help="Override target market for this run (us, kospi)")
     run_shared_prep.add_argument("--dispatch-job", type=str, default="", help="Optional downstream Cloud Run agent job name")
+    run_shared_prep.add_argument(
+        "--stage",
+        choices=["all", "slow", "fast"],
+        default="all",
+        help="'slow'=forecasts+fundamentals+ranker (ML, run early), 'fast'=sync-market only (run before agent), 'all'=both (legacy).",
+    )
 
     run_agent = sub.add_parser("run-agent-cycle", help="Run agent trading cycle only")
     run_agent.add_argument("--live", action="store_true", help="Use live broker")
@@ -315,6 +321,7 @@ def _dispatch_command(args: argparse.Namespace, parser: argparse.ArgumentParser)
             live=bool(ns.live),
             market_override=str(getattr(ns, "market", "") or ""),
             dispatch_job=str(getattr(ns, "dispatch_job", "") or ""),
+            stage=str(getattr(ns, "stage", "all") or "all"),
         ),
         "run-agent-cycle": lambda ns: cmd_run_agent_cycle(
             live=bool(ns.live),

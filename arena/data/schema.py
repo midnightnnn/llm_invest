@@ -672,6 +672,23 @@ TABLE_DDLS: tuple[str, ...] = (
     CLUSTER BY status, ranker_version
     """,
     """
+    CREATE TABLE IF NOT EXISTS `{project}.{dataset}.shared_prep_sessions` (
+      session_id STRING NOT NULL,
+      market STRING NOT NULL,
+      trading_date DATE NOT NULL,
+      stage STRING NOT NULL,
+      status STRING NOT NULL,
+      forecast_run_id STRING,
+      forecast_rows_written INT64,
+      ranker_run_id STRING,
+      ranker_scores_written INT64,
+      created_at TIMESTAMP NOT NULL,
+      detail_json JSON
+    )
+    PARTITION BY trading_date
+    CLUSTER BY market, stage, status
+    """,
+    """
     CREATE TABLE IF NOT EXISTS `{project}.{dataset}.signal_daily_values` (
       as_of_date DATE NOT NULL,
       created_at TIMESTAMP NOT NULL,

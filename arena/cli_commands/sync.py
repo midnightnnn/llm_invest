@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from math import ceil
+from typing import Any
 
 from arena.config import Settings
 from arena.data.bq import BigQueryRepository
@@ -248,8 +249,13 @@ def _build_forecast_tickers(repo, settings: Settings, top_n: int) -> list[str]:
     return combined
 
 
-def cmd_build_forecasts(args: object) -> None:
-    """Builds stacked forecast rows and writes predicted_expected_returns."""
+def cmd_build_forecasts(args: object) -> Any:
+    """Builds stacked forecast rows and writes predicted_expected_returns.
+
+    Returns the build result so callers (e.g., shared-prep session marker)
+    can record rows_written. Returning None on early exit is fine because
+    existing callers ignore the return value.
+    """
     cli = _cli()
     settings = cli.load_settings()
     cli.configure_logging(settings.log_level, settings.log_format)
@@ -282,10 +288,15 @@ def cmd_build_forecasts(args: object) -> None:
         ",".join(result.model_names),
         result.note,
     )
+    return result
 
 
-def cmd_build_opportunity_ranker(args: object) -> None:
-    """Builds the learned opportunity ranker and writes precomputed scores."""
+def cmd_build_opportunity_ranker(args: object) -> Any:
+    """Builds the learned opportunity ranker and writes precomputed scores.
+
+    Returns the build result so callers can inspect status/scores_written.
+    Existing callers ignore the return value.
+    """
     cli = _cli()
     settings = cli.load_settings()
     cli.configure_logging(settings.log_level, settings.log_format)
@@ -322,6 +333,7 @@ def cmd_build_opportunity_ranker(args: object) -> None:
         "-" if result.oos_hit_rate_20d is None else f"{result.oos_hit_rate_20d:.4f}",
         result.note or "-",
     )
+    return result
 
 
 def _signal_refresh_bootstrap() -> tuple[object, object, object]:

@@ -657,6 +657,10 @@ class MarketDataSyncService:
         """Loads USD/KRW daily FX rows once per sync window when configured."""
         symbol = str(self.settings.usd_krw_fx_symbol or "").strip().upper()
         if not symbol:
+            logger.warning(
+                "[yellow]USD/KRW daily FX skipped: symbol not configured[/yellow]",
+                extra=event_extra("usd_krw_daily_fx_no_symbol"),
+            )
             return {}
 
         series = self._extract_chart_series(
@@ -664,10 +668,26 @@ class MarketDataSyncService:
             close_keys=("clos", "ovrs_nmix_prpr"),
         )
         if not series:
-            return {}
-
-        start_date = series[0][0].date()
-        end_date = series[-1][0].date()
+            sample_keys = sorted(list((candles[0] or {}).keys())) if candles else []
+            logger.warning(
+                "[yellow]USD/KRW daily FX skipped: ticker-candle series empty[/yellow] candles=%d sample_keys=%s",
+                len(candles or []),
+                sample_keys,
+                extra=event_extra(
+                    "usd_krw_daily_fx_ticker_series_empty",
+                    candles_count=len(candles or []),
+                    sample_keys=sample_keys,
+                ),
+            )
+            # Fallback: fetch FX using a fixed recent window rather than
+            # refusing outright. This gives slow prep a fighting chance when
+            # KIS daily chart payload changes shape.
+            today = datetime.now(timezone.utc).date()
+            start_date = today - timedelta(days=60)
+            end_date = today
+        else:
+            start_date = series[0][0].date()
+            end_date = series[-1][0].date()
         if self._usd_krw_daily_fx_range is not None:
             cached_start, cached_end = self._usd_krw_daily_fx_range
             if cached_start <= start_date and cached_end >= end_date and self._usd_krw_daily_fx:
@@ -702,6 +722,65 @@ class MarketDataSyncService:
             close_keys=("ovrs_nmix_prpr", "clos"),
         )
         if not fx_series:
+            sample_keys = sorted(list((fx_rows[0] or {}).keys())) if fx_rows else []
+            logger.warning(
+                "[yellow]USD/KRW daily FX fx_series empty[/yellow] fx_rows=%d sample_keys=%s symbol=%s range=%s/%s",
+                len(fx_rows or []),
+                sample_keys,
+                symbol,
+                start_date.isoformat(),
+                end_date.isoformat(),
+                extra=event_extra(
+                    "usd_krw_daily_fx_series_empty",
+                    symbol=symbol,
+                    fx_rows_count=len(fx_rows or []),
+                    sample_keys=sample_keys,
+                    start_date=start_date.isoformat(),
+                    end_date=end_date.isoformat(),
+                ),
+            )
+            # Fallback: KIS daily FX chart returned empty (API shape change or
+            # symbol unsupported). Fill the requested window with the latest
+            # spot rate so slow prep can still materialize US daily rows. The
+            # approximation is OK for ranker/forecast training; the fallback
+            # is logged loudly so ops can restore authoritative daily FX.
+            spot = 0.0
+            try:
+                spot = self._latest_usd_krw_fx_rate()
+            except Exception as spot_exc:
+                logger.warning(
+                    "[yellow]USD/KRW spot fallback unavailable[/yellow] err=%s",
+                    str(spot_exc),
+                )
+            if spot <= 0:
+                spot = float(getattr(self.settings, "usd_krw_rate", 0) or 0.0)
+            if spot <= 0:
+                return self._usd_krw_daily_fx
+
+            from datetime import timedelta as _td
+
+            cursor = start_date
+            filled: dict[date, float] = {}
+            while cursor <= end_date:
+                filled[cursor] = float(spot)
+                cursor = cursor + _td(days=1)
+            self._usd_krw_daily_fx = filled
+            self._usd_krw_daily_fx_range = (start_date, end_date)
+            logger.warning(
+                "[yellow]USD/KRW daily FX using spot fallback[/yellow] spot=%.4f range=%s/%s filled=%d",
+                spot,
+                start_date.isoformat(),
+                end_date.isoformat(),
+                len(filled),
+                extra=event_extra(
+                    "usd_krw_daily_fx_spot_fallback",
+                    symbol=symbol,
+                    spot=spot,
+                    start_date=start_date.isoformat(),
+                    end_date=end_date.isoformat(),
+                    filled_days=len(filled),
+                ),
+            )
             return self._usd_krw_daily_fx
 
         self._usd_krw_daily_fx = {ts.date(): float(px) for ts, px in fx_series if float(px) > 0}
@@ -1058,12 +1137,22 @@ class MarketDataSyncService:
 
         if hasattr(self.repo, "rebuild_universe_candidates"):
             try:
-                self.repo.rebuild_universe_candidates(
+                universe_result = self.repo.rebuild_universe_candidates(
                     top_n=max(1, int(self.settings.universe_run_top_n)),
                     per_exchange_cap=max(1, int(self.settings.universe_per_exchange_cap)),
                     sources=self._all_sources(),
                     allowed_tickers=tickers,
                     ticker_names=getattr(self, "_kospi_ticker_names", {}),
+                )
+                exchange_counts = universe_result.get("exchange_counts") or {}
+                logger.info(
+                    "[cyan]Universe candidates refreshed[/cyan] run_id=%s count=%d exchanges=%s",
+                    str(universe_result.get("run_id") or "-"),
+                    int(universe_result.get("count") or 0),
+                    ",".join(
+                        f"{str(exchange).strip().upper() or '-'}:{int(count or 0)}"
+                        for exchange, count in sorted(exchange_counts.items())
+                    ) or "-",
                 )
             except Exception as exc:
                 logger.warning(
@@ -1361,6 +1450,27 @@ class MarketDataSyncService:
                     ),
                 )
         else:
+            freshest_daily = max(
+                (token for token in latest_dates.values() if isinstance(token, date)),
+                default=None,
+            )
+            if freshest_daily is not None:
+                age_days = (datetime.now(timezone.utc).date() - freshest_daily).days
+                if age_days > 5:
+                    logger.warning(
+                        "[yellow]Market sync daily feed may be stale[/yellow] market=%s freshest=%s age_days=%d tickers=%d",
+                        self.settings.kis_target_market,
+                        freshest_daily.isoformat(),
+                        age_days,
+                        len(symbols),
+                        extra=event_extra(
+                            "market_sync_daily_feed_stale",
+                            market=self.settings.kis_target_market,
+                            freshest_daily=freshest_daily.isoformat(),
+                            age_days=age_days,
+                            ticker_count=len(symbols),
+                        ),
+                    )
             self._refresh_latest_and_universe(rows=[], instrument_rows=instrument_rows, tickers=tickers, symbols=symbols)
             logger.info(
                 "[cyan]Market sync produced zero new rows[/cyan] tickers=%d",
