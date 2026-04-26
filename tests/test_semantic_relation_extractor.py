@@ -233,6 +233,50 @@ def test_semantic_relation_extractor_runs_pending_and_writes_shadow_rows(monkeyp
     assert "temperature" not in captured
 
 
+def test_semantic_relation_extractor_uses_memory_compaction_model_default(monkeypatch) -> None:
+    repo = _FakeRepo()
+    settings = _settings()
+    settings.openai_model = "gpt-5.4-pro"
+    captured = {}
+
+    async def _fake_acompletion(**kwargs):
+        captured.update(kwargs)
+        return {"choices": [{"message": {"content": '{"triples":[]}'}}]}
+
+    monkeypatch.setattr(semantic_module.litellm, "acompletion", _fake_acompletion)
+    extractor = SemanticRelationExtractor(settings=settings, repo=repo)
+
+    rows = asyncio.run(extractor.run_pending(tenant_id="tenant-a", limit=1, dry_run=False))
+
+    assert rows[0]["status"] == "success"
+    assert captured["model"] == "openai/gpt-5.4"
+
+
+def test_semantic_relation_extractor_uses_source_agent_provider(monkeypatch) -> None:
+    repo = _FakeRepo()
+    repo.pending_rows[0]["agent_id"] = "claude"
+    settings = _settings()
+    settings.agent_ids = ["gpt", "claude"]
+    settings.openai_model = "gpt-5.4-pro"
+    settings.anthropic_api_key = "test-anthropic-key"
+    settings.anthropic_model = "claude-opus-4-7"
+    captured = {}
+
+    async def _fake_acompletion(**kwargs):
+        captured.update(kwargs)
+        return {"choices": [{"message": {"content": '{"triples":[]}'}}]}
+
+    monkeypatch.setattr(semantic_module.litellm, "acompletion", _fake_acompletion)
+    extractor = SemanticRelationExtractor(settings=settings, repo=repo)
+
+    rows = asyncio.run(extractor.run_pending(tenant_id="tenant-a", limit=1, dry_run=False))
+
+    assert rows[0]["status"] == "success"
+    assert repo.runs[0][1][0]["provider"] == "claude"
+    assert repo.runs[0][1][0]["model"] == "anthropic/claude-sonnet-4-6"
+    assert captured["api_key"] == "test-anthropic-key"
+
+
 def test_semantic_relation_extractor_omits_temperature_for_claude(monkeypatch) -> None:
     repo = _FakeRepo()
     settings = _settings()

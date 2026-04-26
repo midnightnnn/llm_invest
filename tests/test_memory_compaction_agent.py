@@ -17,6 +17,8 @@ class _FakeRepo:
         self.closed_thesis_keys = []
         self.semantic_rows_by_key = {}
         self.existing_reflection_keys = set()
+        self.existing_compaction_rows = []
+        self.last_board_limit = None
 
     def resolve_tenant_id(self):
         return "local"
@@ -29,8 +31,9 @@ class _FakeRepo:
         return list(self.cycle_rows)
 
     def board_posts_for_cycle(self, *, cycle_id, agent_id=None, limit=10, trading_mode="paper"):
-        _ = (cycle_id, agent_id, limit, trading_mode)
-        return list(self.board_rows)
+        _ = (cycle_id, agent_id, trading_mode)
+        self.last_board_limit = limit
+        return list(self.board_rows[:limit])
 
     def get_research_briefings(self, *, tickers=None, categories=None, limit=10, trading_mode="paper", tenant_id=None):
         _ = (tickers, trading_mode, tenant_id)
@@ -59,6 +62,10 @@ class _FakeRepo:
     def memory_event_exists_by_semantic_key(self, *, agent_id, event_type, semantic_key, trading_mode="paper"):
         _ = (agent_id, trading_mode)
         return (str(event_type), str(semantic_key)) in self.existing_reflection_keys
+
+    def compaction_reflections_for_cycle(self, *, agent_id, cycle_id, trading_mode="paper", limit=10):
+        _ = (agent_id, cycle_id, trading_mode, limit)
+        return list(self.existing_compaction_rows)
 
 
 class _FakeMemoryStore:
@@ -109,6 +116,9 @@ def _settings() -> Settings:
     settings.memory_compaction_cycle_event_limit = 12
     settings.memory_compaction_recent_lessons_limit = 4
     settings.memory_compaction_max_reflections = 3
+    settings.memory_compaction_board_post_limit = 3
+    settings.memory_compaction_board_body_chars = 1200
+    settings.memory_compaction_cycle_summary_chars = 900
     settings.memory_policy = {}
     return settings
 
@@ -172,6 +182,78 @@ def test_memory_compaction_agent_prefers_direct_key_provider_over_non_direct_fal
 
     assert agent.provider == "gpt"
     assert agent.model == "openai/gpt-5.2"
+
+
+def test_memory_compaction_agent_defaults_to_economical_provider_model() -> None:
+    repo = _FakeRepo()
+    memory_store = _FakeMemoryStore()
+    settings = _settings()
+    settings.agent_ids = ["gpt"]
+    settings.gemini_api_key = ""
+    settings.openai_api_key = "tenant-openai-key"
+    settings.openai_model = "gpt-5.4-pro"
+
+    agent = MemoryCompactionAgent(settings=settings, repo=repo, memory_store=memory_store)
+
+    assert agent.provider == "gpt"
+    assert agent.model == "openai/gpt-5.4"
+
+
+def test_memory_compaction_agent_respects_explicit_memory_model_override() -> None:
+    repo = _FakeRepo()
+    memory_store = _FakeMemoryStore()
+    settings = _settings()
+    settings.agent_ids = ["gpt"]
+    settings.gemini_api_key = ""
+    settings.openai_api_key = "tenant-openai-key"
+    settings.openai_model = "gpt-5.4-pro"
+    settings.memory_compaction_models = {"gpt": "gpt-5.2"}
+
+    agent = MemoryCompactionAgent(settings=settings, repo=repo, memory_store=memory_store)
+
+    assert agent.provider == "gpt"
+    assert agent.model == "openai/gpt-5.2"
+
+
+def test_memory_compaction_agent_respects_per_agent_memory_model_override() -> None:
+    from arena.config import AgentConfig
+
+    repo = _FakeRepo()
+    memory_store = _FakeMemoryStore()
+    settings = _settings()
+    settings.agent_ids = ["gpt"]
+    settings.gemini_api_key = ""
+    settings.openai_api_key = "tenant-openai-key"
+    settings.openai_model = "gpt-5.4-pro"
+    settings.agent_configs = {
+        "gpt": AgentConfig(
+            agent_id="gpt",
+            provider="gpt",
+            model="gpt-5.4-pro",
+            capital_krw=1_000_000,
+            memory_compaction_model="gpt-5.2",
+        )
+    }
+
+    agent = MemoryCompactionAgent(settings=settings, repo=repo, memory_store=memory_store)
+
+    assert agent._helper_client_for_agent("gpt")["model"] == "openai/gpt-5.2"
+
+
+def test_memory_compaction_agent_derives_economical_models_for_other_providers() -> None:
+    repo = _FakeRepo()
+    memory_store = _FakeMemoryStore()
+    settings = _settings()
+    settings.agent_ids = ["gemini", "claude"]
+    settings.gemini_api_key = "tenant-gemini-key"
+    settings.anthropic_api_key = "tenant-anthropic-key"
+    settings.gemini_model = "gemini-3.1-pro-preview"
+    settings.anthropic_model = "claude-opus-4-7"
+
+    agent = MemoryCompactionAgent(settings=settings, repo=repo, memory_store=memory_store)
+
+    assert agent._helper_client_for_agent("gemini")["model"] == "gemini/gemini-3-flash-preview"
+    assert agent._helper_client_for_agent("claude")["model"] == "anthropic/claude-sonnet-4-6"
 
 
 def test_memory_compaction_agent_calls_litellm_direct_without_claude_temperature(monkeypatch) -> None:
@@ -500,6 +582,46 @@ def test_memory_compaction_agent_loads_closed_thesis_chains() -> None:
     assert chain["events"][-1]["event_type"] == "thesis_invalidated"
 
 
+def test_memory_compaction_agent_uses_policy_sized_board_and_cycle_payloads() -> None:
+    repo = _FakeRepo()
+    long_body = "AAPL board detail " * 120
+    long_summary = "tool evidence " * 120
+    repo.cycle_rows = [
+        {
+            "event_id": "evt_tools",
+            "event_type": "react_tools_summary",
+            "summary": long_summary,
+            "payload_json": {
+                "phase": "execution",
+                "tool_mix": {"quant": 1},
+                "tool_events": [{"tool": "technical_signals", "phase": "execution", "result": {"signal": long_summary}}],
+            },
+        }
+    ]
+    repo.board_rows = [
+        {"post_id": "post_1", "title": "T1", "body": long_body, "explore_summary": "summary", "tickers": ["AAPL"]},
+        {"post_id": "post_2", "title": "T2", "body": "second", "explore_summary": "summary", "tickers": ["MSFT"]},
+    ]
+    settings = _settings()
+    settings.memory_policy = {
+        "compaction": {
+            "board_post_limit": 1,
+            "board_body_chars": 600,
+            "cycle_summary_chars": 700,
+        }
+    }
+    agent = MemoryCompactionAgent(settings=settings, repo=repo, memory_store=_FakeMemoryStore())
+
+    inputs = agent._load_agent_inputs("gpt", "cycle_123")
+
+    assert repo.last_board_limit == 1
+    assert len(inputs["board_posts"]) == 1
+    assert len(inputs["board_posts"][0]["body"]) > 240
+    assert inputs["board_posts"][0]["body_truncated"] is True
+    assert len(inputs["cycle_memories"][0]["summary"]) > 220
+    assert inputs["cycle_memories"][0]["tool_previews"][0]["tool"] == "technical_signals"
+
+
 def test_memory_compaction_agent_saves_thesis_chain_reflection(monkeypatch) -> None:
     repo = _FakeRepo()
     repo.configs[("global", "memory_compactor_prompt")] = "{payload_json}"
@@ -549,6 +671,23 @@ def test_memory_compaction_agent_skips_already_compacted_thesis_chain(monkeypatc
 
     async def _should_not_run(*, agent_id, cycle_id, inputs):
         raise AssertionError("duplicate thesis chain should not trigger compaction")
+
+    monkeypatch.setattr(agent, "_compact_one", _should_not_run)
+
+    saved = asyncio.run(agent.run(cycle_id="cycle_123", agent_ids=["gpt"]))
+
+    assert saved == []
+    assert memory_store.saved == []
+
+
+def test_memory_compaction_agent_skips_existing_cycle_compaction_reflections(monkeypatch) -> None:
+    repo = _FakeRepo()
+    repo.existing_compaction_rows = [{"event_id": "mem_existing", "summary": "already compacted"}]
+    memory_store = _FakeMemoryStore()
+    agent = MemoryCompactionAgent(settings=_settings(), repo=repo, memory_store=memory_store)
+
+    async def _should_not_run(*, agent_id, cycle_id, inputs):
+        raise AssertionError("existing compaction reflection should make rerun idempotent")
 
     monkeypatch.setattr(agent, "_compact_one", _should_not_run)
 

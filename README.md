@@ -300,7 +300,6 @@ Agents autonomously select which tools to call at each reasoning step.
 | `search_peer_lessons` | Lessons from other agents |
 | `portfolio_diagnosis` | Holdings diagnostics + HRP rebalancing |
 | `trade_performance` | Closed round-trip stats + current unrealised P&L |
-| `save_memory` | Manual memory save |
 
 </details>
 

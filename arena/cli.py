@@ -75,6 +75,7 @@ from arena.cli_commands.run import (
     cmd_run_agent_cycle,
     cmd_run_batch,
     cmd_run_cycle,
+    cmd_run_memory_compaction,
     cmd_run_pipeline,
     cmd_run_shared_prep,
 )
@@ -223,6 +224,17 @@ def build_parser() -> argparse.ArgumentParser:
     run_agent.add_argument("--all-tenants", action="store_true", help="Run for all runtime tenants")
     run_agent.add_argument("--market", type=str, default="", help="Override target market for this run (us, kospi)")
 
+    run_memory_compaction = sub.add_parser("run-memory-compaction", help="Run memory compaction only")
+    run_memory_compaction.add_argument("--live", action="store_true", help="Use live trading-mode memories")
+    run_memory_compaction.add_argument("--all-tenants", action="store_true", help="Run for all runtime tenants")
+    run_memory_compaction.add_argument("--tenant", action="append", default=[], help="Optional tenant id (repeatable or comma-separated)")
+    run_memory_compaction.add_argument("--market", type=str, default="", help="Override target market for this run (us, kospi)")
+    run_memory_compaction.add_argument("--cycle-id", type=str, default="", help="Cycle id to compact; empty/latest uses the newest eligible cycle")
+    run_memory_compaction.add_argument("--agent", action="append", default=[], help="Optional agent id (repeatable). Defaults to configured agents")
+    run_memory_compaction.add_argument("--timeout", type=int, default=0, help="Optional LLM timeout override in seconds")
+    run_memory_compaction.add_argument("--dry-run", action="store_true", help="Run LLM compaction without saving reflections")
+    run_memory_compaction.add_argument("--force", action="store_true", help="Save even if this cycle already has compaction reflections")
+
     smoke_research = sub.add_parser("smoke-research", help="Smoke-test one provider with google_search research flow")
     smoke_research.add_argument("--provider", choices=["gpt", "gemini", "claude"], required=True, help="Provider to test")
     smoke_research.add_argument("--prompt", type=str, default="", help="Optional research prompt override")
@@ -327,6 +339,17 @@ def _dispatch_command(args: argparse.Namespace, parser: argparse.ArgumentParser)
             live=bool(ns.live),
             all_tenants=bool(getattr(ns, "all_tenants", False)),
             market_override=str(getattr(ns, "market", "") or ""),
+        ),
+        "run-memory-compaction": lambda ns: cmd_run_memory_compaction(
+            live=bool(getattr(ns, "live", False)),
+            all_tenants=bool(getattr(ns, "all_tenants", False)),
+            tenant_ids=list(getattr(ns, "tenant", [])),
+            cycle_id=str(getattr(ns, "cycle_id", "") or ""),
+            market_override=str(getattr(ns, "market", "") or ""),
+            agent_ids=list(getattr(ns, "agent", [])),
+            timeout_seconds=int(getattr(ns, "timeout", 0) or 0),
+            dry_run=bool(getattr(ns, "dry_run", False)),
+            force=bool(getattr(ns, "force", False)),
         ),
         "smoke-research": lambda ns: cmd_smoke_research(
             str(getattr(ns, "provider", "") or ""),

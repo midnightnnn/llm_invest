@@ -62,6 +62,26 @@ def _market_tokens(value: str | None) -> list[str]:
     return [token.strip().lower() for token in str(value or "").split(",") if token.strip()]
 
 
+def _json_model_map(value: Any) -> dict[str, str]:
+    """Parses provider->model JSON config into canonical provider keys."""
+    text = str(value or "").strip()
+    if not text:
+        return {}
+    try:
+        parsed = json.loads(text)
+    except Exception:
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    out: dict[str, str] = {}
+    for key, raw_model in parsed.items():
+        provider = canonical_provider(str(key or "").strip().lower())
+        model = str(raw_model or "").strip()
+        if provider and model:
+            out[provider] = model
+    return out
+
+
 def _to_bool_token(value: Any, default: bool) -> bool:
     """Parses truthy runtime-config values into a boolean."""
     if value is None:
@@ -185,6 +205,10 @@ class Settings:
     memory_compaction_cycle_event_limit: int = 12
     memory_compaction_recent_lessons_limit: int = 4
     memory_compaction_max_reflections: int = 3
+    memory_compaction_board_post_limit: int = 3
+    memory_compaction_board_body_chars: int = 1200
+    memory_compaction_cycle_summary_chars: int = 900
+    memory_compaction_models: dict[str, str] = field(default_factory=dict)
     memory_policy: dict[str, Any] = field(default_factory=dict)
     distribution_mode: str = "private"
     real_trading_approved: bool = False
@@ -345,6 +369,7 @@ class AgentConfig:
     risk_overrides: dict[str, float | int] | None = None # None → use global risk
     disabled_tools: list[str] | None = None              # None → use global tool config
     llm_params: dict[str, Any] | None = None             # provider-native SDK params (effort/thinking_level/temperature/…)
+    memory_compaction_model: str = ""                    # "" → derive cheaper model from this agent's model
 
 
 def _default_model_for_provider(settings: Settings, provider: str) -> str:
@@ -417,6 +442,7 @@ def normalize_agent_settings(settings: Settings) -> Settings:
         risk_overrides: dict[str, float | int] | None = None
         disabled_tools: list[str] | None = None
         llm_params: dict[str, Any] | None = None
+        memory_compaction_model = ""
 
         if existing is not None:
             provider = str(existing.provider or "").strip().lower()
@@ -431,6 +457,7 @@ def normalize_agent_settings(settings: Settings) -> Settings:
                 disabled_tools = cleaned_tools or None
             if isinstance(existing.llm_params, dict) and existing.llm_params:
                 llm_params = dict(existing.llm_params)
+            memory_compaction_model = str(getattr(existing, "memory_compaction_model", "") or "").strip()
             try:
                 existing_capital = float(existing.capital_krw)
                 if existing_capital > 0:
@@ -462,6 +489,7 @@ def normalize_agent_settings(settings: Settings) -> Settings:
             risk_overrides=risk_overrides,
             disabled_tools=disabled_tools,
             llm_params=llm_params,
+            memory_compaction_model=memory_compaction_model,
         )
 
     settings.agent_ids = normalized_ids
@@ -509,6 +537,10 @@ def load_settings() -> Settings:
     memory_compaction_cycle_event_limit = _to_int(os.getenv("ARENA_MEMORY_COMPACTION_CYCLE_EVENT_LIMIT"), 12)
     memory_compaction_recent_lessons_limit = _to_int(os.getenv("ARENA_MEMORY_COMPACTION_RECENT_LESSONS_LIMIT"), 4)
     memory_compaction_max_reflections = _to_int(os.getenv("ARENA_MEMORY_COMPACTION_MAX_REFLECTIONS"), 3)
+    memory_compaction_board_post_limit = _to_int(os.getenv("ARENA_MEMORY_COMPACTION_BOARD_POST_LIMIT"), 3)
+    memory_compaction_board_body_chars = _to_int(os.getenv("ARENA_MEMORY_COMPACTION_BOARD_BODY_CHARS"), 1200)
+    memory_compaction_cycle_summary_chars = _to_int(os.getenv("ARENA_MEMORY_COMPACTION_CYCLE_SUMMARY_CHARS"), 900)
+    memory_compaction_models = _json_model_map(os.getenv("ARENA_MEMORY_COMPACTION_MODELS"))
     memory_embed_cache_max = _to_int(os.getenv("ARENA_MEMORY_EMBED_CACHE_MAX"), 128)
     settings = Settings(
         google_cloud_project=os.getenv("GOOGLE_CLOUD_PROJECT", ""),
@@ -615,6 +647,10 @@ def load_settings() -> Settings:
         memory_compaction_cycle_event_limit=memory_compaction_cycle_event_limit,
         memory_compaction_recent_lessons_limit=memory_compaction_recent_lessons_limit,
         memory_compaction_max_reflections=memory_compaction_max_reflections,
+        memory_compaction_board_post_limit=memory_compaction_board_post_limit,
+        memory_compaction_board_body_chars=memory_compaction_board_body_chars,
+        memory_compaction_cycle_summary_chars=memory_compaction_cycle_summary_chars,
+        memory_compaction_models=memory_compaction_models,
         memory_policy=default_memory_policy(
             context_limit=context_max_memory_events,
             embed_cache_max=memory_embed_cache_max,
@@ -622,6 +658,9 @@ def load_settings() -> Settings:
             cycle_event_limit=memory_compaction_cycle_event_limit,
             recent_lessons_limit=memory_compaction_recent_lessons_limit,
             max_reflections=memory_compaction_max_reflections,
+            board_post_limit=memory_compaction_board_post_limit,
+            board_body_chars=memory_compaction_board_body_chars,
+            cycle_summary_chars=memory_compaction_cycle_summary_chars,
         ),
         distribution_mode=normalize_distribution_mode(os.getenv("ARENA_DISTRIBUTION_MODE", "private")),
         autonomy_working_set_enabled=_to_bool(os.getenv("ARENA_AUTONOMY_WORKING_SET_ENABLED"), True),
@@ -685,6 +724,7 @@ def apply_runtime_overrides(settings: Settings, repo: Any, tenant_id: str) -> Se
         "risk_policy",
         "sleeve_capital_krw",
         "agents_config",
+        "memory_compaction_models",
         "memory_policy",
         "kis_account_no",
         "kis_account_product_code",
@@ -956,6 +996,7 @@ def apply_runtime_overrides(settings: Settings, repo: Any, tenant_id: str) -> Se
 
             # Per-agent target_market
             agent_market = str(entry.get("target_market") or "").strip().lower()
+            memory_compaction_model = str(entry.get("memory_compaction_model") or "").strip()
 
             # Per-agent llm_params (provider-native SDK keys; validation happens in llm_params module)
             llm_raw = entry.get("llm_params")
@@ -978,6 +1019,7 @@ def apply_runtime_overrides(settings: Settings, repo: Any, tenant_id: str) -> Se
                     risk_overrides=risk_overrides if risk_overrides else None,
                     disabled_tools=disabled_tools,
                     llm_params=llm_params,
+                    memory_compaction_model=memory_compaction_model,
                 )
 
         settings.agent_ids = parsed_ids
@@ -997,6 +1039,8 @@ def apply_runtime_overrides(settings: Settings, repo: Any, tenant_id: str) -> Se
             settings.agent_capitals = {}
 
     normalize_agent_settings(settings)
+    if "memory_compaction_models" in values:
+        settings.memory_compaction_models = _json_model_map(values.get("memory_compaction_models"))
 
     memory_policy = normalize_memory_policy(
         values.get("memory_policy"),
@@ -1006,6 +1050,9 @@ def apply_runtime_overrides(settings: Settings, repo: Any, tenant_id: str) -> Se
             cycle_event_limit=settings.memory_compaction_cycle_event_limit,
             recent_lessons_limit=settings.memory_compaction_recent_lessons_limit,
             max_reflections=settings.memory_compaction_max_reflections,
+            board_post_limit=settings.memory_compaction_board_post_limit,
+            board_body_chars=settings.memory_compaction_board_body_chars,
+            cycle_summary_chars=settings.memory_compaction_cycle_summary_chars,
         ),
     )
     apply_memory_policy_to_settings(settings, memory_policy)

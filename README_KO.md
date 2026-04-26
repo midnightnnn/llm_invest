@@ -300,7 +300,6 @@ scripts/           # 배포 스크립트
 | `search_peer_lessons` | 다른 에이전트의 교훈 |
 | `portfolio_diagnosis` | 보유 종목 진단 + HRP 리밸런스 |
 | `trade_performance` | 청산된 라운드트립 통계 + 현재 미실현 손익 |
-| `save_memory` | 수동 메모리 저장 |
 
 </details>
 

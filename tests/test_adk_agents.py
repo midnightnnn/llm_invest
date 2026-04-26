@@ -1770,7 +1770,7 @@ def test_agent_config_payload_serializes_dataclass() -> None:
             target_market="kospi",
             system_prompt="focus on risk",
             risk_overrides={"max_position_ratio": 0.2},
-            disabled_tools=["save_memory"],
+            disabled_tools=["trade_performance"],
         )
     )
 
@@ -1782,8 +1782,9 @@ def test_agent_config_payload_serializes_dataclass() -> None:
         "target_market": "kospi",
         "system_prompt": "focus on risk",
         "risk_overrides": {"max_position_ratio": 0.2},
-        "disabled_tools": ["save_memory"],
+        "disabled_tools": ["trade_performance"],
         "llm_params": None,
+        "memory_compaction_model": "",
     }
 
 
@@ -1999,14 +2000,6 @@ class _MemoryStoreForCandidateMemory:
         return 1
 
 
-class _MemoryStoreForManualNote:
-    def __init__(self) -> None:
-        self.calls: list[dict] = []
-
-    def record_manual_note(self, **kwargs) -> None:
-        self.calls.append(kwargs)
-
-
 class _VectorStoreForToolMemory:
     def search_similar_memories(self, **kwargs):
         _ = kwargs
@@ -2042,6 +2035,19 @@ class _VectorStoreForDedupedToolMemory:
                 "created_at": datetime.fromisoformat("2026-03-04T00:00:00+00:00"),
                 "outcome_score": 0.2,
             },
+        ]
+
+
+class _VectorStoreForContextToolSearch:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    def search_similar_memories(self, **kwargs):
+        self.calls.append(kwargs)
+        return [
+            {"event_id": "mem_seen", "summary": "Already prompt-injected lesson."},
+            {"event_id": "mem_new", "summary": "Fresh trim discipline lesson."},
+            {"event_id": "mem_extra", "summary": "Second fresh lesson."},
         ]
 
 
@@ -2358,20 +2364,22 @@ def test_run_async_requests_final_json_when_tool_budget_exceeded() -> None:
     assert "더 이상 도구를 호출하지 마십시오" in fake_runner.prompts[1]
 
 
-def test_save_memory_tool_creates_manual_note() -> None:
+def test_search_past_experiences_skips_cycle_seen_memory_ids() -> None:
+    vector_store = _VectorStoreForContextToolSearch()
     tool = _ContextTools.__new__(_ContextTools)
     tool.agent_id = "gpt"
-    tool._memory_store = _MemoryStoreForManualNote()
+    tool.tenant_id = "local"
+    tool.settings = type("SettingsStub", (), {"trading_mode": "paper", "memory_policy": None})()
+    tool._vector_store = vector_store
+    tool._seen_memory_ids = set()
+    tool._seen_memory_ids_shared = False
 
-    out = tool.save_memory("Opening auction looked disorderly.", score=0.65)
+    tool.set_context({"memory_events": [{"event_id": "mem_seen"}]})
+    rows = tool.search_past_experiences("trim discipline", limit=2)
 
-    assert out["status"] == "saved"
-    assert out["event_type"] == "manual_note"
-    assert len(tool._memory_store.calls) == 1
-    call = tool._memory_store.calls[0]
-    assert call["agent_id"] == "gpt"
-    assert call["summary"] == "Opening auction looked disorderly."
-    assert call["score"] == pytest.approx(0.65)
+    assert [row["event_id"] for row in rows] == ["mem_new", "mem_extra"]
+    assert vector_store.calls[0]["limit"] == 5
+    assert tool._seen_memory_ids == {"mem_seen", "mem_new", "mem_extra"}
 
 
 def test_search_tool_memories_includes_created_date() -> None:

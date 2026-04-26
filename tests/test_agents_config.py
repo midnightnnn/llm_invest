@@ -673,6 +673,7 @@ def test_agents_config_parses_per_agent_provider_and_fields() -> None:
                     "system_prompt": "Be aggressive.",
                     "risk_policy": {"max_order_krw": 50_000_000, "max_daily_orders": 20},
                     "disabled_tools": ["screen_market"],
+                    "memory_compaction_model": "gpt-5.4",
                 },
                 {
                     "id": "safe-gpt",
@@ -697,6 +698,7 @@ def test_agents_config_parses_per_agent_provider_and_fields() -> None:
     assert ac_agg.system_prompt == "Be aggressive."
     assert ac_agg.risk_overrides == {"max_order_krw": 50_000_000, "max_daily_orders": 20}
     assert ac_agg.disabled_tools == ["screen_market"]
+    assert ac_agg.memory_compaction_model == "gpt-5.4"
 
     ac_safe = out.agent_configs["safe-gpt"]
     assert ac_safe.provider == "gpt"

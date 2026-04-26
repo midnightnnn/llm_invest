@@ -440,7 +440,7 @@ agent_memory_events           agent_memories/{eid}         LRU cache
 | `thesis_invalidated` | 논문 무효화 (전제 붕괴) | episodic | 0.78 |
 | `thesis_realized` | 논문 실현 (목표 도달) | episodic | 0.74 |
 | `strategy_reflection` | Compaction이 추출한 교훈 | semantic | 0.50 |
-| `manual_note` | 에이전트 save_memory 도구 | episodic | 0.50 |
+| `manual_note` | 운영자/내부 수동 메모 | episodic | 0.50 |
 | `react_tools_summary` | REACT 도구 결과 요약 | working | 0.50 |
 
 ### 5.3 Investment Thesis Lifecycle (`thesis.py`)
@@ -565,9 +565,9 @@ Causal graph 위에 얹힌 concept-level 의미 관계 레이어. 투자 LLM과 
 
 ### 6.1 Registry (`default_registry.py`)
 
-19개 핵심 도구 등록. `tools_config`로 tenant별 enable/label/description 오버레이, `disabled_tools` 설정으로 개별 비활성화 가능.
+핵심 도구 등록. `tools_config`로 tenant별 enable/label/description 오버레이, `disabled_tools` 설정으로 개별 비활성화 가능.
 
-### 6.2 Context Tools (6개) — `adk_context_tools.py`
+### 6.2 Context Tools (5개) — `adk_context_tools.py`
 
 | Tool | Function |
 |------|----------|
@@ -576,7 +576,6 @@ Causal graph 위에 얹힌 concept-level 의미 관계 레이어. 투자 LLM과 
 | `get_research_briefing` | BQ 리서치 브리핑 조회 |
 | `portfolio_diagnosis` | 집중도/팩터/스트레스 진단 + HRP 리밸런싱 계획 |
 | `trade_performance` | 라운드트립 승률/평균수익률/보유기간/행동 패턴 + 현재 미실현 P&L |
-| `save_memory` | observation/reflection 저장 |
 
 ### 6.3 Quant Tools (7개) — `quant_tools.py`
 

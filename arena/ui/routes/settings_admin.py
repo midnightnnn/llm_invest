@@ -116,6 +116,9 @@ def register_admin_settings_routes(app: FastAPI, *, deps: AdminSettingsRouteDeps
                 db_entry["disabled_tools"] = [str(x).strip() for x in entry["disabled_tools"] if str(x).strip()]
             if isinstance(entry.get("llm_params"), dict) and entry["llm_params"]:
                 db_entry["llm_params"] = entry["llm_params"]
+            memory_model = str(entry.get("memory_compaction_model") or "").strip()
+            if memory_model:
+                db_entry["memory_compaction_model"] = memory_model
             agents_config_for_db.append(db_entry)
         return agents_config_for_db
 
@@ -364,6 +367,11 @@ def register_admin_settings_routes(app: FastAPI, *, deps: AdminSettingsRouteDeps
         risk_policy = agent_data.get("risk_policy") if "risk_policy" in agent_data else current.get("risk_policy")
         disabled_tools_raw = agent_data.get("disabled_tools") if "disabled_tools" in agent_data else current.get("disabled_tools")
         llm_params_raw = agent_data.get("llm_params") if "llm_params" in agent_data else current.get("llm_params")
+        memory_compaction_model = str(
+            agent_data.get("memory_compaction_model")
+            if "memory_compaction_model" in agent_data
+            else current.get("memory_compaction_model") or ""
+        ).strip()
 
         entry: dict[str, Any] = {
             "id": aid,
@@ -384,6 +392,8 @@ def register_admin_settings_routes(app: FastAPI, *, deps: AdminSettingsRouteDeps
             cleaned = sanitize_llm_params(provider, llm_params_raw)
             if cleaned:
                 entry["llm_params"] = cleaned
+        if memory_compaction_model:
+            entry["memory_compaction_model"] = memory_compaction_model
 
         raw_api_key = str(agent_data.get("api_key") or "").strip()
         return aid, provider, entry, raw_api_key
@@ -526,6 +536,9 @@ def register_admin_settings_routes(app: FastAPI, *, deps: AdminSettingsRouteDeps
                 entry["target_market"] = target_market
             if item.get("system_prompt"):
                 entry["system_prompt"] = str(item["system_prompt"]).strip()
+            memory_model = str(item.get("memory_compaction_model") or "").strip()
+            if memory_model:
+                entry["memory_compaction_model"] = memory_model
             if isinstance(item.get("risk_policy"), dict) and item["risk_policy"]:
                 entry["risk_policy"] = item["risk_policy"]
             if isinstance(item.get("disabled_tools"), list):
@@ -562,6 +575,8 @@ def register_admin_settings_routes(app: FastAPI, *, deps: AdminSettingsRouteDeps
                 db_entry["target_market"] = entry["target_market"]
             if entry.get("system_prompt"):
                 db_entry["system_prompt"] = entry["system_prompt"]
+            if entry.get("memory_compaction_model"):
+                db_entry["memory_compaction_model"] = entry["memory_compaction_model"]
             if entry.get("risk_policy"):
                 db_entry["risk_policy"] = entry["risk_policy"]
             if entry.get("disabled_tools"):

@@ -91,15 +91,6 @@ def _base_entries(
             sort_order=40,
         ),
         _tool(
-            tool_id="save_memory",
-            description="Save a short manual note only for non-obvious exceptions the automatic compactor may miss.",
-            category="context",
-            tier="core",
-            label_ko="메모리 저장",
-            description_ko="자동 컴팩션이 놓칠 수 있는 예외적인 교훈이나 중요한 관찰을 짧은 수동 메모로 저장합니다. 다음 사이클에서 '과거 경험 검색'으로 다시 불러올 수 있으며, 반복하지 말아야 할 실수나 기억해야 할 전략 인사이트를 남길 때 사용합니다.",
-            sort_order=50,
-        ),
-        _tool(
             tool_id="trade_performance",
             description=(
                 "Analyses your closed round-trip trades (win rate, avg return, holding period, behavioral patterns) "

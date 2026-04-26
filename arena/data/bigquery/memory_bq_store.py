@@ -247,6 +247,98 @@ class MemoryBQStore:
             {"tenant_id": tenant, "agent_id": agent_id, "limit": limit, "trading_mode": trading_mode},
         )
 
+    def latest_memory_compaction_cycle_id(
+        self,
+        *,
+        agent_ids: list[str],
+        event_types: list[str] | None = None,
+        trading_mode: str = "paper",
+        tenant_id: str | None = None,
+    ) -> str:
+        """Returns the newest cycle with artifacts useful to memory compaction."""
+        tenant = self.session.resolve_tenant_id(tenant_id)
+        clean_agents = [str(token or "").strip() for token in agent_ids if str(token or "").strip()]
+        if not clean_agents:
+            return ""
+        clean_types = [str(token or "").strip() for token in (event_types or []) if str(token or "").strip()]
+        memory_filters = [
+            "tenant_id = @tenant_id",
+            "agent_id IN UNNEST(@agent_ids)",
+            "trading_mode = @trading_mode",
+        ]
+        if clean_types:
+            memory_filters.append("event_type IN UNNEST(@event_types)")
+        params: dict[str, Any] = {
+            "tenant_id": tenant,
+            "agent_ids": clean_agents,
+            "event_types": clean_types,
+            "trading_mode": trading_mode,
+        }
+        sql = f"""
+        WITH candidates AS (
+          SELECT
+            COALESCE(cycle_id, JSON_VALUE(payload_json, '$.cycle_id'), JSON_VALUE(payload_json, '$.intent.cycle_id'), '') AS cycle_id,
+            MAX(created_at) AS last_created_at
+          FROM `{self.session.dataset_fqn}.agent_memory_events`
+          WHERE {' AND '.join(memory_filters)}
+          GROUP BY cycle_id
+
+          UNION ALL
+
+          SELECT
+            COALESCE(cycle_id, '') AS cycle_id,
+            MAX(created_at) AS last_created_at
+          FROM `{self.session.dataset_fqn}.board_posts`
+          WHERE tenant_id = @tenant_id
+            AND agent_id IN UNNEST(@agent_ids)
+            AND trading_mode = @trading_mode
+          GROUP BY cycle_id
+        )
+        SELECT cycle_id
+        FROM candidates
+        WHERE cycle_id != ''
+        GROUP BY cycle_id
+        ORDER BY MAX(last_created_at) DESC
+        LIMIT 1
+        """
+        rows = self.session.fetch_rows(sql, params)
+        return str((rows[0] if rows else {}).get("cycle_id") or "").strip()
+
+    def compaction_reflections_for_cycle(
+        self,
+        *,
+        agent_id: str,
+        cycle_id: str,
+        trading_mode: str = "paper",
+        limit: int = 10,
+        tenant_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Returns already-saved compaction reflections for idempotent reruns."""
+        tenant = self.session.resolve_tenant_id(tenant_id)
+        sql = f"""
+        SELECT {_MEMORY_SELECT_COLUMNS}
+        FROM `{self.session.dataset_fqn}.agent_memory_events`
+        WHERE tenant_id = @tenant_id
+          AND agent_id = @agent_id
+          AND trading_mode = @trading_mode
+          AND event_type = 'strategy_reflection'
+          AND COALESCE(cycle_id, JSON_VALUE(payload_json, '$.cycle_id'), '') = @cycle_id
+          AND JSON_VALUE(payload_json, '$.source') IN UNNEST(@sources)
+        ORDER BY created_at DESC
+        LIMIT @limit
+        """
+        return self.session.fetch_rows(
+            sql,
+            {
+                "tenant_id": tenant,
+                "agent_id": str(agent_id or "").strip(),
+                "cycle_id": str(cycle_id or "").strip(),
+                "trading_mode": trading_mode,
+                "sources": ["memory_compaction", "thesis_chain_compaction"],
+                "limit": max(1, int(limit)),
+            },
+        )
+
     def memory_events_for_cycle(
         self,
         *,

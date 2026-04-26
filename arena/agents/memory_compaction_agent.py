@@ -12,8 +12,9 @@ from arena.agents.adk_agent_flow import retry_policy_from_env
 from arena.agents.support_model import (
     resolve_helper_api_key,
     resolve_helper_base_url,
-    resolve_helper_model_token,
+    resolve_memory_compaction_model_token,
     select_helper_provider,
+    select_helper_provider_for_agent,
 )
 from arena.config import Settings
 from arena.data.bq import BigQueryRepository
@@ -81,6 +82,14 @@ def _trim_text(value: Any, *, max_len: int) -> str:
     return text
 
 
+def _trim_json(value: Any, *, max_len: int) -> str:
+    try:
+        text = json.dumps(value, ensure_ascii=False, default=str)
+    except Exception:
+        text = str(value or "")
+    return _trim_text(text, max_len=max_len)
+
+
 def _parse_json_object(text: str) -> dict[str, Any]:
     raw = str(text or "").strip()
     if not raw:
@@ -141,7 +150,7 @@ class MemoryCompactionAgent:
             self.tenant_id = str(getattr(repo, "tenant_id", "") or "").strip().lower() or "local"
 
         self.provider = select_helper_provider(self.settings, direct_only=True)
-        self.model = resolve_helper_model_token(self.settings, self.provider, direct_only=True)
+        self.model = resolve_memory_compaction_model_token(self.settings, self.provider, direct_only=True)
         self.api_key = resolve_helper_api_key(self.settings, self.provider)
         self.base_url = resolve_helper_base_url(self.settings, self.provider)
         if not self.api_key:
@@ -151,10 +160,29 @@ class MemoryCompactionAgent:
         """Loads the tenant compactor prompt template, falling back to global."""
         return resolve_compaction_prompt(self.repo, self.tenant_id, policy=self.settings.memory_policy)
 
-    def _request_temperature(self) -> float | None:
-        if not _model_accepts_temperature(self.model):
+    def _request_temperature(self, model: str | None = None) -> float | None:
+        if not _model_accepts_temperature(model or self.model):
             return None
         return 0.1
+
+    def _helper_client_for_agent(self, agent_id: str) -> dict[str, str]:
+        provider = select_helper_provider_for_agent(self.settings, agent_id, direct_only=True)
+        model = resolve_memory_compaction_model_token(
+            self.settings,
+            provider,
+            agent_id=agent_id,
+            direct_only=True,
+        )
+        api_key = resolve_helper_api_key(self.settings, provider)
+        base_url = resolve_helper_base_url(self.settings, provider)
+        if not api_key:
+            raise ValueError(f"Missing direct API key for helper provider={provider}")
+        return {
+            "provider": provider,
+            "model": model,
+            "api_key": api_key,
+            "base_url": base_url,
+        }
 
     def _policy_value(self, path: str, default: Any) -> Any:
         policy = getattr(self.settings, "memory_policy", None)
@@ -178,6 +206,27 @@ class MemoryCompactionAgent:
         except (TypeError, ValueError):
             value = 6
         return max(2, min(value, 12))
+
+    def _board_post_limit(self) -> int:
+        try:
+            value = int(self._policy_value("compaction.board_post_limit", getattr(self.settings, "memory_compaction_board_post_limit", 3)))
+        except (TypeError, ValueError):
+            value = 3
+        return max(1, min(value, 8))
+
+    def _board_body_chars(self) -> int:
+        try:
+            value = int(self._policy_value("compaction.board_body_chars", getattr(self.settings, "memory_compaction_board_body_chars", 1200)))
+        except (TypeError, ValueError):
+            value = 1200
+        return max(240, min(value, 6000))
+
+    def _cycle_summary_chars(self) -> int:
+        try:
+            value = int(self._policy_value("compaction.cycle_summary_chars", getattr(self.settings, "memory_compaction_cycle_summary_chars", 900)))
+        except (TypeError, ValueError):
+            value = 900
+        return max(220, min(value, 2400))
 
     @staticmethod
     def _thesis_chain_reflection_key(thesis_id: str) -> str:
@@ -218,13 +267,14 @@ class MemoryCompactionAgent:
 
     def _compact_cycle_memories(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         compacted: list[dict[str, Any]] = []
+        summary_chars = self._cycle_summary_chars()
         for row in rows:
             payload = self._parse_payload(row)
             event_type = str(row.get("event_type") or "").strip()
             compact: dict[str, Any] = {
                 "event_id": str(row.get("event_id") or "").strip(),
                 "event_type": event_type,
-                "summary": _trim_text(row.get("summary"), max_len=220),
+                "summary": _trim_text(row.get("summary"), max_len=summary_chars),
             }
             if row.get("importance_score") is not None:
                 compact["importance_score"] = float(row.get("importance_score") or 0.0)
@@ -239,24 +289,40 @@ class MemoryCompactionAgent:
                     {
                         "ticker": str(intent.get("ticker") or "").strip().upper(),
                         "side": str(intent.get("side") or "").strip().upper(),
-                        "rationale": _trim_text(intent.get("rationale"), max_len=120),
+                        "rationale": _trim_text(intent.get("rationale"), max_len=min(500, summary_chars)),
                         "status": str(report.get("status") or "").strip().upper(),
+                        "broker_message": _trim_text(report.get("message"), max_len=280),
                         "policy_hits": list(decision.get("policy_hits") or [])[:4],
+                        "risk_reason": _trim_text(decision.get("reason"), max_len=280),
                     }
                 )
             elif event_type == "react_tools_summary":
                 tool_mix = payload.get("tool_mix") if isinstance(payload.get("tool_mix"), dict) else {}
                 tool_events = payload.get("tool_events") if isinstance(payload.get("tool_events"), list) else []
+                tool_previews: list[dict[str, str]] = []
+                for evt in tool_events[:8]:
+                    if not isinstance(evt, dict):
+                        continue
+                    tool = str(evt.get("tool") or "").strip()
+                    if not tool:
+                        continue
+                    result = evt.get("result")
+                    if result is None:
+                        result = evt.get("result_preview")
+                    tool_previews.append(
+                        {
+                            "tool": tool,
+                            "phase": str(evt.get("phase") or "").strip().lower(),
+                            "result": _trim_json(result, max_len=min(420, max(180, summary_chars // 2))),
+                        }
+                    )
                 compact.update(
                     {
                         "phase": str(payload.get("phase") or "").strip().lower(),
                         "tool_mix": tool_mix,
                         "tool_count": len(tool_events),
-                        "tools": [
-                            str(evt.get("tool") or "").strip()
-                            for evt in tool_events[:6]
-                            if isinstance(evt, dict) and str(evt.get("tool") or "").strip()
-                        ],
+                        "tools": [row["tool"] for row in tool_previews],
+                        "tool_previews": tool_previews,
                     }
                 )
             elif event_type.startswith("thesis_"):
@@ -264,7 +330,7 @@ class MemoryCompactionAgent:
                     {
                         "ticker": str(payload.get("ticker") or "").strip().upper(),
                         "state": str(payload.get("state") or "").strip().lower(),
-                        "thesis_summary": _trim_text(payload.get("thesis_summary"), max_len=140),
+                        "thesis_summary": _trim_text(payload.get("thesis_summary"), max_len=min(700, summary_chars)),
                         "position_action": str(payload.get("position_action") or "").strip().lower(),
                         "strategy_refs": list(payload.get("strategy_refs") or [])[:4],
                     }
@@ -274,13 +340,17 @@ class MemoryCompactionAgent:
 
     def _compact_board_posts(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         compacted: list[dict[str, Any]] = []
+        body_chars = self._board_body_chars()
         for row in rows:
+            body_text = str(row.get("body") or "").strip()
             compacted.append(
                 {
                     "post_id": str(row.get("post_id") or "").strip(),
-                    "title": _trim_text(row.get("title"), max_len=120),
-                    "explore_summary": _trim_text(row.get("explore_summary"), max_len=180),
-                    "body": _trim_text(row.get("body"), max_len=240),
+                    "title": _trim_text(row.get("title"), max_len=160),
+                    "explore_summary": _trim_text(row.get("explore_summary"), max_len=min(800, max(240, body_chars // 2))),
+                    "body": _trim_text(body_text, max_len=body_chars),
+                    "body_chars": len(body_text),
+                    "body_truncated": len(body_text) > body_chars,
                     "tickers": list(row.get("tickers") or [])[:6],
                 }
             )
@@ -480,7 +550,7 @@ class MemoryCompactionAgent:
         board_rows = self.repo.board_posts_for_cycle(
             cycle_id=cycle_id,
             agent_id=agent_id,
-            limit=2,
+            limit=self._board_post_limit(),
             trading_mode=self.settings.trading_mode,
         )
         return {
@@ -513,22 +583,34 @@ class MemoryCompactionAgent:
             },
         )
 
-    async def _collect_response_text(self, *, prompt: str) -> str:
+    async def _collect_response_text(
+        self,
+        *,
+        prompt: str,
+        provider: str | None = None,
+        model: str | None = None,
+        api_key: str | None = None,
+        base_url: str | None = None,
+    ) -> str:
+        request_provider = provider or self.provider
+        request_model = model or self.model
+        request_api_key = api_key or self.api_key
+        request_base_url = base_url if base_url is not None else self.base_url
         compaction_timeout = int(self.settings.timeout_for("compaction"))
         request_kwargs: dict[str, Any] = {
-            "model": self.model,
-            "api_key": self.api_key,
+            "model": request_model,
+            "api_key": request_api_key,
             "timeout": compaction_timeout,
             "messages": [
                 {"role": "system", "content": _COMPACTION_INSTRUCTION},
                 {"role": "user", "content": prompt},
             ],
         }
-        temperature = self._request_temperature()
+        temperature = self._request_temperature(request_model)
         if temperature is not None:
             request_kwargs["temperature"] = temperature
-        if self.base_url:
-            request_kwargs["base_url"] = self.base_url
+        if request_base_url:
+            request_kwargs["base_url"] = request_base_url
         retry_limit, retry_delay = retry_policy_from_env()
         for attempt in range(retry_limit + 1):
             try:
@@ -546,8 +628,8 @@ class MemoryCompactionAgent:
                     sleep_s = retry_delay * float(attempt + 1)
                     logger.warning(
                         "[yellow]Memory compaction retry[/yellow] provider=%s model=%s attempt=%d sleep=%.1fs err=%s",
-                        self.provider,
-                        self.model,
+                        request_provider,
+                        request_model,
                         attempt + 1,
                         sleep_s,
                         str(exc),
@@ -659,7 +741,8 @@ class MemoryCompactionAgent:
             return []
 
         prompt = self._build_prompt(agent_id=agent_id, cycle_id=cycle_id, inputs=inputs)
-        raw_text = await self._collect_response_text(prompt=prompt)
+        client = self._helper_client_for_agent(agent_id)
+        raw_text = await self._collect_response_text(prompt=prompt, **client)
         parsed = _parse_json_object(raw_text)
         known_event_ids = {
             str(row.get("event_id") or "").strip()
@@ -700,7 +783,72 @@ class MemoryCompactionAgent:
             existing_summaries=existing_summaries,
         )
 
-    async def run(self, *, cycle_id: str, agent_ids: list[str]) -> list[dict[str, Any]]:
+    def _existing_reflections_for_cycle(self, *, agent_id: str, cycle_id: str) -> list[dict[str, Any]]:
+        loader = getattr(self.repo, "compaction_reflections_for_cycle", None)
+        if not callable(loader):
+            return []
+        try:
+            return list(
+                loader(
+                    agent_id=agent_id,
+                    cycle_id=cycle_id,
+                    trading_mode=self.settings.trading_mode,
+                    limit=max(1, int(self.settings.memory_compaction_max_reflections)),
+                )
+            )
+        except Exception as exc:
+            logger.warning(
+                "[yellow]existing compaction reflection check failed[/yellow] agent=%s cycle_id=%s err=%s",
+                agent_id,
+                cycle_id,
+                str(exc),
+            )
+            return []
+
+    async def preview(self, *, cycle_id: str, agent_ids: list[str]) -> list[dict[str, Any]]:
+        """Runs compaction inference without saving reflections."""
+        previews: list[dict[str, Any]] = []
+        deduped_agent_ids: list[str] = []
+        for token in agent_ids:
+            clean = str(token or "").strip()
+            if clean and clean not in deduped_agent_ids:
+                deduped_agent_ids.append(clean)
+
+        for agent_id in deduped_agent_ids:
+            inputs = self._load_agent_inputs(agent_id, cycle_id)
+            input_counts = {
+                "cycle_memories": len(inputs.get("cycle_memories") or []),
+                "board_posts": len(inputs.get("board_posts") or []),
+                "closed_thesis_chains": len(inputs.get("closed_thesis_chains") or []),
+                "environment_research": len(inputs.get("environment_research") or []),
+                "prior_lessons": len(inputs.get("prior_lessons") or []),
+            }
+            reflections: list[dict[str, Any]] = []
+            error = ""
+            if inputs.get("cycle_memories") or inputs.get("board_posts") or inputs.get("closed_thesis_chains"):
+                try:
+                    reflections = await self._compact_one(agent_id=agent_id, cycle_id=cycle_id, inputs=inputs)
+                except Exception as exc:
+                    error = str(exc)
+                    logger.warning(
+                        "[yellow]Memory compaction preview failed[/yellow] agent=%s cycle_id=%s err=%s",
+                        agent_id,
+                        cycle_id,
+                        error,
+                    )
+            previews.append(
+                {
+                    "agent_id": agent_id,
+                    "cycle_id": cycle_id,
+                    "input_counts": input_counts,
+                    "reflection_count": len(reflections),
+                    "reflections": reflections,
+                    "error": error,
+                }
+            )
+        return previews
+
+    async def run(self, *, cycle_id: str, agent_ids: list[str], force: bool = False) -> list[dict[str, Any]]:
         """Compacts one completed cycle into a few lesson memories per agent."""
         if not self.settings.memory_compaction_enabled:
             return []
@@ -713,6 +861,16 @@ class MemoryCompactionAgent:
                 deduped_agent_ids.append(clean)
 
         for agent_id in deduped_agent_ids:
+            if not force:
+                existing = self._existing_reflections_for_cycle(agent_id=agent_id, cycle_id=cycle_id)
+                if existing:
+                    logger.info(
+                        "[cyan]Memory compaction skipped existing[/cyan] agent=%s cycle_id=%s reflections=%d",
+                        agent_id,
+                        cycle_id,
+                        len(existing),
+                    )
+                    continue
             inputs = self._load_agent_inputs(agent_id, cycle_id)
             if not inputs.get("cycle_memories") and not inputs.get("board_posts") and not inputs.get("closed_thesis_chains"):
                 continue

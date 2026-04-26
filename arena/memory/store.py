@@ -166,7 +166,7 @@ class MemoryStore:
         except Exception:
             recent_rows = []
         for row in recent_rows:
-            if str(row.get("event_id") or "").strip() == current_event_id:
+            if current_event_id and str(row.get("event_id") or "").strip() == current_event_id:
                 continue
             if str(row.get("event_type") or "").strip().lower() != "manual_note":
                 continue
@@ -698,6 +698,13 @@ class MemoryStore:
         """Stores a memory event."""
         if not memory_event_enabled(self.memory_policy, event_type, True):
             return None
+        kind = str(event_type or "").strip().lower()
+        text = str(summary or "").strip()
+        if kind == "manual_note" and self._is_duplicate_manual_note(
+            agent_id=agent_id,
+            summary=text,
+        ):
+            return None
         context_tags = self._context_tags(event_type=event_type, summary=summary, payload=payload)
         tier = str(memory_tier or "").strip().lower() or self._memory_tier(event_type=event_type, payload=payload)
         event = MemoryEvent(
@@ -869,12 +876,12 @@ class MemoryStore:
         *,
         score: float = 0.5,
         payload: dict | None = None,
-    ) -> None:
+    ) -> str | None:
         """Stores a manual exception/note separate from compacted lessons."""
         merged_payload = {"source": "manual_note"}
         if isinstance(payload, dict):
             merged_payload.update(payload)
-        self.record_memory(
+        return self.record_memory(
             agent_id=agent_id,
             summary=summary,
             event_type="manual_note",

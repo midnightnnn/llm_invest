@@ -49,10 +49,49 @@ class _ContextTools:
             location=repo.location,
             embed_cache_max=memory_embed_cache_max(settings.memory_policy),
         )
+        self._seen_memory_ids: set[str] = set()
+        self._seen_memory_ids_shared = False
 
     def set_context(self, context: dict[str, Any]) -> None:
         """Stores current cycle context for subsequent tool calls."""
         self._context = context
+        if not self._seen_memory_ids_shared:
+            self._seen_memory_ids = set()
+        self._seed_seen_memory_ids(context)
+
+    def set_seen_memory_ids(self, seen_memory_ids: set[str]) -> None:
+        """Shares the runner's cycle-scoped memory seen set with context tools."""
+        self._seen_memory_ids = seen_memory_ids
+        self._seen_memory_ids_shared = True
+
+    def _seed_seen_memory_ids(self, context: dict[str, Any]) -> None:
+        rows = context.get("memory_events") or []
+        if not isinstance(rows, list):
+            return
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            event_id = str(row.get("event_id") or "").strip()
+            if event_id:
+                self._seen_memory_ids.add(event_id)
+
+    def _dedupe_memory_search_rows(self, rows: list[dict[str, Any]], *, limit: int) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        added: set[str] = set()
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            event_id = str(row.get("event_id") or "").strip()
+            if event_id and event_id in self._seen_memory_ids:
+                continue
+            out.append(row)
+            if event_id:
+                added.add(event_id)
+            if len(out) >= limit:
+                break
+        if added:
+            self._seen_memory_ids.update(added)
+        return out
 
     def _sources(self) -> list[str] | None:
         if self.settings.trading_mode != "live":
@@ -296,13 +335,19 @@ class _ContextTools:
             or not memory_vector_search_enabled(self.settings.memory_policy)
         ):
             return []
-        return self._vector_store.search_similar_memories(
+        try:
+            max_limit = max(1, min(int(limit), 10))
+        except (TypeError, ValueError):
+            max_limit = 5
+        search_limit = min(10, max(max_limit * 2, max_limit + 3))
+        rows = self._vector_store.search_similar_memories(
             agent_id=self.agent_id,
             query=query,
-            limit=max(1, min(int(limit), 10)),
+            limit=search_limit,
             trading_mode=self.settings.trading_mode,
             tenant_id=self.tenant_id,
         )
+        return self._dedupe_memory_search_rows(rows or [], limit=max_limit)
 
     def search_peer_lessons(self, query: str, limit: int = 5) -> list[dict[str, Any]]:
         """Search other agents' compacted lessons in the same tenant and mode. Use this for peer takeaways, not your own history."""
@@ -442,18 +487,6 @@ class _ContextTools:
             if len(merged) >= max_limit:
                 break
         return merged[:max_limit]
-
-    def save_memory(self, summary: str, score: float = 0.5) -> dict[str, str]:
-        """Save a short manual note for future retrieval."""
-        text = (summary or "").strip()[:600]
-        if not text or not self._memory_store:
-            return {"status": "skipped", "reason": "empty summary or no memory store"}
-        self._memory_store.record_manual_note(
-            agent_id=self.agent_id,
-            summary=text,
-            score=score,
-        )
-        return {"status": "saved", "event_type": "manual_note", "summary": text[:80]}
 
     def _portfolio_weights(self) -> tuple[dict[str, float], float, float]:
         """Returns per-ticker market value weights based on current context."""

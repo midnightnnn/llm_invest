@@ -103,10 +103,13 @@ def test_default_registry_contains_new_tools() -> None:
     assert "earnings_calendar" in ids
     assert "recommend_opportunities" in ids
     assert "technical_signals" in ids
+    assert "save_memory" not in ids
     assert "screen_market" not in ids
     assert "correlation_matrix" not in ids
     assert "fetch_reddit_sentiment" not in ids
     assert "get_overseas_fundamentals" not in ids
+    all_ids = {e.tool_id for e in reg.list_entries(include_disabled=True)}
+    assert "save_memory" not in all_ids
 
 
 def test_default_registry_can_enable_reddit_sentiment() -> None:

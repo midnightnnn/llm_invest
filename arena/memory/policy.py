@@ -749,6 +749,36 @@ FIELD_SPECS: tuple[MemoryFieldSpec, ...] = (
         description="Upper bound on lessons saved per cycle.",
     ),
     MemoryFieldSpec(
+        path="compaction.board_post_limit",
+        label="Board Posts",
+        group="compaction",
+        value_type="int",
+        min_value=1,
+        max_value=8,
+        step=1,
+        description="How many same-cycle board posts feed the compactor prompt.",
+    ),
+    MemoryFieldSpec(
+        path="compaction.board_body_chars",
+        label="Board Body Chars",
+        group="compaction",
+        value_type="int",
+        min_value=240,
+        max_value=6000,
+        step=120,
+        description="Per-post board body character budget for compaction input.",
+    ),
+    MemoryFieldSpec(
+        path="compaction.cycle_summary_chars",
+        label="Cycle Summary Chars",
+        group="compaction",
+        value_type="int",
+        min_value=220,
+        max_value=2400,
+        step=120,
+        description="Per-memory summary character budget for compaction input.",
+    ),
+    MemoryFieldSpec(
         path="compaction.thesis_chain_enabled",
         label="Thesis Chains",
         group="compaction",
@@ -1079,6 +1109,9 @@ def default_memory_policy(
     cycle_event_limit: int = 12,
     recent_lessons_limit: int = 4,
     max_reflections: int = 3,
+    board_post_limit: int = 3,
+    board_body_chars: int = 1200,
+    cycle_summary_chars: int = 900,
 ) -> dict[str, Any]:
     return {
         "storage": {
@@ -1175,6 +1208,9 @@ def default_memory_policy(
             "cycle_event_limit": max(4, int(cycle_event_limit)),
             "recent_lessons_limit": max(1, int(recent_lessons_limit)),
             "max_reflections": max(1, int(max_reflections)),
+            "board_post_limit": max(1, int(board_post_limit)),
+            "board_body_chars": max(240, int(board_body_chars)),
+            "cycle_summary_chars": max(220, int(cycle_summary_chars)),
             "thesis_chain_enabled": True,
             "thesis_chain_max_chains_per_cycle": 2,
             "thesis_chain_max_events_per_chain": 6,
@@ -1842,6 +1878,24 @@ def normalize_memory_policy(raw: Any, *, defaults: dict[str, Any] | None = None)
         min_value=1,
         max_value=16,
     )
+    normalized["compaction"]["board_post_limit"] = _coerce_int(
+        get_memory_policy_value(merged, "compaction.board_post_limit", base["compaction"]["board_post_limit"]),
+        base["compaction"]["board_post_limit"],
+        min_value=1,
+        max_value=8,
+    )
+    normalized["compaction"]["board_body_chars"] = _coerce_int(
+        get_memory_policy_value(merged, "compaction.board_body_chars", base["compaction"]["board_body_chars"]),
+        base["compaction"]["board_body_chars"],
+        min_value=240,
+        max_value=6000,
+    )
+    normalized["compaction"]["cycle_summary_chars"] = _coerce_int(
+        get_memory_policy_value(merged, "compaction.cycle_summary_chars", base["compaction"]["cycle_summary_chars"]),
+        base["compaction"]["cycle_summary_chars"],
+        min_value=220,
+        max_value=2400,
+    )
     normalized["compaction"]["thesis_chain_enabled"] = _coerce_bool(
         get_memory_policy_value(
             merged,
@@ -1995,6 +2049,9 @@ def apply_memory_policy_to_settings(settings: Any, policy: dict[str, Any]) -> No
     setattr(settings, "memory_compaction_cycle_event_limit", int(get_memory_policy_value(normalized, "compaction.cycle_event_limit", getattr(settings, "memory_compaction_cycle_event_limit", 12))))
     setattr(settings, "memory_compaction_recent_lessons_limit", int(get_memory_policy_value(normalized, "compaction.recent_lessons_limit", getattr(settings, "memory_compaction_recent_lessons_limit", 4))))
     setattr(settings, "memory_compaction_max_reflections", int(get_memory_policy_value(normalized, "compaction.max_reflections", getattr(settings, "memory_compaction_max_reflections", 3))))
+    setattr(settings, "memory_compaction_board_post_limit", int(get_memory_policy_value(normalized, "compaction.board_post_limit", getattr(settings, "memory_compaction_board_post_limit", 3))))
+    setattr(settings, "memory_compaction_board_body_chars", int(get_memory_policy_value(normalized, "compaction.board_body_chars", getattr(settings, "memory_compaction_board_body_chars", 1200))))
+    setattr(settings, "memory_compaction_cycle_summary_chars", int(get_memory_policy_value(normalized, "compaction.cycle_summary_chars", getattr(settings, "memory_compaction_cycle_summary_chars", 900))))
 
 
 def load_memory_policy(repo: Any, tenant_id: str, *, defaults: dict[str, Any] | None = None) -> dict[str, Any]:

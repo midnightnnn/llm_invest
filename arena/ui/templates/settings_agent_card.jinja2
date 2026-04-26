@@ -18,7 +18,7 @@
 
     <input type="hidden" data-field="provider" value="{{ card.provider }}"/>
 
-    <div class="grid gap-x-3 gap-y-1 grid-cols-2 sm:grid-cols-4 items-end">
+    <div class="grid gap-x-3 gap-y-1 grid-cols-2 sm:grid-cols-5 items-end">
       <label class="text-[10px] font-semibold uppercase tracking-widest text-ink-400">
         Market<span class="field-tip">?<span class="tip-body">에이전트가 거래할 시장. US(나스닥+NYSE) 또는 KOSPI. 복수 선택 시 양쪽 모두 거래합니다.</span></span>
         <div class="mt-0.5 flex gap-1.5 flex-wrap agent-market-pills">
@@ -30,8 +30,13 @@
       </label>
 
       <label class="text-[10px] font-semibold uppercase tracking-widest text-ink-400">
-        Model<span class="field-tip">?<span class="tip-body">LLM 모델 ID. 예: gpt-5.2, gemini-3-flash-preview, claude-sonnet-4-6</span></span>
+        Model<span class="field-tip">?<span class="tip-body">투자 에이전트 모델 ID. 예: gpt-5.2, gemini-3-flash-preview, claude-sonnet-4-6</span></span>
         <input type="text" data-field="model" value="{{ card.model }}" class="mt-0.5 block w-full rounded-lg border border-ink-200 bg-white px-2 py-1.5 text-sm text-ink-900" placeholder="model"/>
+      </label>
+
+      <label class="text-[10px] font-semibold uppercase tracking-widest text-ink-400">
+        Memory Model<span class="field-tip">?<span class="tip-body">메모리 컴팩션/관계 추출용 모델. 비워두면 투자 모델에서 가성비 모델을 자동 선택합니다.</span></span>
+        <input type="text" data-field="memory_compaction_model" value="{{ card.memory_compaction_model }}" class="mt-0.5 block w-full rounded-lg border border-ink-200 bg-white px-2 py-1.5 text-sm text-ink-900" placeholder="{{ card.memory_compaction_default_model }}"/>
       </label>
 
       <label class="text-[10px] font-semibold uppercase tracking-widest text-ink-400">

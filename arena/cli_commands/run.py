@@ -15,6 +15,7 @@ from arena.cli_commands.run_pipeline import (
     cmd_run_shared_prep,
 )
 from arena.cli_commands.run_reconcile import (
+    cmd_run_memory_compaction,
     _run_memory_compaction,
     _run_memory_relation_extraction_post_cycle,
     _run_memory_relation_tuner_post_cycle,

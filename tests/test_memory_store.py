@@ -522,7 +522,7 @@ def test_record_manual_note_write_through_repo_does_not_self_dedup() -> None:
     assert vector_store.saved[0]["summary"] == "AAPL trim near resistance"
 
 
-def test_record_manual_note_skips_recent_duplicate_indexing() -> None:
+def test_record_manual_note_skips_recent_duplicate_storage_and_indexing() -> None:
     repo = _FakeRepo()
     repo.recent_rows = [
         {
@@ -536,7 +536,7 @@ def test_record_manual_note_skips_recent_duplicate_indexing() -> None:
 
     store.record_manual_note("gpt", "AAPL trim near resistance.", score=0.55)
 
-    assert repo.events[-1].event_type == "manual_note"
+    assert repo.events == []
     assert vector_store.saved == []
 
 

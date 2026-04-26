@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import json
 import math
+from datetime import timedelta
 
 import pytest
 
 from arena.config import Settings
 from arena.context import ContextBuilder
 from arena.memory.policy import normalize_memory_policy
-from arena.models import AccountSnapshot, Position
+from arena.models import AccountSnapshot, Position, utc_now
 
 
 class FakeRepo:
@@ -874,14 +875,18 @@ def test_context_builder_uses_temporal_tiers_when_hierarchy_enabled() -> None:
     )
     seed_builder = ContextBuilder(repo=repo, memory=FakeMemory(), board=FakeBoard(), settings=settings)
     queries = seed_builder._build_memory_search_queries("gpt", snapshot, [])
+    now = utc_now()
+    working_created = (now - timedelta(hours=3)).isoformat()
+    reflection_created = (now - timedelta(days=6)).isoformat()
+    trade_created = (now - timedelta(days=4)).isoformat()
     memory = FakeMemory(
         recent_rows=[],
         vector_store=FakeVectorStore(
             results_by_query={
                 queries[0]: [
-                    {"event_id": "evt_working", "summary": "tool trace", "score": 0.8, "created_at": "2026-02-23T00:00:00Z"},
-                    {"event_id": "evt_reflect", "summary": "reflection", "score": 0.6, "created_at": "2026-02-20T00:00:00Z"},
-                    {"event_id": "evt_trade", "summary": "AAPL BUY", "score": 0.7, "created_at": "2026-02-22T00:00:00Z"},
+                    {"event_id": "evt_working", "summary": "tool trace", "score": 0.8, "created_at": working_created},
+                    {"event_id": "evt_reflect", "summary": "reflection", "score": 0.6, "created_at": reflection_created},
+                    {"event_id": "evt_trade", "summary": "AAPL BUY", "score": 0.7, "created_at": trade_created},
                 ]
             }
         ),
@@ -889,7 +894,7 @@ def test_context_builder_uses_temporal_tiers_when_hierarchy_enabled() -> None:
     repo.memory_by_id = {
         "evt_working": {
             "event_id": "evt_working",
-            "created_at": "2026-02-23T00:00:00Z",
+            "created_at": working_created,
             "agent_id": "gpt",
             "event_type": "react_tools_summary",
             "memory_tier": "working",
@@ -900,7 +905,7 @@ def test_context_builder_uses_temporal_tiers_when_hierarchy_enabled() -> None:
         },
         "evt_reflect": {
             "event_id": "evt_reflect",
-            "created_at": "2026-02-20T00:00:00Z",
+            "created_at": reflection_created,
             "agent_id": "gpt",
             "event_type": "strategy_reflection",
             "memory_tier": "semantic",
@@ -911,7 +916,7 @@ def test_context_builder_uses_temporal_tiers_when_hierarchy_enabled() -> None:
         },
         "evt_trade": {
             "event_id": "evt_trade",
-            "created_at": "2026-02-22T00:00:00Z",
+            "created_at": trade_created,
             "agent_id": "gpt",
             "event_type": "trade_execution",
             "memory_tier": "episodic",

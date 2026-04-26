@@ -14,8 +14,9 @@ from arena.agents.adk_agent_flow import retry_policy_from_env
 from arena.agents.support_model import (
     resolve_helper_api_key,
     resolve_helper_base_url,
-    resolve_helper_model_token,
+    resolve_memory_compaction_model_token,
     select_helper_provider,
+    select_helper_provider_for_agent,
 )
 from arena.config import Settings
 from arena.memory.relation_ontology import ONTOLOGY_VERSION, ontology_prompt_block
@@ -137,7 +138,7 @@ def _request_temperature(model: str) -> float | None:
 def _model_token_for_override(settings: Settings, provider: str, model: str) -> str:
     model_id = _text(model)
     if not model_id:
-        return resolve_helper_model_token(settings, provider, direct_only=True)
+        return resolve_memory_compaction_model_token(settings, provider, direct_only=True)
     if "/" in model_id:
         return model_id
     spec = get_provider_spec(provider)
@@ -223,6 +224,8 @@ class SemanticRelationExtractor:
         self.settings = settings
         self.repo = repo
         selected_provider = canonical_provider(provider) if provider else ""
+        self._provider_override = bool(selected_provider)
+        self._model_override = bool(_text(model))
         self.provider = selected_provider or select_helper_provider(settings, direct_only=True)
         self.model = _model_token_for_override(settings, self.provider, _text(model))
         self.api_key = resolve_helper_api_key(settings, self.provider)
@@ -232,22 +235,57 @@ class SemanticRelationExtractor:
         self.min_confidence = max(0.0, min(float(min_confidence), 1.0))
         self.max_triples_per_source = max(1, min(int(max_triples_per_source), 12))
 
-    async def _collect_response_text(self, *, prompt: str) -> str:
+    def _helper_client_for_source(self, source: RelationSource) -> dict[str, str]:
+        if self._provider_override or self._model_override:
+            provider = self.provider
+            model = self.model
+        else:
+            provider = select_helper_provider_for_agent(self.settings, source.agent_id or "", direct_only=True)
+            model = resolve_memory_compaction_model_token(
+                self.settings,
+                provider,
+                agent_id=source.agent_id or None,
+                direct_only=True,
+            )
+        api_key = resolve_helper_api_key(self.settings, provider)
+        base_url = resolve_helper_base_url(self.settings, provider)
+        if not api_key:
+            raise ValueError(f"Missing direct API key for helper provider={provider}")
+        return {
+            "provider": provider,
+            "model": model,
+            "api_key": api_key,
+            "base_url": base_url,
+        }
+
+    async def _collect_response_text(
+        self,
+        *,
+        prompt: str,
+        provider: str | None = None,
+        model: str | None = None,
+        api_key: str | None = None,
+        base_url: str | None = None,
+    ) -> str:
+        request_provider = provider or self.provider
+        request_model = model or self.model
+        request_api_key = api_key or self.api_key
+        request_base_url = base_url if base_url is not None else self.base_url
         extractor_timeout = int(self.settings.timeout_for("compaction"))
         request_kwargs: dict[str, Any] = {
-            "model": self.model,
-            "api_key": self.api_key,
+            "model": request_model,
+            "api_key": request_api_key,
             "timeout": extractor_timeout,
             "messages": [
                 {"role": "system", "content": _SYSTEM_INSTRUCTION},
                 {"role": "user", "content": prompt},
             ],
         }
-        temperature = _request_temperature(self.model)
+        temperature = _request_temperature(request_model)
         if temperature is not None:
             request_kwargs["temperature"] = temperature
-        if self.base_url:
-            request_kwargs["base_url"] = self.base_url
+        if request_base_url:
+            request_kwargs["base_url"] = request_base_url
 
         retry_limit, retry_delay = retry_policy_from_env()
         for attempt in range(retry_limit + 1):
@@ -265,8 +303,8 @@ class SemanticRelationExtractor:
                     sleep_s = retry_delay * float(attempt + 1)
                     logger.warning(
                         "[yellow]relation extractor retry[/yellow] provider=%s model=%s attempt=%d sleep=%.1fs err=%s",
-                        self.provider,
-                        self.model,
+                        request_provider,
+                        request_model,
                         attempt + 1,
                         sleep_s,
                         str(exc),
@@ -288,6 +326,8 @@ class SemanticRelationExtractor:
         rejected: list[RejectedRelation] | None = None,
         raw_output: dict[str, Any] | None = None,
         error_message: str = "",
+        provider: str | None = None,
+        model: str | None = None,
     ) -> dict[str, Any]:
         rejected_rows = [
             {"reason": item.reason, "raw": item.raw}
@@ -307,8 +347,8 @@ class SemanticRelationExtractor:
             "extractor_version": EXTRACTOR_VERSION,
             "prompt_version": PROMPT_VERSION,
             "ontology_version": ONTOLOGY_VERSION,
-            "provider": self.provider,
-            "model": self.model,
+            "provider": provider or self.provider,
+            "model": model or self.model,
             "status": status,
             "accepted_count": int(accepted_count),
             "rejected_count": len(rejected_rows),
@@ -328,10 +368,15 @@ class SemanticRelationExtractor:
         raw_output: dict[str, Any] = {}
         rejected: list[RejectedRelation] = []
         accepted: list[dict[str, Any]] = []
+        provider = self.provider
+        model = self.model
 
         try:
+            client = self._helper_client_for_source(source)
+            provider = client["provider"]
+            model = client["model"]
             prompt = build_extraction_prompt(source, max_triples=self.max_triples_per_source)
-            response_text = await self._collect_response_text(prompt=prompt)
+            response_text = await self._collect_response_text(prompt=prompt, **client)
             raw_output = _parse_json_object(response_text)
             triples_raw = raw_output.get("triples")
             if not isinstance(triples_raw, list):
@@ -371,6 +416,8 @@ class SemanticRelationExtractor:
             rejected=rejected,
             raw_output=raw_output,
             error_message=error_message,
+            provider=provider,
+            model=model,
         )
         return ExtractionResult(
             source=source,

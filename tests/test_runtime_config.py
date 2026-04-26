@@ -109,6 +109,32 @@ def test_apply_runtime_overrides_respects_explicit_empty_agents_config() -> None
     assert out.agent_capitals == {}
 
 
+def test_apply_runtime_overrides_applies_memory_compaction_models() -> None:
+    settings = load_settings()
+    settings.memory_compaction_models = {}
+
+    repo = _FakeConfigRepo(
+        {
+            "memory_compaction_models": json.dumps(
+                {
+                    "gpt": "gpt-5.4",
+                    "gemini": "gemini-3.1-flash-preview",
+                    "claude": "claude-sonnet-4-7",
+                    "unknown": "ignored",
+                }
+            )
+        }
+    )
+
+    out = apply_runtime_overrides(settings, repo, tenant_id="tenant-a")
+
+    assert out.memory_compaction_models == {
+        "gpt": "gpt-5.4",
+        "gemini": "gemini-3.1-flash-preview",
+        "claude": "claude-sonnet-4-7",
+    }
+
+
 def test_apply_runtime_overrides_ignores_invalid_numeric_tokens() -> None:
     settings = load_settings()
     settings.max_order_krw = 11.0

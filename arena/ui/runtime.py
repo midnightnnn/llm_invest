@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from typing import Any, Callable
 
+from arena.agents.support_model import suggest_memory_compaction_model_for_agent
 from arena.cli_runtime import _apply_shared_research_gemini, _apply_tenant_runtime_credentials
 from arena.config import Settings, apply_runtime_overrides, research_generation_status
 from arena.data.bq import BigQueryRepository
@@ -403,6 +404,11 @@ class UIRuntime:
                 ac_entry["target_market"] = str(ac.target_market).strip().lower()
             if isinstance(ac.llm_params, dict) and ac.llm_params:
                 ac_entry["llm_params"] = dict(ac.llm_params)
+            ac_entry["memory_compaction_model"] = str(getattr(ac, "memory_compaction_model", "") or "").strip()
+            ac_entry["memory_compaction_default_model"] = suggest_memory_compaction_model_for_agent(
+                tenant_settings,
+                aid,
+            )
             agents_config.append(ac_entry)
         if active_agent_ids:
             agent_ids = active_agent_ids
@@ -411,7 +417,6 @@ class UIRuntime:
             spec.provider_id: default_model_for_provider(tenant_settings, spec.provider_id)
             for spec in list_adk_provider_specs()
         }
-
         api_key_status: dict[str, bool] = {}
         try:
             creds = latest_creds if latest_creds is not None else (self.repo.latest_runtime_credentials(tenant_id=tenant) or {})

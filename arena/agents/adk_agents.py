@@ -327,7 +327,6 @@ class _ADKDecisionRunner:
         self._registry.bind("search_peer_lessons", self._toolbox.search_peer_lessons)
         self._registry.bind("get_research_briefing", self._toolbox.get_research_briefing)
         self._registry.bind("portfolio_diagnosis", self._toolbox.portfolio_diagnosis)
-        self._registry.bind("save_memory", self._toolbox.save_memory)
         self._registry.bind("trade_performance", self._toolbox.trade_performance)
         self._tool_events: list[dict[str, Any]] = []
         self._seen_memory_ids: set[str] = set()
@@ -1150,6 +1149,9 @@ class _ADKDecisionRunner:
             self._latest_llm_call_id = ""
         self._current_phase = phase
         self._current_context = context
+        set_seen_memory_ids = getattr(self._toolbox, "set_seen_memory_ids", None)
+        if callable(set_seen_memory_ids):
+            set_seen_memory_ids(self._seen_memory_ids)
         self._seed_seen_memory_ids(context)
         self._toolbox.set_context(context)
         self._registry.set_context(context)
