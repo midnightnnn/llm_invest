@@ -6,6 +6,7 @@ import os
 import re
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 _RICH_TAG_RE = re.compile(r"\[[^\]]+\]")
@@ -125,11 +126,36 @@ class _JsonFormatter(logging.Formatter):
         return json.dumps(payload, ensure_ascii=False)
 
 
+class _PlainFileFormatter(logging.Formatter):
+    """Formats local file logs without Rich markup or terminal wrapping."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        timestamp = datetime.fromtimestamp(record.created, timezone.utc).isoformat()
+        message = _RICH_TAG_RE.sub("", record.getMessage()).strip()
+        line = f"{timestamp} | {record.levelname} | {record.name} | {message}"
+        if record.exc_info:
+            line = f"{line}\n{self.formatException(record.exc_info)}"
+        return line
+
+
+def _local_log_file_path() -> str:
+    """Returns the configured local log file path, if file logging should be enabled."""
+    explicit = os.getenv("ARENA_LOG_FILE", "").strip()
+    if explicit:
+        return explicit
+    mode = os.getenv("ARENA_MODE", "").strip().lower()
+    if mode == "local" and not (os.getenv("K_SERVICE") or os.getenv("CLOUD_RUN_JOB")):
+        return "logs/arena-local.log"
+    return ""
+
+
 def configure_logging(level: str = "INFO", log_format: str = "") -> None:
     """Configures console logging; prefers JSON on Cloud Run."""
     numeric_level = getattr(logging, level.upper(), logging.INFO)
     root = logging.getLogger()
-    root.handlers.clear()
+    for handler in list(root.handlers):
+        root.removeHandler(handler)
+        handler.close()
     root.setLevel(numeric_level)
 
     format_choice = (log_format or os.getenv("ARENA_LOG_FORMAT", "")).strip().lower()
@@ -164,6 +190,18 @@ def configure_logging(level: str = "INFO", log_format: str = "") -> None:
                 )
             )
             root.addHandler(handler)
+
+    log_file = _local_log_file_path()
+    if log_file:
+        path = Path(log_file).expanduser()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        file_handler = logging.FileHandler(path, mode="a", encoding="utf-8")
+        file_handler.setLevel(numeric_level)
+        if os.getenv("ARENA_LOG_FILE_FORMAT", "").strip().lower() == "json":
+            file_handler.setFormatter(_JsonFormatter())
+        else:
+            file_handler.setFormatter(_PlainFileFormatter())
+        root.addHandler(file_handler)
 
     # Keep third-party model client logs concise in runtime output.
     logging.getLogger("LiteLLM").setLevel(logging.WARNING)

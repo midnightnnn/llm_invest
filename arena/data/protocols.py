@@ -207,3 +207,29 @@ class TenantResolver(Protocol):
     """Minimal tenant-id resolution."""
 
     def resolve_tenant_id(self, tenant_id: str | None = None) -> str: ...
+
+
+# ---------------------------------------------------------------------------
+# Composite repository (used by storage factory)
+# ---------------------------------------------------------------------------
+
+
+@runtime_checkable
+class ArenaRepository(
+    MarketReader,
+    MemoryReader,
+    MemoryWriter,
+    LlmAuditWriter,
+    ConfigStore,
+    ExecutionReader,
+    TenantResolver,
+    Protocol,
+):
+    """Composite repository protocol implemented by every storage backend.
+
+    ``BigQueryRepository`` (the GCP-mode default) and local-mode backends both
+    satisfy this interface. Code that needs a *full* repository should depend
+    on this protocol rather than importing the BigQuery facade directly.
+    """
+
+    pass

@@ -92,7 +92,6 @@ from arena.agents.base import AgentOutput, TradingAgent
 from arena.config import AgentConfig, Settings, normalize_agent_settings
 from arena.data.bq import BigQueryRepository
 from arena.logging_utils import event_extra, failure_extra
-from arena.memory.policy import memory_embed_cache_max
 from arena.models import BoardPost, ExecutionReport, OrderIntent
 from arena.tools.default_registry import build_default_registry
 from arena.tools.registry import ToolEntry, ToolRegistry
@@ -296,12 +295,9 @@ class _ADKDecisionRunner:
         self._agent_config = agent_config
 
         from arena.memory.store import MemoryStore
-        from arena.memory.vector import VectorStore
-        vector_store = VectorStore(
-            project=repo.project,
-            location=repo.location,
-            embed_cache_max=memory_embed_cache_max(settings.memory_policy),
-        )
+        from arena.memory.vector_factory import build_vector_store
+
+        vector_store = build_vector_store(repo, settings.memory_policy)
         self._memory_store = MemoryStore(
             repo=repo,
             vector_store=vector_store,

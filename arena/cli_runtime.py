@@ -47,21 +47,23 @@ def _validate_or_exit(settings: Settings, **kwargs) -> None:
 
 
 def _repo_or_exit(settings: Settings, *, tenant_id: str | None = None) -> BigQueryRepository:
-    """Creates a BigQuery repository and exits with actionable guidance on auth failure."""
+    """Creates a storage repository and exits with actionable guidance on auth failure.
+
+    Routing:
+      ARENA_MODE unset / 'gcp' -> BigQueryRepository (identical legacy path).
+      ARENA_MODE='local'       -> DuckDB-backed local repository.
+    """
+    from arena.data.factory import get_repository
+
+    tenant = str(tenant_id or _tenant_id() or "local").strip().lower() or "local"
     try:
-        tenant = str(tenant_id or _tenant_id() or "local").strip().lower() or "local"
-        return BigQueryRepository(
-            project=settings.google_cloud_project,
-            dataset=settings.bq_dataset,
-            location=settings.bq_location,
-            tenant_id=tenant,
-        )
+        return get_repository(settings, tenant_id=tenant)
     except DefaultCredentialsError:
         logger.error(
             "[red]BigQuery auth failed[/red] Application Default Credentials are missing",
             extra=event_extra(
                 "bigquery_auth_failed",
-                tenant_id=str(tenant_id or _tenant_id() or "local").strip().lower() or "local",
+                tenant_id=tenant,
                 project=settings.google_cloud_project,
                 dataset=settings.bq_dataset,
                 stage="repo_init",

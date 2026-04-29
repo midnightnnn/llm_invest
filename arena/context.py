@@ -5,7 +5,7 @@ import logging
 import math
 import os
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Any
 from uuid import uuid4
 
@@ -268,6 +268,8 @@ class ContextBuilder:
     def _coerce_datetime(self, value: Any) -> datetime | None:
         """Converts mixed datetime/string values into timezone-aware datetimes when possible."""
         if isinstance(value, datetime):
+            if value.tzinfo is None:
+                return value.replace(tzinfo=timezone.utc)
             return value
         if isinstance(value, str):
             text = value.strip()

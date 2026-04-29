@@ -12,7 +12,6 @@ from arena.memory.candidates import CANDIDATE_MEMORY_EVENT_TYPES, candidate_memo
 from arena.memory.graph import ensure_memory_event_graph_ids, infer_memory_event_causal_chain_id, memory_event_node_id
 from arena.models import ExecutionReport, MemoryEvent, OrderIntent, RiskDecision, utc_now
 from arena.memory.policy import (
-    memory_embed_cache_max,
     memory_event_enabled,
     memory_hierarchy_enabled,
     memory_hierarchy_episodic_ttl_days,
@@ -29,7 +28,7 @@ from arena.memory.thesis import (
     thesis_event_summary,
 )
 from arena.memory.tags import extract_context_tags
-from arena.memory.vector import VectorStore
+from arena.memory.vector_factory import build_vector_store
 
 logger = logging.getLogger(__name__)
 
@@ -50,11 +49,7 @@ class MemoryStore:
         self.repo = repo
         self.trading_mode = trading_mode
         self.memory_policy = normalize_memory_policy(memory_policy or {})
-        self.vector_store = vector_store or VectorStore(
-            project=repo.project,
-            location=repo.location,
-            embed_cache_max=memory_embed_cache_max(self.memory_policy),
-        )
+        self.vector_store = vector_store or build_vector_store(repo, self.memory_policy)
 
     def _tenant(self) -> str:
         resolver = getattr(self.repo, "resolve_tenant_id", None)

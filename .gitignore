@@ -4,6 +4,8 @@ __pycache__/
 .venv/
 venv/
 .pytest_cache/
+/logs/
+/data/
 
 # IDE
 .vscode/
@@ -42,3 +44,4 @@ disquiet_post.md
 disquiet_product.md
 memory_system.md
 
+SKILL.md

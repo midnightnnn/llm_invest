@@ -119,6 +119,114 @@ def _safe_log_returns(prices: pd.DataFrame) -> pd.DataFrame:
     return out.replace([np.inf, -np.inf], np.nan)
 
 
+def _local_baseline_forecast_enabled(settings: Settings) -> bool:
+    return str(getattr(settings, "arena_mode", "") or os.getenv("ARENA_MODE")).strip().lower() == "local"
+
+
+def _build_and_store_local_baseline_forecasts(
+    repo: BigQueryRepository,
+    settings: Settings,
+    *,
+    lookback_days: int,
+    horizon: int,
+    min_series_length: int,
+    tickers: list[str] | None,
+    note_prefix: str,
+) -> ForecastBuildResult:
+    """Lightweight local fallback used when heavy forecasting extras are absent."""
+    run_date = utc_now().date()
+    if tickers:
+        tickers = list(dict.fromkeys(str(t).strip().upper() for t in tickers if str(t).strip()))
+    else:
+        tickers = _normalize_universe(settings, repo=repo)
+    if not tickers:
+        return ForecastBuildResult(
+            run_date=run_date.isoformat(),
+            rows_written=0,
+            tickers_used=0,
+            model_names=[],
+            used_neuralforecast=False,
+            note=f"{note_prefix}; no tickers in local universe",
+        )
+
+    end_d = run_date
+    start_d = end_d - timedelta(days=max(lookback_days * 2, 180))
+    prices = repo.get_daily_close_frame(
+        tickers=tickers,
+        start=start_d,
+        end=end_d,
+        sources=_forecast_sources(settings),
+    )
+    if prices.empty:
+        return ForecastBuildResult(
+            run_date=run_date.isoformat(),
+            rows_written=0,
+            tickers_used=0,
+            model_names=[],
+            used_neuralforecast=False,
+            note=f"{note_prefix}; no price history in market_features",
+        )
+
+    log_returns = _safe_log_returns(prices)
+    min_len = max(20, min(int(min_series_length or 80), 60))
+    log_returns = log_returns.dropna(axis=1, thresh=min_len).sort_index()
+    if log_returns.empty:
+        return ForecastBuildResult(
+            run_date=run_date.isoformat(),
+            rows_written=0,
+            tickers_used=0,
+            model_names=[],
+            used_neuralforecast=False,
+            note=f"{note_prefix}; insufficient local series length",
+        )
+
+    trailing_window = min(max(20, horizon * 2), len(log_returns))
+    rows: list[dict[str, Any]] = []
+    for ticker in sorted(log_returns.columns.astype(str).str.upper()):
+        series = log_returns[ticker].dropna().tail(trailing_window)
+        if len(series) < 20:
+            continue
+        daily_mu = float(series.mean())
+        daily_vol = float(series.std()) if len(series) > 1 else 0.0
+        period_return = float(np.exp(daily_mu * horizon) - 1.0)
+        prob_up = float((series > 0).mean())
+        if prob_up >= 0.8:
+            consensus = "STRONG_BUY"
+        elif prob_up >= 0.6:
+            consensus = "BUY"
+        elif prob_up <= 0.2:
+            consensus = "STRONG_SELL"
+        elif prob_up <= 0.4:
+            consensus = "SELL"
+        else:
+            consensus = "NEUTRAL"
+        rows.append(
+            {
+                "run_date": run_date.isoformat(),
+                "ticker": ticker,
+                "exp_return_period": period_return,
+                "forecast_horizon": horizon,
+                "forecast_model": "local_momentum_baseline",
+                "is_stacked": True,
+                "forecast_score": -daily_vol,
+                "prob_up": round(prob_up, 4),
+                "model_votes_up": int((series > 0).sum()),
+                "model_votes_total": int(len(series)),
+                "consensus": consensus,
+            }
+        )
+
+    written = repo.replace_predicted_returns(rows, run_date=run_date)
+    return ForecastBuildResult(
+        run_date=run_date.isoformat(),
+        rows_written=written,
+        tickers_used=len({row["ticker"] for row in rows}),
+        model_names=["local_momentum_baseline"] if rows else [],
+        used_neuralforecast=False,
+        note=f"{note_prefix}; local_momentum_baseline",
+    )
+
+
 def _series_to_long(log_returns: pd.DataFrame, *, min_len: int) -> pd.DataFrame:
     rows: list[pd.DataFrame] = []
     for ticker in log_returns.columns:
@@ -435,7 +543,20 @@ def build_and_store_stacked_forecasts(
     max_steps: int = 200,
     tickers: list[str] | None = None,
 ) -> ForecastBuildResult:
-    _require_forecasting_dependencies()
+    try:
+        _require_forecasting_dependencies()
+    except RuntimeError as exc:
+        if not _local_baseline_forecast_enabled(settings):
+            raise
+        return _build_and_store_local_baseline_forecasts(
+            repo,
+            settings,
+            lookback_days=lookback_days,
+            horizon=horizon,
+            min_series_length=min_series_length,
+            tickers=tickers,
+            note_prefix=str(exc),
+        )
 
     run_date = utc_now().date()
     if tickers:

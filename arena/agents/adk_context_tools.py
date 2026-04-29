@@ -12,7 +12,6 @@ from arena.data.bq import BigQueryRepository
 from arena.market_feature_normalization import daily_history_sources
 from arena.market_sources import live_market_sources_for_markets
 from arena.memory.policy import (
-    memory_embed_cache_max,
     memory_peer_lessons_enabled,
     memory_vector_search_enabled,
 )
@@ -42,13 +41,9 @@ class _ContextTools:
         self.tenant_id = str(tenant_id or "").strip().lower() or "local"
         self._context: dict[str, Any] = {}
         self._memory_store = memory_store
-        from arena.memory.vector import VectorStore
+        from arena.memory.vector_factory import build_vector_store
 
-        self._vector_store = VectorStore(
-            project=repo.project,
-            location=repo.location,
-            embed_cache_max=memory_embed_cache_max(settings.memory_policy),
-        )
+        self._vector_store = build_vector_store(repo, settings.memory_policy)
         self._seen_memory_ids: set[str] = set()
         self._seen_memory_ids_shared = False
 

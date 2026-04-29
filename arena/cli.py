@@ -40,6 +40,9 @@ from arena.cli_commands.admin import (
     cmd_run_memory_forgetting_tuner,
     cmd_set_tenant_simulated,
 )
+from arena.cli_commands.init_local import cmd_init_local
+from arena.cli_commands.local_clone import cmd_clone_bq_local
+from arena.cli_commands.local_demo import cmd_backfill_local_market, cmd_seed_local_demo
 from arena.cli_commands.memory_relations import cmd_extract_memory_relations
 from arena.cli_commands.run import (
     _apply_market_override,
@@ -146,6 +149,34 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("init-bq", help="Create dataset/tables")
+    init_local = sub.add_parser(
+        "init-local",
+        help="Bootstrap a local DuckDB database (no GCP required)",
+    )
+    init_local.add_argument(
+        "--db-path",
+        type=str,
+        default=None,
+        help="DuckDB file path (default: ./data/arena.duckdb or $ARENA_LOCAL_DB_PATH)",
+    )
+    seed_local = sub.add_parser("seed-local-demo", help="Seed deterministic local demo data into DuckDB")
+    seed_local.add_argument("--days", type=int, default=60, help="Number of demo calendar days to generate")
+    sub.add_parser("backfill-local-market", help="Backfill market_features into local DuckDB using existing market sync")
+    clone_local = sub.add_parser("clone-bq-local", help="Clone BigQuery arena tables into local DuckDB")
+    clone_local.add_argument("--db-path", type=str, default=None, help="DuckDB target path")
+    clone_local.add_argument("--project", type=str, default="", help="BigQuery project override")
+    clone_local.add_argument("--dataset", type=str, default="", help="BigQuery dataset override")
+    clone_local.add_argument("--location", type=str, default="", help="BigQuery location override")
+    clone_local.add_argument("--tables", type=str, default="", help="Comma-separated table allowlist; empty clones all arena tables")
+    clone_local.add_argument("--exclude-tables", type=str, default="", help="Comma-separated table denylist")
+    clone_local.add_argument("--batch-size", type=int, default=5000, help="DuckDB insert batch size")
+    clone_local.add_argument("--page-size", type=int, default=10000, help="BigQuery result page size")
+    clone_local.add_argument("--limit-per-table", type=int, default=0, help="Debug limit per source table; 0 means no limit")
+    clone_local.add_argument("--append", action="store_true", help="Append instead of replacing local table contents")
+    clone_local.add_argument("--dry-run", action="store_true", help="Only report BigQuery table sizes")
+    clone_local.add_argument("--continue-on-error", action="store_true", help="Continue cloning remaining tables after a table failure")
+    clone_local.add_argument("--fail-on-missing", action="store_true", help="Fail when a source BigQuery table is missing")
+    clone_local.add_argument("--no-arrow", action="store_true", help="Disable BigQuery Storage Arrow batches and use row iteration")
     sub.add_parser("seed-demo-market", help="Insert demo market_features rows")
     sub.add_parser("sync-market", help="Sync market_features from open-trading API")
     sub.add_parser("sync-market-quotes", help="Sync intraday quotes into market_features")
@@ -300,6 +331,10 @@ def build_parser() -> argparse.ArgumentParser:
 def _dispatch_command(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
     handlers = {
         "init-bq": lambda ns: cmd_init_bq(),
+        "init-local": lambda ns: cmd_init_local(db_path=getattr(ns, "db_path", None)),
+        "seed-local-demo": lambda ns: cmd_seed_local_demo(days=int(getattr(ns, "days", 60) or 60)),
+        "backfill-local-market": lambda ns: cmd_backfill_local_market(),
+        "clone-bq-local": lambda ns: cmd_clone_bq_local(ns),
         "seed-demo-market": lambda ns: cmd_seed_demo_market(),
         "sync-market": lambda ns: cmd_sync_market(),
         "sync-market-quotes": lambda ns: cmd_sync_market_quotes(),

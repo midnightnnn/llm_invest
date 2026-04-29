@@ -217,6 +217,10 @@ class Settings:
     autonomy_tool_default_candidates_enabled: bool = True
     autonomy_opportunity_context_enabled: bool = True
 
+    # Storage backend selector. 'gcp' (default) routes to BigQuery/Firestore.
+    # 'local' opts into the DuckDB-backed local repository for OSS quickstart.
+    arena_mode: str = "gcp"
+
     def timeout_for(self, role: str) -> int:
         """Resolves LLM timeout (seconds) for a given agent role.
 
@@ -542,6 +546,8 @@ def load_settings() -> Settings:
     memory_compaction_cycle_summary_chars = _to_int(os.getenv("ARENA_MEMORY_COMPACTION_CYCLE_SUMMARY_CHARS"), 900)
     memory_compaction_models = _json_model_map(os.getenv("ARENA_MEMORY_COMPACTION_MODELS"))
     memory_embed_cache_max = _to_int(os.getenv("ARENA_MEMORY_EMBED_CACHE_MAX"), 128)
+    raw_arena_mode = (os.getenv("ARENA_MODE") or "").strip().lower()
+    arena_mode = raw_arena_mode if raw_arena_mode in {"local", "gcp"} else "gcp"
     settings = Settings(
         google_cloud_project=os.getenv("GOOGLE_CLOUD_PROJECT", ""),
         bq_dataset=os.getenv("BQ_DATASET", "llm_arena"),
@@ -666,6 +672,7 @@ def load_settings() -> Settings:
         autonomy_working_set_enabled=_to_bool(os.getenv("ARENA_AUTONOMY_WORKING_SET_ENABLED"), True),
         autonomy_tool_default_candidates_enabled=_to_bool(os.getenv("ARENA_AUTONOMY_TOOL_DEFAULT_CANDIDATES_ENABLED"), True),
         autonomy_opportunity_context_enabled=_to_bool(os.getenv("ARENA_AUTONOMY_OPPORTUNITY_CONTEXT_ENABLED"), True),
+        arena_mode=arena_mode,
     )
     return normalize_agent_settings(apply_distribution_mode(settings))
 

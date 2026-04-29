@@ -9,7 +9,7 @@
 
 1. [Directory Structure](#1-directory-structure)
 2. [Core Data Models](#2-core-data-models)
-3. [Data Layer (BigQuery)](#3-data-layer-bigquery)
+3. [Data Layer (BigQuery + Local DuckDB)](#3-data-layer-bigquery--local-duckdb)
 4. [Agent System](#4-agent-system)
 5. [Long-Term Memory System](#5-long-term-memory-system)
 6. [Tools System](#6-tools-system)
@@ -58,6 +58,8 @@ arena/                           Core business logic
 │   ├── policy.py                Single source for all memory controls — 10 groups (2,817L)
 │   ├── store.py                 Write/retrieve events with tier + tagging + graph (887L)
 │   ├── vector.py                Vertex AI embeddings + Firestore search (288L)
+│   ├── vector_factory.py        GCP/local vector store selector (44L)
+│   ├── vector_local.py          ChromaDB + sentence-transformers local store + NullVectorStore fallback (271L)
 │   ├── thesis.py                Investment thesis lifecycle tracking (170L)
 │   ├── graph.py                 Causal graph node/edge builders (478L)
 │   ├── tags.py                  Context tag extraction — regime/strategy/sector/ticker (317L)
@@ -117,20 +119,30 @@ arena/                           Core business logic
 ├── recommendation/               Signal-IC meta-learner + Layer 1 signals
 │   ├── ranker.py                Builds opportunity_ranker_scores_latest (713L)
 │   └── signals.py               Layer 1 signal definitions + regime features (205L)
-├── data/                         BigQuery repository layer (modular stores)
+├── data/                         Repository layer (BigQuery default, DuckDB for ARENA_MODE=local)
 │   ├── bq.py                   BigQueryRepository facade (144L)
+│   ├── factory.py               Backend selector — BigQuery vs LocalRepository (73L)
 │   ├── protocols.py             Store protocols/interfaces (209L)
-│   ├── schema.py                Table DDLs + auto-migration (1,106L)
-│   └── bigquery/                Store implementations
-│       ├── session.py           BigQuerySession connection management (277L)
-│       ├── memory_bq_store.py   Memory events, board posts, graph, briefings, triples (1,809L)
-│       ├── market_store.py      Price/feature/signals/IC queries (2,497L)
-│       ├── sleeve_store.py      Virtual account operations + NAV (2,576L)
-│       ├── execution_store.py   Order intent/execution repository (363L)
-│       ├── ledger_store.py      Append-only event ledger (381L)
-│       ├── llm_audit_store.py   LLM call/prompt/response audit log (209L)
-│       ├── runtime_store.py     Config/credential storage (604L)
-│       └── backtest_store.py    Backtest persistence (161L)
+│   ├── schema.py                Shared Table DDLs + auto-migration (1,106L)
+│   ├── bigquery/                BigQuery store implementations
+│   │   ├── session.py           BigQuerySession connection management (277L)
+│   │   ├── memory_bq_store.py   Memory events, board posts, graph, briefings, triples (1,809L)
+│   │   ├── market_store.py      Price/feature/signals/IC queries (2,497L)
+│   │   ├── sleeve_store.py      Virtual account operations + NAV (2,576L)
+│   │   ├── execution_store.py   Order intent/execution repository (363L)
+│   │   ├── ledger_store.py      Append-only event ledger (381L)
+│   │   ├── llm_audit_store.py   LLM call/prompt/response audit log (209L)
+│   │   ├── runtime_store.py     Config/credential storage (604L)
+│   │   └── backtest_store.py    Backtest persistence (161L)
+│   └── local/                   DuckDB store implementations (ARENA_MODE=local)
+│       ├── repository.py        LocalRepository facade — store delegation (149L)
+│       ├── session.py           DuckDBSession + write file lock (197L)
+│       ├── schema.py            Shared table metadata → DuckDB DDL renderer (101L)
+│       ├── market_store.py      DuckDB market features + latest view (435L)
+│       ├── memory_store.py      DuckDB memory/board/graph (843L)
+│       ├── sleeve_store.py      DuckDB sleeves + NAV replay (495L)
+│       ├── execution_store.py   DuckDB intents/executions (314L)
+│       └── config_store.py      DuckDB arena_config + credential meta (197L)
 ├── open_trading/                 Korea Investment API client + fundamentals ingest
 │   ├── client.py                REST wrapper — OAuth, account, market data (2,249L)
 │   ├── sync.py                  Market data, account, dividend sync (3,375L)
@@ -138,7 +150,8 @@ arena/                           Core business logic
 │   ├── sec_fundamentals_ingestor.py  SEC EDGAR companyfacts ingest (605L)
 │   ├── fmp_fundamentals_ingestor.py  Optional FMP fundamentals source (305L)
 │   ├── exchange_codes.py        Exchange code mapping (97L)
-│   └── token_cache.py           Firestore-backed OAuth token (71L)
+│   ├── token_cache.py           Firestore-backed OAuth token (71L)
+│   └── token_cache_file.py      Local atomic JSON token cache (77L)
 ├── broker/                       Order execution abstraction
 │   ├── base.py                  BrokerClient protocol (13L)
 │   ├── open_trading.py          Live KIS trading — US + KOSPI (567L)
@@ -150,7 +163,8 @@ arena/                           Core business logic
 │   ├── anthropic_patches.py     Anthropic SDK compatibility patches (69L)
 │   └── credentials.py           Secret Manager credential parsing (130L)
 ├── security/                     Secrets management
-│   └── credential_store.py      Secret Manager + BQ (377L)
+│   ├── credential_store.py      Secret Manager + BQ (377L)
+│   └── credential_store_env.py  Local JSON credential store (file-mode 0600) (196L)
 ├── cli_commands/                 Modular CLI command handlers
 │   ├── run.py                   Command dispatch routing (48L)
 │   ├── run_agent.py             Agent cycle execution (704L)
@@ -160,6 +174,8 @@ arena/                           Core business logic
 │   ├── serve.py                 UI and MCP server startup (267L)
 │   ├── sync.py                  Market/account/fundamentals/ranker sync (647L)
 │   ├── admin.py                 Admin operations — tenant, memory (336L)
+│   ├── init_local.py            DuckDB bootstrap (`init-local`) (38L)
+│   ├── local_demo.py            Deterministic demo seed + local KIS backfill (121L)
 │   └── memory_relations.py      Semantic triple extraction CLI (148L)
 ├── strategy/                     Strategy reference catalog
 │   ├── catalog.py               Strategy cards for agents (164L)
@@ -184,6 +200,7 @@ arena/                           Core business logic
 ├── cli_runtime.py                CLI runtime bootstrap (698L)
 ├── cloud_run_jobs.py             Cloud Run job dispatch (47L)
 ├── tenant_leases.py              Firestore execution lease (134L)
+├── tenant_leases_local.py        File-locked JSON tenant lease for local mode (132L)
 ├── models.py                     Core data classes (156L)
 ├── logging_utils.py              JSON logging for Cloud Run (170L)
 └── __main__.py
@@ -254,26 +271,47 @@ tests/                            67 test files, pytest
 
 ---
 
-## 3. Data Layer (BigQuery)
+## 3. Data Layer (BigQuery + Local DuckDB)
 
 ### 3.1 Architecture
 
-데이터 레이어는 모듈화된 store 패턴으로 구성:
+데이터 레이어는 모듈화된 store 패턴 + 백엔드 팩토리로 구성. `arena/data/factory.py:get_repository`가 `Settings.arena_mode`(또는 `ARENA_MODE` env)를 읽어 두 백엔드 중 하나를 인스턴스화하고, 둘 다 `BigQueryRepository`와 동일한 facade 표면을 노출 — store 메서드 이름·시그니처가 동일해서 상위 레이어(orchestrator/agents/tools)는 어떤 백엔드인지 모릅니다.
 
 ```
-BigQueryRepository (bq.py, 144L)  ← 얇은 facade
-  │
-  └── bigquery/ (store 구현체)
-      ├── session.py         BigQuerySession — 연결 관리 + 테넌트 격리
-      ├── memory_bq_store.py MemoryBQStore — 메모리/보드/그래프/브리핑
-      ├── market_store.py    MarketStore — 시장 데이터/feature
-      ├── sleeve_store.py    SleeveStore — 가상 계좌/NAV/포지션
-      ├── execution_store.py ExecutionStore — 주문/체결
-      ├── ledger_store.py    LedgerStore — append-only 원장
-      ├── llm_audit_store.py LlmAuditStore — LLM 호출 감사 로그
-      ├── runtime_store.py   RuntimeStore — 설정/자격증명
-      └── backtest_store.py  BacktestStore — 백테스트
+get_repository(settings, tenant_id) ──▶ ARENA_MODE
+                                          │
+              ┌───────────────────────────┴──────────────────────────┐
+              ▼                                                       ▼
+BigQueryRepository (bq.py, 144L)                        LocalRepository (data/local/repository.py, 149L)
+  └── bigquery/ (8 stores + session)                      └── data/local/ (5 stores + session + schema)
+      ├── session.py                                          ├── session.py        DuckDB connection + filelock
+      ├── memory_bq_store.py                                  ├── schema.py         Shared table metadata → DuckDB DDL renderer
+      ├── market_store.py                                     ├── market_store.py
+      ├── sleeve_store.py                                     ├── memory_store.py
+      ├── execution_store.py                                  ├── sleeve_store.py
+      ├── ledger_store.py                                     ├── execution_store.py
+      ├── llm_audit_store.py                                  └── config_store.py
+      ├── runtime_store.py
+      └── backtest_store.py
 ```
+
+### 3.1.1 Local Backend (DuckDB)
+
+OSS quickstart / 로컬 평가용. GCP 결제·인증 없이 동일 코드 경로에서 paper 사이클을 돌리려는 목적으로 분리.
+
+| Aspect | BigQuery (default) | Local (`ARENA_MODE=local`) |
+|--------|--------------------|----------------------------|
+| Storage | BigQuery 데이터셋 (project + dataset + location) | 단일 DuckDB 파일 (`./data/arena.duckdb`, `ARENA_LOCAL_DB_PATH` override) |
+| Schema | `arena/data/schema.py` `TABLE_DDLS` (BigQuery 방언) | 동일 테이블/컬럼 메타데이터를 `data/local/schema.py`가 DuckDB DDL로 별도 렌더링 (STRING→VARCHAR, INT64→BIGINT, NUMERIC→DECIMAL(38,9), DATETIME→TIMESTAMP, ARRAY<T>→T[]) |
+| Concurrency | BigQuery 서버측 + Firestore 트랜잭션 | `filelock`(optional) + per-write 파일락. 미설치 시 단일 프로세스 가정으로 경고 후 진행 |
+| Vector store | Vertex AI 임베딩 + Firestore vector search | ChromaDB(persistent) + sentence-transformers `all-MiniLM-L6-v2` (`memory/vector_local.py`). `chromadb`/`sentence-transformers` 미설치 시 `NullVectorStore`로 폴백 — recency-only 회상 |
+| Credentials | Secret Manager + `runtime_credentials` | `~/.llm-arena/credentials.json` (mode 0600) + `runtime_credentials` 메타. `EnvCredentialStore`가 동일 KIS/모델 secret 페이로드 형태 보존 |
+| KIS OAuth cache | Firestore-backed `token_cache.py` | Atomic JSON `token_cache_file.py` (`~/.llm-arena/tokens.json`) |
+| Tenant leases | `FirestoreTenantLeaseStore` | `LocalTenantLeaseStore` — `./data/tenant_leases.json` + filelock |
+| Bootstrap | `llm-arena init-bq` | `llm-arena init-local` (DDL idempotent) → `seed-local-demo` 또는 `backfill-local-market` |
+| Optional install | (default) | `pip install -e ".[local]"` (duckdb + filelock) · `pip install -e ".[local,local-vector]"` 추가 시 ChromaDB 활성화 |
+
+`LocalRepository.__getattr__` 는 5개 로컬 store에 위임하고, 미구현 surface(예: 일부 BQ-전용 dashboard 쿼리)는 `AttributeError`를 던져 `hasattr(repo, "...")` 기반 feature detection이 그대로 동작합니다.
 
 ### 3.2 Schema & Tables (`schema.py`)
 
@@ -507,7 +545,17 @@ decay_multiplier = max(decay_factor ^ (staleness_days × tier_weight / access_bo
 
 ### 5.8 Vector Search & Reranking
 
-1. **Semantic Search**: Firestore vector nearest-neighbor (top-K, 768-dim)
+`memory/vector_factory.py`가 `repo.settings.arena_mode`(또는 `ARENA_MODE`)를 보고 임베딩 백엔드를 선택:
+
+| Mode | Backend | Embedding model | Notes |
+|------|---------|----------------|-------|
+| `gcp` (default) | `VectorStore` (vector.py) | Vertex AI `text-embedding-004` (768-dim) | Firestore vector NN |
+| `local` (with `[local-vector]`) | `LocalChromaVectorStore` (vector_local.py) | sentence-transformers `all-MiniLM-L6-v2` | ChromaDB persistent client, `./data/chroma` (`ARENA_LOCAL_VECTOR_DIR` override) |
+| `local` (without extras) | `NullVectorStore` | — | 검색은 빈 결과를 반환하고 본 store는 recency + reranking 보너스로만 동작. ChromaDB 또는 sentence-transformers import 실패 시 자동 폴백 |
+
+리랭킹 보너스/계수는 백엔드와 무관하게 동일하게 적용됩니다.
+
+1. **Semantic Search**: vector nearest-neighbor (top-K)
 2. **Pre-filters**: tenant_id, agent_id, trading_mode
 3. **Reranking Bonuses**:
    - Type: reflection +0.45, trade +0.28, manual +0.16, react -0.12
@@ -732,7 +780,7 @@ Per-agent 오버라이드: `AgentConfig.risk_overrides` 병합 후 평가.
 
 ### 11.1 OpenTradingClient (`client.py`, 2,249L)
 
-- OAuth 토큰 관리 (Firestore 캐시)
+- OAuth 토큰 관리 — `token_cache.py`(Firestore) 또는 `token_cache_file.py`(local atomic JSON, `KIS_TOKEN_CACHE_BACKEND=file`로 강제)
 - US + KR 시장 데이터 (일봉, 호가, 지수)
 - 계좌 조회 (잔고, 포지션)
 - 주문 (해외/국내)
@@ -828,10 +876,31 @@ FastAPI Admin Dashboard — 모듈화된 라우트 구조.
 
 | Layer | Storage | Scope | Used For |
 |------|---------|-------|----------|
-| Boot defaults | `.env` / env vars | process | 기본 Settings 부트스트랩 |
-| Secret metadata | `runtime_credentials` | tenant | KIS/모델 secret, key availability |
+| Boot defaults | `.env` / env vars | process | 기본 Settings 부트스트랩 (`ARENA_MODE` 포함) |
+| Secret metadata | `runtime_credentials` (BQ) / 동일 컬럼을 가진 DuckDB 테이블 | tenant | KIS/모델 secret, key availability |
+| Secret payload | Secret Manager (gcp) / `~/.llm-arena/credentials.json` mode 0600 (local) | tenant | KIS 계좌 + 모델 API 키 페이로드 |
 | Editable config | `arena_config` | tenant | 프롬프트, 리스크, 에이전트, 메모리 정책 |
 | Safety gate | distribution_mode, real_trading_approved | process + tenant | 실거래 허용 여부 |
+
+### Backend Mode (`arena_mode`)
+
+`config.py:load_settings()`는 `ARENA_MODE` env를 정규화해 `Settings.arena_mode in {"gcp","local"}`(unknown은 `gcp`)로 저장. 다음 컴포넌트가 동일 키를 읽어 GCP/로컬 분기:
+
+| Consumer | File | Behaviour |
+|----------|------|-----------|
+| Repository | `arena/data/factory.py` | `BigQueryRepository` ↔ `LocalRepository` |
+| Vector store | `arena/memory/vector_factory.py` | Vertex+Firestore ↔ ChromaDB / NullVectorStore |
+| Credential store | UI runtime + admin commands | Secret Manager `CredentialStore` ↔ `EnvCredentialStore` |
+| Tenant lease | orchestrator pre-cycle | `FirestoreTenantLeaseStore` ↔ `LocalTenantLeaseStore` |
+| KIS token cache | `OpenTradingClient` | Firestore `token_cache.py` ↔ `token_cache_file.py` |
+
+로컬 모드 추가 env (모두 default 있음, 변경 시 단일 머신 워크플로용):
+- `ARENA_LOCAL_DB_PATH` — DuckDB 파일 경로 (default `./data/arena.duckdb`)
+- `ARENA_LOCAL_VECTOR_DIR` — ChromaDB persist 디렉터리 (default `./data/chroma`)
+- `ARENA_LOCAL_CREDENTIALS_FILE` — 자격증명 JSON (default `~/.llm-arena/credentials.json`)
+- `ARENA_LOCAL_LEASE_FILE` — tenant lease JSON (default `./data/tenant_leases.json`)
+- `KIS_TOKEN_CACHE_BACKEND=file` — Firestore 미사용 강제
+- `KIS_TOKEN_CACHE_FILE` — KIS 토큰 캐시 경로 (default `~/.llm-arena/tokens.json`)
 
 ### Key Config Keys (`arena_config`)
 

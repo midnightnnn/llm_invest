@@ -146,10 +146,17 @@ def _run_agent_cycle_once_guarded(
     lease_store = None
     lease_id = ""
     if live and execution_market and cli._tenant_lease_enabled():
-        lease_store = cli.FirestoreTenantLeaseStore(
-            project=settings.google_cloud_project,
-            collection=str(os.getenv("ARENA_TENANT_LEASE_COLLECTION") or "tenant_cycle_leases").strip(),
-        )
+        if str(getattr(settings, "arena_mode", "") or os.getenv("ARENA_MODE")).strip().lower() == "local":
+            from arena.tenant_leases_local import LocalTenantLeaseStore
+
+            lease_store = LocalTenantLeaseStore(
+                collection=str(os.getenv("ARENA_TENANT_LEASE_COLLECTION") or "tenant_cycle_leases").strip(),
+            )
+        else:
+            lease_store = cli.FirestoreTenantLeaseStore(
+                project=settings.google_cloud_project,
+                collection=str(os.getenv("ARENA_TENANT_LEASE_COLLECTION") or "tenant_cycle_leases").strip(),
+            )
         acquired = lease_store.acquire(
             tenant_id=tenant,
             market=execution_market,

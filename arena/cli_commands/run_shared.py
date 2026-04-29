@@ -464,11 +464,14 @@ def _batch_market_sync(
 def _run_mtm_score_update(settings: Settings) -> int:
     """BUY 기억의 score를 미실현 손익 기준으로 업데이트."""
     import math
-    from google.cloud import firestore as firestore
 
     cli = _cli()
-    repo = cli.BigQueryRepository(project=settings.google_cloud_project, dataset=settings.bq_dataset, location=settings.bq_location)
-    db = firestore.Client(project=settings.google_cloud_project)
+    repo = cli._repo_or_exit(settings, tenant_id=cli._tenant_id() or "local")
+    db = None
+    if str(getattr(settings, "arena_mode", "") or os.getenv("ARENA_MODE")).strip().lower() != "local":
+        from google.cloud import firestore as firestore
+
+        db = firestore.Client(project=settings.google_cloud_project)
     updated = 0
 
     for agent_id in settings.agent_ids:
@@ -491,10 +494,11 @@ def _run_mtm_score_update(settings: Settings) -> int:
                     continue
                 event_id = str(memory.get("event_id", "")).strip()
                 repo.update_memory_score(event_id, new_score)
-                try:
-                    db.collection("agent_memories").document(event_id).update({"score": float(new_score)})
-                except Exception as fs_exc:
-                    logger.warning("Firestore sync failed for %s: %s", event_id[:8], fs_exc)
+                if db is not None:
+                    try:
+                        db.collection("agent_memories").document(event_id).update({"score": float(new_score)})
+                    except Exception as fs_exc:
+                        logger.warning("Firestore sync failed for %s: %s", event_id[:8], fs_exc)
                 logger.info("[MTM] %s (%s) score: %.2f → %.2f (PnL: %+.1f%%)", event_id[:8], ticker, old_score, new_score, pnl_ratio * 100)
                 updated += 1
 

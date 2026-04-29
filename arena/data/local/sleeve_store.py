@@ -1,0 +1,572 @@
+"""Local DuckDB-backed sleeve/account snapshot helpers."""
+
+from __future__ import annotations
+
+from datetime import date, datetime
+import json
+from typing import Any
+
+from arena.data.local.session import DuckDBSession
+from arena.models import AccountSnapshot, Position, utc_now
+
+
+class LocalSleeveStore:
+    """Minimal sleeve state replay for local paper/demo cycles."""
+
+    def __init__(self, session: DuckDBSession, *, market: Any | None = None) -> None:
+        self.session = session
+        self._market = market
+
+    def _tenant_token(self, tenant_id: str | None = None) -> str:
+        return self.session.resolve_tenant_id(tenant_id)
+
+    @staticmethod
+    def _parse_positions(raw: Any) -> list[dict[str, Any]]:
+        if raw is None:
+            return []
+        if isinstance(raw, list):
+            return [dict(item) for item in raw if isinstance(item, dict)]
+        text = str(raw or "").strip()
+        if not text:
+            return []
+        parsed = json.loads(text)
+        return [dict(item) for item in parsed] if isinstance(parsed, list) else []
+
+    @staticmethod
+    def _position_to_payload(pos: Position) -> dict[str, Any]:
+        return {
+            "ticker": pos.ticker,
+            "exchange_code": pos.exchange_code,
+            "instrument_id": pos.instrument_id,
+            "quantity": pos.quantity,
+            "avg_price_krw": pos.avg_price_krw,
+            "market_price_krw": pos.market_price_krw,
+            "avg_price_native": pos.avg_price_native,
+            "market_price_native": pos.market_price_native,
+            "quote_currency": pos.quote_currency,
+            "fx_rate": pos.fx_rate,
+        }
+
+    def latest_agent_sleeves(self, *, agent_ids: list[str] | None = None, tenant_id: str | None = None) -> dict[str, dict[str, Any]]:
+        tenant = self._tenant_token(tenant_id)
+        params: dict[str, Any] = {"tenant_id": tenant}
+        filters = ["tenant_id = $tenant_id"]
+        tokens = [str(a or "").strip() for a in (agent_ids or []) if str(a or "").strip()]
+        if tokens:
+            filters.append("agent_id IN (SELECT unnest($agent_ids))")
+            params["agent_ids"] = tokens
+        rows = self.session.fetch_rows(
+            f"""
+            WITH ranked AS (
+              SELECT tenant_id, agent_id, initialized_at, initial_cash_krw, initial_positions_json,
+                     ROW_NUMBER() OVER (PARTITION BY agent_id ORDER BY initialized_at DESC) AS rn
+              FROM agent_sleeves
+              WHERE {' AND '.join(filters)}
+            )
+            SELECT tenant_id, agent_id, initialized_at, initial_cash_krw, initial_positions_json
+            FROM ranked
+            WHERE rn = 1
+            """,
+            params,
+        )
+        return {str(row.get("agent_id")): row for row in rows if row.get("agent_id")}
+
+    def latest_agent_state_checkpoints(
+        self,
+        *,
+        agent_ids: list[str] | None = None,
+        tenant_id: str | None = None,
+    ) -> dict[str, dict[str, Any]]:
+        tenant = self._tenant_token(tenant_id)
+        params: dict[str, Any] = {"tenant_id": tenant}
+        filters = ["tenant_id = $tenant_id"]
+        tokens = [str(a or "").strip() for a in (agent_ids or []) if str(a or "").strip()]
+        if tokens:
+            filters.append("agent_id IN (SELECT unnest($agent_ids))")
+            params["agent_ids"] = tokens
+        rows = self.session.fetch_rows(
+            f"""
+            WITH ranked AS (
+              SELECT tenant_id, event_id, checkpoint_at, agent_id, cash_krw, positions_json,
+                     source, created_by, detail_json,
+                     ROW_NUMBER() OVER (PARTITION BY agent_id ORDER BY checkpoint_at DESC) AS rn
+              FROM agent_state_checkpoints
+              WHERE {' AND '.join(filters)}
+            )
+            SELECT tenant_id, event_id, checkpoint_at, agent_id, cash_krw, positions_json,
+                   source, created_by, detail_json
+            FROM ranked
+            WHERE rn = 1
+            """,
+            params,
+        )
+        return {str(row.get("agent_id")): row for row in rows if row.get("agent_id")}
+
+    def ensure_agent_sleeves(
+        self,
+        *,
+        agent_ids: list[str],
+        total_cash_krw: float,
+        capital_per_agent: dict[str, float] | None = None,
+        initialized_at: datetime | None = None,
+        tenant_id: str | None = None,
+        excluded_tickers: list[str] | None = None,
+    ) -> dict[str, dict[str, Any]]:
+        _ = excluded_tickers
+        tenant = self._tenant_token(tenant_id)
+        tokens = list(dict.fromkeys(str(a or "").strip() for a in agent_ids if str(a or "").strip()))
+        if not tokens:
+            return {}
+        existing = self.latest_agent_sleeves(agent_ids=tokens, tenant_id=tenant)
+        missing = [agent_id for agent_id in tokens if agent_id not in existing]
+        if missing:
+            per_agent = float(total_cash_krw) / float(max(len(tokens), 1)) if float(total_cash_krw) > 0 else 0.0
+            ts = initialized_at or utc_now()
+            for agent_id in missing:
+                cash = float((capital_per_agent or {}).get(agent_id, per_agent))
+                self.session.insert_dict(
+                    "agent_sleeves",
+                    {
+                        "tenant_id": tenant,
+                        "agent_id": agent_id,
+                        "initialized_at": ts,
+                        "initial_cash_krw": cash,
+                        "initial_positions_json": "[]",
+                    },
+                )
+                self._write_checkpoint(
+                    tenant=tenant,
+                    agent_id=agent_id,
+                    checkpoint_at=ts,
+                    cash_krw=cash,
+                    positions=[],
+                    source="agent_sleeves.ensure",
+                )
+        return self.latest_agent_sleeves(agent_ids=tokens, tenant_id=tenant)
+
+    def ensure_agent_state_checkpoints(
+        self,
+        *,
+        agent_ids: list[str],
+        total_cash_krw: float,
+        capital_per_agent: dict[str, float] | None = None,
+        checkpoint_at: datetime | None = None,
+        tenant_id: str | None = None,
+        excluded_tickers: list[str] | None = None,
+    ) -> dict[str, dict[str, Any]]:
+        _ = excluded_tickers
+        tenant = self._tenant_token(tenant_id)
+        tokens = list(dict.fromkeys(str(a or "").strip() for a in agent_ids if str(a or "").strip()))
+        if not tokens:
+            return {}
+        existing = self.latest_agent_state_checkpoints(agent_ids=tokens, tenant_id=tenant)
+        missing = [agent_id for agent_id in tokens if agent_id not in existing]
+        if missing:
+            per_agent = float(total_cash_krw) / float(max(len(tokens), 1)) if float(total_cash_krw) > 0 else 0.0
+            ts = checkpoint_at or utc_now()
+            for agent_id in missing:
+                cash = float((capital_per_agent or {}).get(agent_id, per_agent))
+                self._write_checkpoint(
+                    tenant=tenant,
+                    agent_id=agent_id,
+                    checkpoint_at=ts,
+                    cash_krw=cash,
+                    positions=[],
+                    source="agent_state_checkpoints.ensure",
+                )
+        return self.latest_agent_state_checkpoints(agent_ids=tokens, tenant_id=tenant)
+
+    def _write_checkpoint(
+        self,
+        *,
+        tenant: str,
+        agent_id: str,
+        checkpoint_at: datetime,
+        cash_krw: float,
+        positions: list[dict[str, Any]],
+        source: str,
+    ) -> None:
+        self.session.insert_dict(
+            "agent_state_checkpoints",
+            {
+                "tenant_id": tenant,
+                "event_id": f"checkpoint_{agent_id}_{int(checkpoint_at.timestamp())}",
+                "checkpoint_at": checkpoint_at,
+                "agent_id": agent_id,
+                "cash_krw": float(cash_krw),
+                "positions_json": json.dumps(positions, ensure_ascii=False, default=str),
+                "source": source,
+                "created_by": "local",
+                "detail_json": json.dumps({"source": source}, ensure_ascii=False),
+            },
+        )
+
+    def _seed_for_agent(self, *, agent_id: str, tenant_id: str, as_of_ts: datetime | None = None) -> tuple[datetime, float, list[dict[str, Any]], str]:
+        checkpoint_filters = ["tenant_id = $tenant_id", "agent_id = $agent_id"]
+        params: dict[str, Any] = {"tenant_id": tenant_id, "agent_id": agent_id}
+        if as_of_ts is not None:
+            checkpoint_filters.append("checkpoint_at <= $as_of_ts")
+            params["as_of_ts"] = as_of_ts
+        checkpoints = self.session.fetch_rows(
+            f"""
+            SELECT checkpoint_at, cash_krw, positions_json, source
+            FROM agent_state_checkpoints
+            WHERE {' AND '.join(checkpoint_filters)}
+            ORDER BY checkpoint_at DESC
+            LIMIT 1
+            """,
+            params,
+        )
+        if checkpoints:
+            row = checkpoints[0]
+            return (
+                row["checkpoint_at"],
+                float(row.get("cash_krw") or 0.0),
+                self._parse_positions(row.get("positions_json")),
+                str(row.get("source") or "agent_state_checkpoints"),
+            )
+        sleeves = self.latest_agent_sleeves(agent_ids=[agent_id], tenant_id=tenant_id)
+        row = sleeves.get(agent_id)
+        if row:
+            return (
+                row["initialized_at"],
+                float(row.get("initial_cash_krw") or 0.0),
+                self._parse_positions(row.get("initial_positions_json")),
+                "agent_sleeves",
+            )
+        return utc_now(), 0.0, [], "empty"
+
+    def _positions_from_payload(self, rows: list[dict[str, Any]]) -> dict[str, Position]:
+        out: dict[str, Position] = {}
+        for item in rows:
+            ticker = str(item.get("ticker") or "").strip().upper()
+            if not ticker:
+                continue
+            qty = float(item.get("quantity") or 0.0)
+            avg = float(item.get("avg_price_krw") or item.get("market_price_krw") or 0.0)
+            if qty <= 0 or avg <= 0:
+                continue
+            out[ticker] = Position(
+                ticker=ticker,
+                exchange_code=str(item.get("exchange_code") or ""),
+                instrument_id=str(item.get("instrument_id") or ""),
+                quantity=qty,
+                avg_price_krw=avg,
+                market_price_krw=float(item.get("market_price_krw") or avg),
+                avg_price_native=item.get("avg_price_native"),
+                market_price_native=item.get("market_price_native") or item.get("avg_price_native"),
+                quote_currency=str(item.get("quote_currency") or ""),
+                fx_rate=float(item.get("fx_rate") or 0.0),
+            )
+        return out
+
+    def _apply_execution(self, *, positions: dict[str, Position], cash_krw: float, row: dict[str, Any]) -> float:
+        ticker = str(row.get("ticker") or "").strip().upper()
+        side = str(row.get("side") or "").strip().upper()
+        if not ticker or side not in {"BUY", "SELL"}:
+            return cash_krw
+        qty = float(row.get("filled_qty") or row.get("requested_qty") or 0.0)
+        price = float(row.get("avg_price_krw") or 0.0)
+        if qty <= 0 or price <= 0:
+            return cash_krw
+        if side == "BUY":
+            existing = positions.get(ticker)
+            old_qty = float(existing.quantity) if existing else 0.0
+            old_cost = old_qty * float(existing.avg_price_krw) if existing else 0.0
+            new_qty = old_qty + qty
+            avg = (old_cost + qty * price) / new_qty if new_qty > 0 else price
+            positions[ticker] = Position(
+                ticker=ticker,
+                exchange_code=str(row.get("exchange_code") or (existing.exchange_code if existing else "")),
+                instrument_id=str(row.get("instrument_id") or (existing.instrument_id if existing else "")),
+                quantity=new_qty,
+                avg_price_krw=avg,
+                market_price_krw=price,
+                avg_price_native=row.get("avg_price_native"),
+                market_price_native=row.get("avg_price_native"),
+                quote_currency=str(row.get("quote_currency") or ""),
+                fx_rate=float(row.get("fx_rate") or 0.0),
+            )
+            return cash_krw - qty * price
+        existing = positions.get(ticker)
+        if not existing:
+            return cash_krw + qty * price
+        remaining = max(float(existing.quantity) - qty, 0.0)
+        if remaining <= 0:
+            positions.pop(ticker, None)
+        else:
+            existing.quantity = remaining
+            existing.market_price_krw = price
+            positions[ticker] = existing
+        return cash_krw + qty * price
+
+    def build_agent_sleeve_snapshot(
+        self,
+        *,
+        agent_id: str,
+        sources: list[str] | None = None,
+        include_simulated: bool = True,
+        tenant_id: str | None = None,
+        as_of_ts: datetime | None = None,
+    ) -> tuple[AccountSnapshot, float, dict[str, Any]]:
+        tenant = self._tenant_token(tenant_id)
+        agent = str(agent_id or "").strip()
+        since, cash, seed_positions, source = self._seed_for_agent(agent_id=agent, tenant_id=tenant, as_of_ts=as_of_ts)
+        positions = self._positions_from_payload(seed_positions)
+        baseline = cash + sum(pos.quantity * pos.avg_price_krw for pos in positions.values())
+
+        statuses = ["FILLED"]
+        if include_simulated:
+            statuses.append("SIMULATED")
+        params: dict[str, Any] = {
+            "tenant_id": tenant,
+            "agent_id": agent,
+            "since": since,
+            "statuses": statuses,
+        }
+        time_clause = ""
+        if as_of_ts is not None:
+            time_clause = "AND created_at <= $as_of_ts"
+            params["as_of_ts"] = as_of_ts
+        executions = self.session.fetch_rows(
+            f"""
+            SELECT *
+            FROM execution_reports
+            WHERE tenant_id = $tenant_id
+              AND agent_id = $agent_id
+              AND created_at >= $since
+              AND status IN (SELECT unnest($statuses))
+              {time_clause}
+            ORDER BY created_at ASC, order_id ASC
+            """,
+            params,
+        )
+        for row in executions:
+            cash = self._apply_execution(positions=positions, cash_krw=cash, row=row)
+
+        if positions and self._market is not None:
+            try:
+                prices = self._market.latest_close_prices_with_currency(
+                    tickers=list(positions.keys()),
+                    sources=sources,
+                    as_of_date=as_of_ts.date() if isinstance(as_of_ts, datetime) else None,
+                )
+            except Exception:
+                prices = {}
+            for ticker, pos in positions.items():
+                px = prices.get(ticker) or {}
+                if px.get("close_price_krw"):
+                    pos.market_price_krw = float(px["close_price_krw"])
+                    pos.market_price_native = px.get("close_price_native")
+                    pos.quote_currency = str(px.get("quote_currency") or pos.quote_currency)
+                    pos.fx_rate = float(px.get("fx_rate_used") or pos.fx_rate or 0.0)
+        total = cash + sum(pos.market_value_krw() for pos in positions.values())
+        return (
+            AccountSnapshot(cash_krw=cash, total_equity_krw=total, positions=positions),
+            baseline,
+            {"seed_source": source, "valuation_source": "local_sleeve_replay", "capital_flow_krw": 0.0},
+        )
+
+    def write_account_snapshot(self, snapshot: AccountSnapshot, *, tenant_id: str | None = None) -> None:
+        tenant = self._tenant_token(tenant_id)
+        ts = utc_now()
+        self.session.insert_dict(
+            "account_snapshots",
+            {
+                "tenant_id": tenant,
+                "snapshot_at": ts,
+                "cash_krw": snapshot.cash_krw,
+                "total_equity_krw": snapshot.total_equity_krw,
+                "usd_krw_rate": snapshot.usd_krw_rate,
+                "cash_foreign": snapshot.cash_foreign,
+                "cash_foreign_currency": snapshot.cash_foreign_currency or None,
+            },
+        )
+        for pos in snapshot.positions.values():
+            self.session.insert_dict(
+                "positions_current",
+                {
+                    "tenant_id": tenant,
+                    "snapshot_at": ts,
+                    "ticker": pos.ticker,
+                    "exchange_code": pos.exchange_code or None,
+                    "instrument_id": pos.instrument_id or None,
+                    "quantity": pos.quantity,
+                    "avg_price_krw": pos.avg_price_krw,
+                    "market_price_krw": pos.market_price_krw,
+                    "avg_price_native": pos.avg_price_native,
+                    "market_price_native": pos.market_price_native,
+                    "quote_currency": pos.quote_currency or None,
+                    "fx_rate": pos.fx_rate,
+                },
+            )
+
+    def latest_account_snapshot(self, *, tenant_id: str | None = None) -> AccountSnapshot | None:
+        tenant = self._tenant_token(tenant_id)
+        rows = self.session.fetch_rows(
+            """
+            SELECT *
+            FROM account_snapshots
+            WHERE tenant_id = $tenant_id
+            ORDER BY snapshot_at DESC
+            LIMIT 1
+            """,
+            {"tenant_id": tenant},
+        )
+        if not rows:
+            return None
+        snap = rows[0]
+        positions_rows = self.session.fetch_rows(
+            """
+            SELECT *
+            FROM positions_current
+            WHERE tenant_id = $tenant_id
+              AND snapshot_at = $snapshot_at
+            """,
+            {"tenant_id": tenant, "snapshot_at": snap["snapshot_at"]},
+        )
+        positions = self._positions_from_payload(positions_rows)
+        return AccountSnapshot(
+            cash_krw=float(snap.get("cash_krw") or 0.0),
+            total_equity_krw=float(snap.get("total_equity_krw") or 0.0),
+            positions=positions,
+            usd_krw_rate=float(snap.get("usd_krw_rate") or 0.0),
+            cash_foreign=float(snap.get("cash_foreign") or 0.0),
+            cash_foreign_currency=str(snap.get("cash_foreign_currency") or ""),
+        )
+
+    def get_all_held_tickers(self, *, tenant_id: str | None = None, market: str = "") -> list[str]:
+        """Returns distinct tickers with positive local ledger positions."""
+        tenant = self._tenant_token(tenant_id)
+        rows = self.session.fetch_rows(
+            """
+            SELECT ticker
+            FROM (
+              SELECT ticker,
+                     SUM(CASE WHEN side = 'BUY' THEN filled_qty ELSE -filled_qty END) AS net_qty
+              FROM execution_reports
+              WHERE tenant_id = $tenant_id
+                AND status IN ('FILLED', 'SIMULATED')
+              GROUP BY ticker
+            )
+            WHERE net_qty > 0
+            ORDER BY ticker
+            """,
+            {"tenant_id": tenant},
+        )
+        tickers = [str(row.get("ticker") or "").strip().upper() for row in rows if str(row.get("ticker") or "").strip()]
+        m = str(market or "").strip().lower()
+        if m in {"kospi", "kosdaq", "kr", "korea"}:
+            return [ticker for ticker in tickers if ticker.isdigit() and len(ticker) == 6]
+        if m in {"us", "nasdaq", "nyse", "amex"}:
+            return [ticker for ticker in tickers if ticker and not ticker[:1].isdigit()]
+        return tickers
+
+    def get_latest_position_tickers(
+        self,
+        *,
+        tenant_id: str | None = None,
+        market: str = "",
+        all_tenants: bool = False,
+    ) -> list[str]:
+        """Returns distinct tickers from latest account snapshot positions."""
+        params: dict[str, Any] = {}
+        if all_tenants:
+            sql = """
+            WITH latest AS (
+              SELECT tenant_id, MAX(snapshot_at) AS snapshot_at
+              FROM account_snapshots
+              GROUP BY tenant_id
+            )
+            SELECT DISTINCT p.ticker
+            FROM positions_current p
+            JOIN latest l
+              ON p.tenant_id = l.tenant_id
+             AND p.snapshot_at = l.snapshot_at
+            WHERE p.quantity > 0
+            ORDER BY p.ticker
+            """
+        else:
+            tenant = self._tenant_token(tenant_id)
+            params["tenant_id"] = tenant
+            sql = """
+            WITH latest AS (
+              SELECT MAX(snapshot_at) AS snapshot_at
+              FROM account_snapshots
+              WHERE tenant_id = $tenant_id
+            )
+            SELECT DISTINCT p.ticker
+            FROM positions_current p
+            CROSS JOIN latest l
+            WHERE p.tenant_id = $tenant_id
+              AND p.snapshot_at = l.snapshot_at
+              AND p.quantity > 0
+            ORDER BY p.ticker
+            """
+        rows = self.session.fetch_rows(sql, params)
+        tickers = [str(row.get("ticker") or "").strip().upper() for row in rows if str(row.get("ticker") or "").strip()]
+        m = str(market or "").strip().lower()
+        if m in {"kospi", "kosdaq", "kr", "korea"}:
+            return [ticker for ticker in tickers if ticker.isdigit() and len(ticker) == 6]
+        if m in {"us", "nasdaq", "nyse", "amex"}:
+            return [ticker for ticker in tickers if ticker and not ticker[:1].isdigit()]
+        return tickers
+
+    def upsert_agent_nav_daily(
+        self,
+        *,
+        nav_date: date,
+        agent_id: str,
+        nav_krw: float,
+        baseline_equity_krw: float,
+        cash_krw: float | None = None,
+        market_value_krw: float | None = None,
+        capital_flow_krw: float | None = None,
+        fx_source: str | None = None,
+        valuation_source: str | None = None,
+        tenant_id: str | None = None,
+    ) -> None:
+        tenant = self._tenant_token(tenant_id)
+        agent = str(agent_id or "").strip()
+        base = float(baseline_equity_krw)
+        nav = float(nav_krw)
+        pnl = nav - base
+        pnl_ratio = pnl / base if base else 0.0
+        self.session.execute(
+            "DELETE FROM agent_nav_daily WHERE tenant_id = $tenant_id AND nav_date = $nav_date AND agent_id = $agent_id",
+            {"tenant_id": tenant, "nav_date": nav_date, "agent_id": agent},
+        )
+        self.session.insert_dict(
+            "agent_nav_daily",
+            {
+                "tenant_id": tenant,
+                "nav_date": nav_date,
+                "agent_id": agent,
+                "nav_krw": nav,
+                "pnl_krw": pnl,
+                "pnl_ratio": pnl_ratio,
+            },
+        )
+        cash = float(cash_krw) if cash_krw is not None else 0.0
+        market_value = float(market_value_krw) if market_value_krw is not None else max(nav - cash, 0.0)
+        flow = float(capital_flow_krw) if capital_flow_krw is not None else 0.0
+        self.session.execute(
+            "DELETE FROM official_nav_daily WHERE tenant_id = $tenant_id AND nav_date = $nav_date AND agent_id = $agent_id",
+            {"tenant_id": tenant, "nav_date": nav_date, "agent_id": agent},
+        )
+        self.session.insert_dict(
+            "official_nav_daily",
+            {
+                "tenant_id": tenant,
+                "nav_date": nav_date,
+                "agent_id": agent,
+                "nav_krw": nav,
+                "cash_krw": cash,
+                "market_value_krw": market_value,
+                "capital_flow_krw": flow,
+                "pnl_krw": pnl,
+                "pnl_ratio": pnl_ratio,
+                "fx_source": fx_source or None,
+                "valuation_source": valuation_source or "local_sleeve_replay",
+            },
+        )

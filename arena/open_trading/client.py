@@ -58,6 +58,12 @@ class OpenTradingClient:
         self._secret_payload: dict[str, Any] = {}
         self._firestore_token_cache = None
 
+    def _token_cache_backend(self) -> str:
+        raw = (os.getenv("KIS_TOKEN_CACHE_BACKEND") or "").strip().lower()
+        if raw:
+            return raw
+        return "file" if str(getattr(self.settings, "arena_mode", "") or os.getenv("ARENA_MODE")).strip().lower() == "local" else "memory"
+
     @property
     def is_demo(self) -> bool:
         """Returns True when the client uses mock trading credentials."""
@@ -81,30 +87,36 @@ class OpenTradingClient:
         return failure_extra(event, exc, market=self.settings.kis_target_market, **fields)
 
     def _firestore_cache(self):
-        """Returns Firestore cache helper when enabled."""
-        backend = (os.getenv("KIS_TOKEN_CACHE_BACKEND", "memory") or "memory").strip().lower()
-        if backend != "firestore":
+        """Returns persistent token cache helper when enabled."""
+        backend = self._token_cache_backend()
+        if backend not in {"firestore", "file"}:
             return None
         if self._firestore_token_cache is not None:
             return self._firestore_token_cache
         try:
-            # Guard import explicitly so missing firestore deps do not break trading calls.
-            from google.cloud import firestore as _firestore  # noqa: F401
-            from arena.open_trading.token_cache import FirestoreTokenCache
+            if backend == "file":
+                from arena.open_trading.token_cache_file import FileTokenCache
 
-            collection = (os.getenv("KIS_TOKEN_CACHE_COLLECTION", "api_tokens") or "api_tokens").strip() or "api_tokens"
-            self._firestore_token_cache = FirestoreTokenCache(
-                project=self.settings.google_cloud_project,
-                collection=collection,
-            )
+                self._firestore_token_cache = FileTokenCache()
+            else:
+                # Guard import explicitly so missing firestore deps do not break trading calls.
+                from google.cloud import firestore as _firestore  # noqa: F401
+                from arena.open_trading.token_cache import FirestoreTokenCache
+
+                collection = (os.getenv("KIS_TOKEN_CACHE_COLLECTION", "api_tokens") or "api_tokens").strip() or "api_tokens"
+                self._firestore_token_cache = FirestoreTokenCache(
+                    project=self.settings.google_cloud_project,
+                    collection=collection,
+                )
         except Exception as exc:
             logger.warning(
-                "[yellow]Firestore token cache disabled[/yellow] err=%s",
+                "[yellow]Persistent token cache disabled[/yellow] backend=%s err=%s",
+                backend,
                 str(exc),
                 extra=self._failure_extra(
-                    "firestore_token_cache_disabled",
+                    "persistent_token_cache_disabled",
                     exc,
-                    stage="firestore_token_cache_init",
+                    stage="token_cache_init",
                     cache_backend=backend,
                 ),
             )
@@ -251,6 +263,7 @@ class OpenTradingClient:
                 self._token_expires_at = expires_at
                 return
 
+        cache_backend = self._token_cache_backend()
         fs_cache = self._firestore_cache()
         if not force and fs_cache:
             try:
@@ -263,7 +276,7 @@ class OpenTradingClient:
                         "token_cache_read_skipped",
                         exc,
                         stage="token_cache_read",
-                        cache_backend="firestore",
+                        cache_backend=cache_backend,
                         base_url=self.base_url,
                     ),
                 )
@@ -357,7 +370,7 @@ class OpenTradingClient:
                                 "token_cache_write_skipped",
                                 exc,
                                 stage="token_cache_write",
-                                cache_backend="firestore",
+                                cache_backend=cache_backend,
                                 base_url=self.base_url,
                             ),
                         )

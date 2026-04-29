@@ -88,7 +88,35 @@ GILD는 현재 활성 thesis 보유 중 (헬스케어 방어 포지션)
 
 ## 빠른 시작
 
-### 사전 요구사항
+### 로컬 빠른 시작 (GCP 불필요)
+
+- Python 3.12+
+- LLM API 키 최소 1개
+
+```bash
+git clone https://github.com/your-username/LLm_arena.git
+cd LLm_arena
+pip install -e ".[local]"
+
+cp .env.local.example .env
+llm-arena init-local
+llm-arena seed-local-demo
+ARENA_MODE=local llm-arena serve-ui
+```
+
+브라우저에서 http://localhost:8080 을 엽니다.
+
+이 경로는 `./data/arena.duckdb`를 만들고 데모 시장 데이터를 넣은 뒤, BigQuery, Firestore, Secret Manager, Cloud Run 없이 UI를 실행합니다. 로컬 벡터 검색까지 쓰려면 `pip install -e ".[local,local-vector]"`를 사용하세요. 설치하지 않아도 메모리 검색은 안전하게 fallback됩니다.
+
+기존 KIS/OpenTrading 수집 경로로 실제 시장 데이터를 DuckDB에 백필하려면:
+
+```bash
+ARENA_MODE=local llm-arena backfill-local-market
+```
+
+### GCP / 운영 빠른 시작
+
+사전 요구사항:
 
 - Python 3.12+
 - GCP 프로젝트 ([BigQuery](https://console.cloud.google.com/bigquery) + [Firestore](https://console.cloud.google.com/firestore) API 활성화)
@@ -246,7 +274,7 @@ arena/
   ui/              # 관리자 UI (FastAPI + Jinja2 + HTMX)
   tools/           # 도구 레지스트리 (퀀트, 센티먼트, 매크로, 컨텍스트)
   recommendation/  # recommend_opportunities 를 구동하는 signal-IC 메타 러너
-  data/            # BigQuery 저장소 + 스키마 (도메인별 모듈화 스토어)
+  data/            # 저장 백엔드 (BigQuery + DuckDB 로컬) + 공통 스키마
   broker/          # 페이퍼 / 실거래 (KIS) 브로커 어댑터
   execution/       # 중앙 주문 게이트웨이
   open_trading/    # KIS 클라이언트 + 계좌/배당 동기화 + 재무 백필
@@ -468,7 +496,7 @@ graph LR
 | **에이전트** | [Google ADK](https://github.com/google/adk-python) · ReAct · LiteLLM |
 | **LLM** | OpenAI (GPT) · Google Gemini · Anthropic (Claude) |
 | **임베딩** | Vertex AI `text-embedding-004` · Google Search Grounding |
-| **데이터** | BigQuery · Firestore (벡터 검색) · Secret Manager |
+| **데이터** | BigQuery · Firestore (벡터 검색) · Secret Manager · DuckDB + ChromaDB (로컬 모드) |
 | **증권** | [KIS Open Trading API](https://apiportal.koreainvestment.com/) — 미국 + 한국 듀얼 마켓 |
 | **외부 데이터** | [FRED](https://fred.stlouisfed.org/) · [ECOS](https://ecos.bok.or.kr/) · [SEC EDGAR](https://www.sec.gov/edgar) · Reddit · CBOE VIX |
 | **예측** | [Chronos](https://github.com/amazon-science/chronos-forecasting) · [TimesFM](https://github.com/google-research/timesfm) · [Lag-Llama](https://github.com/time-series-foundation-models/lag-llama) · [NeuralForecast](https://github.com/Nixtla/neuralforecast) · LightGBM |

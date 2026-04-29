@@ -1527,6 +1527,34 @@ def test_cmd_run_shared_prep_slow_runs_only_ml_and_skips_dispatch(monkeypatch) -
     ), "slow stage must record an ok session marker"
 
 
+def test_cmd_run_shared_prep_local_simulated_reuses_existing_market_data(monkeypatch) -> None:
+    settings = load_settings()
+    settings.google_cloud_project = "local"
+    settings.bq_dataset = "llm_arena"
+    settings.bq_location = "local"
+    settings.kis_target_market = "us"
+    settings.arena_mode = "local"
+    settings.distribution_mode = "simulated_only"
+    calls: list[tuple[str, object]] = []
+
+    class _Repo(_FakeRepo):
+        def ensure_dataset(self):
+            calls.append(("dataset", None))
+
+        def ensure_tables(self):
+            calls.append(("tables", None))
+
+    _stub_shared_prep_environment(monkeypatch, settings, _Repo(), calls, phase="general")
+
+    cli.cmd_run_shared_prep(live=False, market_override="us", stage="all")
+
+    stages = [c[0] for c in calls]
+    assert "sync" not in stages
+    assert "daily_sync" not in stages
+    assert "forecast" in stages
+    assert "ranker" in stages
+
+
 def test_cmd_run_shared_prep_fast_runs_only_sync_and_dispatches(monkeypatch) -> None:
     settings = load_settings()
     settings.google_cloud_project = "proj-x"

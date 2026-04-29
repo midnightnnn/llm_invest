@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import math
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -827,6 +827,25 @@ def test_context_builder_ticker_display_uses_context_tags_and_avoids_plain_words
     assert note["derived_tickers"] == ["AAPL"]
     assert note["ticker_source"] == "summary_regex"
     assert note["side"] == ""
+
+
+def test_normalize_memory_row_treats_naive_datetime_as_utc() -> None:
+    repo = FakeRepo()
+    builder = ContextBuilder(repo=repo, memory=FakeMemory(), board=FakeBoard(), settings=_settings())
+
+    row = builder._normalize_memory_row(
+        {
+            "event_id": "evt_naive",
+            "created_at": datetime(2026, 3, 12),
+            "agent_id": "gpt",
+            "event_type": "manual_note",
+            "summary": "DuckDB returns naive timestamps.",
+            "score": 0.5,
+        }
+    )
+
+    assert row["created_at"].tzinfo == timezone.utc
+    assert isinstance(row["age_days"], int)
 
 
 def test_context_builder_keeps_summary_fallback_derived_but_out_of_ticker_bonus() -> None:

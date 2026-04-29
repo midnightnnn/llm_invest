@@ -95,7 +95,12 @@ def _build_app(*, repo: BigQueryRepository, settings: Settings) -> FastAPI:
 
     credential_store_error = ""
     try:
-        credential_store = CredentialStore(project=settings.google_cloud_project, repo=repo)
+        if str(getattr(settings, "arena_mode", "") or os.getenv("ARENA_MODE")).strip().lower() == "local":
+            from arena.security.credential_store_env import EnvCredentialStore
+
+            credential_store = EnvCredentialStore(repo=repo)
+        else:
+            credential_store = CredentialStore(project=settings.google_cloud_project, repo=repo)
     except Exception as exc:
         credential_store = None
         credential_store_error = str(exc)

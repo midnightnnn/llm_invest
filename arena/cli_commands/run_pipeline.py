@@ -322,6 +322,15 @@ def _upstream_market_freshness(
             f"WHERE source = @source"
         )
         rows = list(repo.session.fetch_rows(sql, {"source": daily_source}))
+        if (
+            (not rows or rows[0].get("max_date") is None)
+            and str(getattr(getattr(repo, "settings", None), "arena_mode", "") or os.getenv("ARENA_MODE")).strip().lower() == "local"
+        ):
+            rows = list(
+                repo.session.fetch_rows(
+                    f"SELECT MAX(DATE(as_of_ts)) AS max_date FROM `{repo.session.dataset_fqn}.market_features`"
+                )
+            )
     except Exception as exc:
         return False, {
             "reason": "query_failed",
@@ -659,6 +668,14 @@ def cmd_run_shared_prep(
         repo.ensure_tables()
         cli._apply_tenant_runtime_credentials(bootstrap_settings, repo)
 
+        local_existing_data_mode = (
+            str(getattr(bootstrap_settings, "arena_mode", "") or os.getenv("ARENA_MODE")).strip().lower() == "local"
+            and str(getattr(bootstrap_settings, "distribution_mode", "") or "").strip().lower() == "simulated_only"
+        )
+        if local_existing_data_mode and run_sync:
+            logger.info("[cyan]Shared prep: local simulated mode uses existing local market data; sync skipped[/cyan]")
+            run_sync = False
+
         phase, window = cli._batch_phase(live, bootstrap_settings, repo)
         if phase is None:
             logger.info(
@@ -815,29 +832,32 @@ def cmd_run_shared_prep(
             #   - stage='all' already calls _batch_market_sync above, which
             #     covers daily on seed/general phases.
             if stage_norm == "slow":
-                logger.info("[bold cyan]Shared prep: sync-market-features (daily EOD)[/bold cyan]")
-                try:
-                    daily_result = cli.MarketDataSyncService(
-                        settings=bootstrap_settings, repo=repo
-                    ).sync_market_features()
-                    logger.info(
-                        "[cyan]Daily sync[/cyan] inserted=%d attempted=%d failed=%d",
-                        int(getattr(daily_result, "inserted_rows", 0) or 0),
-                        int(getattr(daily_result, "attempted_tickers", 0) or 0),
-                        len(getattr(daily_result, "failed_tickers", []) or []),
-                    )
-                except Exception as exc:
-                    logger.error(
-                        "[red]Slow prep: daily sync failed[/red] err=%s",
-                        str(exc),
-                        extra=failure_extra(
-                            "shared_prep_daily_sync_failed",
-                            exc,
-                            stage=stage_norm,
-                            market=market_override or "all",
-                        ),
-                    )
-                    raise SystemExit(8)
+                if local_existing_data_mode:
+                    logger.info("[cyan]Shared prep: local simulated mode reuses existing daily rows[/cyan]")
+                else:
+                    logger.info("[bold cyan]Shared prep: sync-market-features (daily EOD)[/bold cyan]")
+                    try:
+                        daily_result = cli.MarketDataSyncService(
+                            settings=bootstrap_settings, repo=repo
+                        ).sync_market_features()
+                        logger.info(
+                            "[cyan]Daily sync[/cyan] inserted=%d attempted=%d failed=%d",
+                            int(getattr(daily_result, "inserted_rows", 0) or 0),
+                            int(getattr(daily_result, "attempted_tickers", 0) or 0),
+                            len(getattr(daily_result, "failed_tickers", []) or []),
+                        )
+                    except Exception as exc:
+                        logger.error(
+                            "[red]Slow prep: daily sync failed[/red] err=%s",
+                            str(exc),
+                            extra=failure_extra(
+                                "shared_prep_daily_sync_failed",
+                                exc,
+                                stage=stage_norm,
+                                market=market_override or "all",
+                            ),
+                        )
+                        raise SystemExit(8)
 
             # Upstream freshness guard: refuse if daily EOD data is so stale
             # that the ML step would train on month-old prices. 'stale' here
