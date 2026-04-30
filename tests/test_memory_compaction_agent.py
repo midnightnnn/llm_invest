@@ -404,6 +404,12 @@ def test_memory_compaction_agent_retries_transient_helper_errors(monkeypatch) ->
     assert sleeps == [0.5]
 
 
+def test_memory_compaction_agent_treats_bad_gateway_as_retryable() -> None:
+    assert memory_compaction_module._is_retryable_compaction_error(
+        RuntimeError("litellm.BadGatewayError: 502 Bad gateway")
+    ) is True
+
+
 def test_memory_compaction_agent_retries_empty_response(monkeypatch) -> None:
     repo = _FakeRepo()
     memory_store = _FakeMemoryStore()

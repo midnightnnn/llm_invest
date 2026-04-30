@@ -332,3 +332,9 @@ def test_semantic_relation_extractor_marks_invalid_output_retryable(monkeypatch)
     assert rows[0]["status"] == "invalid_output"
     assert repo.triples == []
     assert repo.runs[0][1][0]["status"] == "invalid_output"
+
+
+def test_semantic_relation_extractor_treats_bad_gateway_as_retryable() -> None:
+    assert semantic_module._is_retryable_extractor_error(
+        RuntimeError("litellm.BadGatewayError: 502 Bad gateway")
+    ) is True
