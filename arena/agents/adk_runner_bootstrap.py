@@ -25,7 +25,7 @@ from arena.agents.adk_tool_config import _load_mcp_toolsets, _resolve_disabled_t
 from arena.config import AgentConfig, Settings
 from arena.data.bq import BigQueryRepository
 from arena.memory.policy import memory_react_injection_enabled
-from arena.memory.query_builders import build_memory_query
+from arena.memory.query_builders import build_memory_query_spec
 from arena.tools.registry import ToolEntry, ToolRegistry
 
 logger = logging.getLogger(__name__)
@@ -81,7 +81,7 @@ def build_tool_wrapper(
     agent_id: str,
     tool_events: list[dict[str, Any]],
     update_candidate_ledger: Callable[[str, dict[str, Any], Any], None],
-    search_tool_memories: Callable[[str], list[dict[str, Any]] | None],
+    search_tool_memories: Callable[[Any], list[dict[str, Any]] | None],
     apply_tool_schema_metadata: Callable[..., Any],
 ) -> Any:
     fn = entry.callable
@@ -131,7 +131,7 @@ def build_tool_wrapper(
 
         if err is None and memory_react_injection_enabled(settings.memory_policy, name):
             try:
-                mem_query = build_memory_query(name, kwargs, res)
+                mem_query = build_memory_query_spec(name, kwargs, res)
                 if mem_query:
                     memories = search_tool_memories(mem_query)
                     if memories:
@@ -143,7 +143,7 @@ def build_tool_wrapper(
                             "[cyan]REACT_MEM[/cyan] agent=%s tool=%s query=%s hits=%d",
                             agent_id,
                             name,
-                            mem_query[:80],
+                            mem_query.search_text()[:80],
                             len(memories),
                         )
             except Exception:
@@ -176,7 +176,7 @@ def resolve_adk_tools(
     agent_id: str,
     tool_events: list[dict[str, Any]],
     update_candidate_ledger: Callable[[str, dict[str, Any], Any], None],
-    search_tool_memories: Callable[[str], list[dict[str, Any]] | None],
+    search_tool_memories: Callable[[Any], list[dict[str, Any]] | None],
     apply_tool_schema_metadata: Callable[..., Any],
 ) -> ToolResolution:
     disabled_tool_ids = _resolve_disabled_tool_ids(repo, tenant_id, agent_config)

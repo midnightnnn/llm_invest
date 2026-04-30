@@ -915,7 +915,7 @@ class _ADKDecisionRunner:
         )
         self._sync_pipeline_context()
 
-    def _search_tool_memories(self, query: str) -> list[dict[str, Any]] | None:
+    def _search_tool_memories(self, query: Any) -> list[dict[str, Any]] | None:
         return search_tool_memories(
             memory_store=self._memory_store,
             settings=self.settings,

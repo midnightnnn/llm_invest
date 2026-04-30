@@ -20,6 +20,16 @@ class AdkToolBudgetExceeded(RuntimeError):
     """Raised when an ADK ReAct run keeps calling tools past its budget."""
 
 
+def _tool_memory_search_text(query: Any) -> str:
+    search_text = getattr(query, "search_text", None)
+    if callable(search_text):
+        return str(search_text() or "").strip()
+    raw_query = getattr(query, "query", None)
+    if raw_query is not None:
+        return str(raw_query or "").strip()
+    return str(query or "").strip()
+
+
 def truncate_tool_result(value: Any, max_list: int = 30, max_str: int = 2000) -> Any:
     """Truncates large nested tool payloads before event logging."""
     if isinstance(value, dict):
@@ -90,15 +100,18 @@ def search_tool_memories(
     settings: Settings,
     agent_id: str,
     seen_memory_ids: set[str],
-    query: str,
+    query: Any,
 ) -> list[dict[str, Any]] | None:
     """Vector search for REACT-time tool memory injection. Returns up to 2 rows."""
     vector_store = getattr(memory_store, "vector_store", None)
     if not vector_store or not memory_vector_search_enabled(settings.memory_policy):
         return None
+    query_text = _tool_memory_search_text(query)
+    if not query_text:
+        return None
     memories = vector_store.search_similar_memories(
         agent_id=agent_id,
-        query=query,
+        query=query_text,
         limit=2,
         trading_mode=settings.trading_mode,
         tenant_id=memory_store._tenant(),
