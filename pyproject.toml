@@ -51,6 +51,10 @@ forecasting = [
 [project.scripts]
 llm-arena = "arena.cli:main"
 
+[tool.setuptools.packages.find]
+include = ["arena*"]
+exclude = ["data*", "logs*", "tests*"]
+
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]

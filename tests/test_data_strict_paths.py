@@ -351,12 +351,14 @@ class _LedgerStoreForCapitalReplay(LedgerStore):
         *,
         checkpoint: dict[str, object] | None = None,
         capital_events: list[dict[str, object]] | None = None,
+        manual_position_adjustments: list[dict[str, object]] | None = None,
         manual_cash_adjustments: list[dict[str, object]] | None = None,
         transfer_events: list[dict[str, object]] | None = None,
     ):
         super().__init__(session)
         self._checkpoint = checkpoint or {}
         self._capital_events = list(capital_events or [])
+        self._manual_position_adjustments = list(manual_position_adjustments or [])
         self._manual_cash_adjustments = list(manual_cash_adjustments or [])
         self._transfer_events = list(transfer_events or [])
 
@@ -374,6 +376,10 @@ class _LedgerStoreForCapitalReplay(LedgerStore):
     def manual_cash_adjustments_since(self, *, agent_id, since, tenant_id=None):
         _ = (agent_id, since, tenant_id)
         return list(self._manual_cash_adjustments)
+
+    def manual_position_adjustments_since(self, *, since, tenant_id=None):
+        _ = (since, tenant_id)
+        return list(self._manual_position_adjustments)
 
     def agent_transfer_events_since(self, *, agent_id, since, tenant_id=None):
         _ = (agent_id, since, tenant_id)
@@ -1139,6 +1145,7 @@ def _make_capital_replay_store(
     checkpoint,
     capital_events,
     fills=None,
+    manual_position_adjustments=None,
     manual_cash_adjustments=None,
     transfer_events=None,
 ):
@@ -1150,6 +1157,7 @@ def _make_capital_replay_store(
         ledger_session,
         checkpoint=checkpoint,
         capital_events=capital_events,
+        manual_position_adjustments=manual_position_adjustments,
         manual_cash_adjustments=manual_cash_adjustments,
         transfer_events=transfer_events,
     )
@@ -1214,6 +1222,58 @@ def test_build_agent_sleeve_snapshot_replays_manual_cash_adjustments() -> None:
     assert baseline == pytest.approx(875_000.0)
     assert meta["manual_cash_adjustment_count"] == 1
     assert meta["manual_cash_adjustment_krw"] == pytest.approx(-125_000.0)
+
+
+def test_build_agent_sleeve_snapshot_replays_manual_position_adjustments_in_order() -> None:
+    store = _make_capital_replay_store(
+        checkpoint={
+            "event_id": "chk_1",
+            "checkpoint_at": datetime(2026, 3, 1, tzinfo=timezone.utc),
+            "cash_krw": 1_000_000.0,
+            "positions_json": [],
+            "source": "checkpoint_test",
+        },
+        capital_events=[],
+        fills=[
+            {
+                "created_at": "2026-03-02T00:00:00+00:00",
+                "ticker": "001510",
+                "exchange_code": "KRX",
+                "instrument_id": "KRX:001510",
+                "side": "BUY",
+                "filled_qty": 56.0,
+                "avg_price_krw": 2_077.0,
+                "status": "FILLED",
+            },
+            {
+                "created_at": "2026-03-04T00:00:00+00:00",
+                "ticker": "001510",
+                "exchange_code": "KRX",
+                "instrument_id": "KRX:001510",
+                "side": "SELL",
+                "filled_qty": 20.0,
+                "avg_price_krw": 5_370.0,
+                "status": "FILLED",
+            },
+        ],
+        manual_position_adjustments=[
+            {
+                "event_id": "adj_1",
+                "occurred_at": datetime(2026, 3, 3, tzinfo=timezone.utc),
+                "agent_id": "gpt",
+                "ticker": "001510",
+                "delta_quantity": -28.0,
+                "adjustment_type": "corporate_action",
+            }
+        ],
+    )
+
+    snapshot, _baseline, meta = store.build_agent_sleeve_snapshot(agent_id="gpt")
+
+    assert snapshot.positions["001510"].quantity == pytest.approx(8.0)
+    assert snapshot.positions["001510"].avg_price_krw == pytest.approx(4_154.0)
+    assert meta["manual_position_adjustment_count"] == 1
+    assert meta["manual_position_adjustment_quantity"] == pytest.approx(-28.0)
 
 
 def test_build_agent_sleeve_snapshot_replays_agent_transfer_events() -> None:

@@ -35,6 +35,17 @@ def test_validate_settings_allows_single_gpt_trader_with_gemini_research() -> No
     validate_settings(settings, require_llm=True)
 
 
+def test_validate_settings_allows_local_mode_without_gcp_settings(monkeypatch) -> None:
+    monkeypatch.setenv("ARENA_MODE", "local")
+    monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+    monkeypatch.setenv("BQ_DATASET", "")
+    monkeypatch.setenv("BQ_LOCATION", "")
+
+    settings = load_settings()
+
+    validate_settings(settings)
+
+
 def test_research_generation_status_reports_shared_live_tenant(monkeypatch) -> None:
     monkeypatch.delenv("GOOGLE_GENAI_USE_VERTEXAI", raising=False)
     settings = load_settings()

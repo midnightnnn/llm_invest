@@ -1077,12 +1077,13 @@ def validate_settings(
     """Validates settings and raises SettingsError with actionable messages."""
     errors: list[str] = []
 
-    if not settings.google_cloud_project.strip():
-        errors.append("GOOGLE_CLOUD_PROJECT is required")
-    if not settings.bq_dataset.strip():
-        errors.append("BQ_DATASET is required")
-    if not settings.bq_location.strip():
-        errors.append("BQ_LOCATION is required")
+    if settings.arena_mode != "local":
+        if not settings.google_cloud_project.strip():
+            errors.append("GOOGLE_CLOUD_PROJECT is required")
+        if not settings.bq_dataset.strip():
+            errors.append("BQ_DATASET is required")
+        if not settings.bq_location.strip():
+            errors.append("BQ_LOCATION is required")
 
     if settings.trading_mode not in {"paper", "live"}:
         errors.append("ARENA_TRADING_MODE must be 'paper' or 'live'")

@@ -296,7 +296,7 @@ class LedgerStore:
         """Returns quantity-changing manual adjustments on or after a timestamp."""
         tenant = self._tenant_token(tenant_id)
         sql = f"""
-        SELECT event_id, occurred_at, agent_id, ticker, delta_quantity, reason, raw_payload_json
+        SELECT event_id, occurred_at, adjustment_type, agent_id, ticker, delta_quantity, reason, raw_payload_json
         FROM `{self.session.dataset_fqn}.manual_adjustments`
         WHERE tenant_id = @tenant_id
           AND occurred_at >= @since

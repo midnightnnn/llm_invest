@@ -740,6 +740,85 @@ class SleeveStore:
         opened_at.setdefault(ticker, transfer_ts)
         return cash
 
+    @staticmethod
+    def _manual_adjustment_preserves_cost_basis(row: dict[str, Any]) -> bool:
+        tokens = [
+            str(row.get("adjustment_type") or ""),
+            str(row.get("reason") or ""),
+        ]
+        raw = row.get("raw_payload_json")
+        if isinstance(raw, dict):
+            tokens.extend(str(raw.get(key) or "") for key in ("action_type", "ratio", "note"))
+        elif isinstance(raw, str) and raw.strip():
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, dict):
+                tokens.extend(str(parsed.get(key) or "") for key in ("action_type", "ratio", "note"))
+            else:
+                tokens.append(raw)
+        joined = " ".join(tokens).lower()
+        return any(token in joined for token in ("corporate_action", "split", "consolidation", "merger", "병합"))
+
+    def _apply_manual_position_adjustment(
+        self,
+        *,
+        agent_id: str,
+        row: dict[str, Any],
+        positions: dict[str, Position],
+        opened_at: dict[str, datetime],
+        default_ts: datetime,
+    ) -> float:
+        """Applies one auditable non-cash position correction."""
+        row_agent = str(row.get("agent_id") or "").strip()
+        if row_agent and row_agent != str(agent_id or "").strip():
+            return 0.0
+
+        ticker = str(row.get("ticker") or "").strip().upper()
+        if not ticker:
+            return 0.0
+        try:
+            delta = float(row.get("delta_quantity") or 0.0)
+        except (TypeError, ValueError):
+            delta = 0.0
+        if abs(delta) <= 1e-9:
+            return 0.0
+
+        pos = positions.get(ticker)
+        if pos is None:
+            if delta <= 0:
+                return 0.0
+            positions[ticker] = Position(
+                ticker=ticker,
+                exchange_code=str(row.get("exchange_code") or ""),
+                instrument_id=str(row.get("instrument_id") or ""),
+                quantity=delta,
+                avg_price_krw=0.0,
+                market_price_krw=0.0,
+            )
+            opened_at[ticker] = self._as_datetime(row.get("occurred_at")) or default_ts
+            return delta
+
+        old_qty = float(pos.quantity or 0.0)
+        new_qty = old_qty + delta
+        if new_qty <= 1e-9:
+            positions.pop(ticker, None)
+            opened_at.pop(ticker, None)
+            return -old_qty
+
+        if self._manual_adjustment_preserves_cost_basis(row) and old_qty > 0:
+            pos.avg_price_krw = (float(pos.avg_price_krw or 0.0) * old_qty) / new_qty
+            pos.market_price_krw = (float(pos.market_price_krw or 0.0) * old_qty) / new_qty
+            if pos.avg_price_native is not None:
+                pos.avg_price_native = (float(pos.avg_price_native or 0.0) * old_qty) / new_qty
+            if pos.market_price_native is not None:
+                pos.market_price_native = (float(pos.market_price_native or 0.0) * old_qty) / new_qty
+
+        pos.quantity = new_qty
+        opened_at.setdefault(ticker, self._as_datetime(row.get("occurred_at")) or default_ts)
+        return delta
+
     def _checkpoints_as_of(
         self,
         *,
@@ -2019,17 +2098,28 @@ class SleeveStore:
         if callable(agent_transfer_events_since):
             transfer_rows = agent_transfer_events_since(agent_id=agent_id, since=since, tenant_id=tenant)
 
+        manual_position_rows: list[dict[str, Any]] = []
+        manual_position_adjustments_since = (
+            getattr(self._ledger, "manual_position_adjustments_since", None) if self._ledger else None
+        )
+        if callable(manual_position_adjustments_since):
+            manual_position_rows = manual_position_adjustments_since(since=since, tenant_id=tenant)
+
         replay_events: list[tuple[datetime, int, dict[str, Any]]] = []
         for r in fills:
             replay_events.append((self._as_datetime(r.get("created_at")) or init_opened_at, 0, {"kind": "fill", "row": r}))
         for row in transfer_rows:
-            replay_events.append((self._as_datetime(row.get("occurred_at")) or init_opened_at, 1, {"kind": "transfer", "row": row}))
+            replay_events.append((self._as_datetime(row.get("occurred_at")) or init_opened_at, 2, {"kind": "transfer", "row": row}))
+        for row in manual_position_rows:
+            replay_events.append((self._as_datetime(row.get("occurred_at")) or init_opened_at, 1, {"kind": "position_adjustment", "row": row}))
         replay_events.sort(key=lambda item: (item[0], item[1], str(item[2]["row"].get("event_id") or item[2]["row"].get("ticker") or "")))
 
         trade_count_total = 0
         transfer_event_count = 0
         transfer_cash_krw = 0.0
         transfer_equity_krw = 0.0
+        manual_position_adjustment_count = 0
+        manual_position_adjustment_quantity = 0.0
         for _, _, event in replay_events:
             kind = str(event.get("kind") or "")
             r = dict(event.get("row") or {})
@@ -2050,6 +2140,18 @@ class SleeveStore:
                 transfer_cash_krw += float(cash - cash_before)
                 transfer_equity_krw += float(transfer_equity_delta)
                 transfer_event_count += 1
+                continue
+            if kind == "position_adjustment":
+                applied_delta = self._apply_manual_position_adjustment(
+                    agent_id=agent_id,
+                    row=r,
+                    positions=positions,
+                    opened_at=opened_at,
+                    default_ts=init_opened_at,
+                )
+                if abs(applied_delta) > 1e-9:
+                    manual_position_adjustment_count += 1
+                    manual_position_adjustment_quantity += applied_delta
                 continue
 
             t = str(r.get("ticker", "")).strip().upper()
@@ -2282,6 +2384,8 @@ class SleeveStore:
             "transfer_event_count": int(transfer_event_count),
             "transfer_cash_krw": float(transfer_cash_krw),
             "transfer_equity_krw": float(transfer_equity_krw),
+            "manual_position_adjustment_count": int(manual_position_adjustment_count),
+            "manual_position_adjustment_quantity": float(manual_position_adjustment_quantity),
             "realized_pnl_krw": float(realized_total),
             "realized_pnl_by_ticker": {k: float(v) for k, v in realized_by_ticker.items()},
             "sell_trade_count": int(sell_trades),

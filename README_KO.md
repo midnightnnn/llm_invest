@@ -94,8 +94,8 @@ GILD는 현재 활성 thesis 보유 중 (헬스케어 방어 포지션)
 - LLM API 키 최소 1개
 
 ```bash
-git clone https://github.com/your-username/LLm_arena.git
-cd LLm_arena
+git clone https://github.com/midnightnnn/llm_invest.git
+cd llm_invest
 pip install -e ".[local]"
 
 cp .env.local.example .env
@@ -133,8 +133,8 @@ gcloud config set project YOUR_PROJECT_ID
 ### 2. 설치
 
 ```bash
-git clone https://github.com/your-username/LLm_arena.git
-cd LLm_arena
+git clone https://github.com/midnightnnn/llm_invest.git
+cd llm_invest
 pip install -e .[dev]
 ```
 

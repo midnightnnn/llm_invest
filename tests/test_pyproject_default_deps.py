@@ -68,3 +68,12 @@ def test_local_extras_group_exists_with_duckdb(optional_deps_groups):
     )
     local = [_normalise_pkg(d) for d in optional_deps_groups["local"]]
     assert "duckdb" in local, "local extras must include duckdb"
+
+
+def test_setuptools_package_discovery_ignores_local_runtime_dirs():
+    data = _read_pyproject_data()
+    find = data.get("tool", {}).get("setuptools", {}).get("packages", {}).get("find", {})
+
+    assert "arena*" in find.get("include", [])
+    assert "data*" in find.get("exclude", [])
+    assert "logs*" in find.get("exclude", [])

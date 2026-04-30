@@ -94,8 +94,8 @@ Some of the best trading decisions are to do nothing. The hard part is how diffi
 - At least 1 LLM API key
 
 ```bash
-git clone https://github.com/your-username/LLm_arena.git
-cd LLm_arena
+git clone https://github.com/midnightnnn/llm_invest.git
+cd llm_invest
 pip install -e ".[local]"
 
 cp .env.local.example .env
@@ -133,8 +133,8 @@ gcloud config set project YOUR_PROJECT_ID
 ### 2. Installation
 
 ```bash
-git clone https://github.com/your-username/LLm_arena.git
-cd LLm_arena
+git clone https://github.com/midnightnnn/llm_invest.git
+cd llm_invest
 pip install -e .[dev]
 ```
 
