@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 
 from arena.config import Settings
 from arena.models import AccountSnapshot, OrderIntent, RiskDecision, Side
@@ -46,6 +46,12 @@ def _ticker_matches_market(ticker: str, market: str) -> bool:
     if recognized:
         return False
     return _ticker_matches_one_market(ticker, market)
+
+
+def _as_utc_aware(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 class RiskEngine:
@@ -93,7 +99,7 @@ class RiskEngine:
             hits.append("max_daily_orders")
 
         if last_trade_at is not None:
-            delta_sec = (now - last_trade_at).total_seconds()
+            delta_sec = (_as_utc_aware(now) - _as_utc_aware(last_trade_at)).total_seconds()
             if delta_sec < self.settings.ticker_cooldown_seconds:
                 hits.append("ticker_cooldown_seconds")
 

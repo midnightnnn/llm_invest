@@ -78,6 +78,15 @@ def _base_entries(
             sort_order=30,
         ),
         _tool(
+            tool_id="scratch_run_python",
+            description="Temporary Python scratch workspace.",
+            category="analysis",
+            tier="core",
+            label_ko="파이썬 낙서장",
+            description_ko="현재 사이클 안에서만 유지되는 임시 Python 작업 공간입니다.",
+            sort_order=35,
+        ),
+        _tool(
             tool_id="portfolio_diagnosis",
             description=(
                 "Diagnoses current holdings: concentration (HHI), per-ticker risk contribution, portfolio MDD, "

@@ -102,6 +102,7 @@ def test_default_registry_contains_new_tools() -> None:
     assert "fear_greed_index" in ids
     assert "earnings_calendar" in ids
     assert "recommend_opportunities" in ids
+    assert "scratch_run_python" in ids
     assert "technical_signals" in ids
     assert "save_memory" not in ids
     assert "screen_market" not in ids
@@ -110,6 +111,8 @@ def test_default_registry_contains_new_tools() -> None:
     assert "get_overseas_fundamentals" not in ids
     all_ids = {e.tool_id for e in reg.list_entries(include_disabled=True)}
     assert "save_memory" not in all_ids
+    entries = {e.tool_id: e for e in reg.list_entries(include_disabled=True)}
+    assert entries["scratch_run_python"].description == "Temporary Python scratch workspace."
 
 
 def test_default_registry_can_enable_reddit_sentiment() -> None:

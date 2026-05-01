@@ -54,6 +54,7 @@ from arena.agents.adk_decision_flow import (
     prepare_decision_prompt,
     tag_phase_tool_events,
 )
+from arena.agents.prompts.prompt_pack import PromptPack
 from arena.agents.adk_runner_runtime import (
     AdkToolBudgetExceeded,
     collect_response_text,
@@ -95,6 +96,7 @@ from arena.logging_utils import event_extra, failure_extra
 from arena.models import BoardPost, ExecutionReport, OrderIntent
 from arena.tools.default_registry import build_default_registry
 from arena.tools.registry import ToolEntry, ToolRegistry
+from arena.tools.scratch_workspace import ScratchWorkspace
 from arena.providers.registry import default_model_for_provider, get_provider_spec
 
 logger = logging.getLogger(__name__)
@@ -322,12 +324,18 @@ class _ADKDecisionRunner:
             memory_store=self._memory_store,
             tenant_id=self.tenant_id,
         )
+        self._tool_events: list[dict[str, Any]] = []
+        self._scratch_workspace = ScratchWorkspace(
+            agent_id=agent_id,
+            tenant_id=self.tenant_id,
+            tool_events=self._tool_events,
+        )
         self._registry.bind("search_past_experiences", self._toolbox.search_past_experiences)
         self._registry.bind("search_peer_lessons", self._toolbox.search_peer_lessons)
         self._registry.bind("get_research_briefing", self._toolbox.get_research_briefing)
         self._registry.bind("portfolio_diagnosis", self._toolbox.portfolio_diagnosis)
         self._registry.bind("trade_performance", self._toolbox.trade_performance)
-        self._tool_events: list[dict[str, Any]] = []
+        self._registry.bind("scratch_run_python", self._scratch_workspace.run_python)
         self._seen_memory_ids: set[str] = set()
         self._wrapped_tool_names: set[str] = set()
         self._candidate_ledger: dict[str, dict[str, Any]] = {}
@@ -382,30 +390,11 @@ class _ADKDecisionRunner:
 
     def _available_tools_payload(self) -> list[dict[str, Any]]:
         """Returns the built-in tool catalog visible to the model for prompt inspection."""
-        tools: list[dict[str, Any]] = []
-        for entry in self._registry.list_entries(require_callable=True):
-            if str(entry.tool_id or "").strip() in self._disabled_tool_ids:
-                continue
-            tools.append(
-                {
-                    "tool_id": entry.tool_id,
-                    "name": entry.name,
-                    "category": entry.category,
-                    "tier": entry.tier,
-                    "description": entry.description,
-                }
-            )
-        if self._mcp_toolset_count > 0:
-            tools.append(
-                {
-                    "tool_id": "mcp_toolsets",
-                    "name": "MCP toolsets",
-                    "category": "external",
-                    "tier": "optional",
-                    "description": f"{self._mcp_toolset_count} configured MCP toolset(s) exposed through ADK.",
-                }
-            )
-        return tools
+        return PromptPack.tool_catalog_payload(
+            self._registry,
+            disabled_tool_ids=self._disabled_tool_ids,
+            mcp_toolset_count=self._mcp_toolset_count,
+        )
 
     def _configured_model_id(self) -> str:
         if self._agent_config and str(self._agent_config.model or "").strip():

@@ -5,14 +5,13 @@ import time
 from typing import Any
 
 from arena.agents.adk_prompting import (
-    EXECUTION_FORMAT,
     _parse_json_text,
     _safe_json,
     _tool_category_counts,
     _tool_mix_note,
     _user_prompt,
 )
-from arena.agents.adk_runner_state import model_facing_funnel_metrics
+from arena.agents.prompts.prompt_pack import PromptPack
 from arena.tools.registry import ToolRegistry
 
 
@@ -31,37 +30,11 @@ def build_resume_prompt(
     max_tool_events: int,
 ) -> str:
     """Builds the execution-phase delta prompt for a resumed ADK session."""
-    board_ctx = str(context.get("board_context") or "").strip()
-    parts = [
-        "cycle_phase: execution",
-        "",
-        "이전 explore 단계의 분석과 도구 호출 결과를 바탕으로 최종 주문을 결정합니다.",
-        "이전에 호출한 도구 결과를 최대한 활용하세요. 필요시 추가 도구 호출도 가능합니다.",
-    ]
-    if board_ctx:
-        parts += ["", "[다른 에이전트 의견]", board_ctx]
-    parts += [
-        "",
-        EXECUTION_FORMAT,
-        "",
-        json.dumps(
-            _safe_json(
-                {
-                    "order_budget": context.get("order_budget", {}),
-                    "risk_policy": context.get("risk_policy", {}),
-                    "analysis_funnel": model_facing_funnel_metrics(analysis_funnel),
-                    "candidate_cases": context.get("candidate_cases", []),
-                    "decision_frame": context.get("decision_frame", ""),
-                    "tool_budget": {
-                        "max_tool_calls": max_tool_events,
-                        "note": f"You have up to {max_tool_events} remaining tool calls.",
-                    },
-                }
-            ),
-            ensure_ascii=False,
-        ),
-    ]
-    return "\n".join(parts)
+    return PromptPack.render_resume_prompt(
+        context,
+        analysis_funnel=analysis_funnel,
+        max_tool_events=max_tool_events,
+    )
 
 
 def prepare_decision_prompt(
@@ -159,24 +132,7 @@ def build_tool_summary_memory_record(
 
 def build_board_prompt(orders_summary: str) -> str:
     """Builds the board-generation follow-up prompt."""
-    rules = [
-        "cycle_phase: board",
-        "",
-        "## 게시글 규칙",
-        "게시글에는 실행 결과 요약과 현재 세션에 명시된 사실만 사용하십시오.",
-        "종목명, 날짜, 거래 시점, 보유 이력은 추정하지 말고, ticker_name이 없으면 티커만 쓰십시오.",
-        "",
-        "## 출력 형식 (반드시 이 JSON 형식을 준수)",
-        '```json',
-        '{',
-        '  "board_title": "게시판 제목",',
-        '  "board_body": "게시판 전체글"',
-        '}',
-        '```',
-        "",
-        orders_summary,
-    ]
-    return "\n".join(rules)
+    return PromptPack.render_board_prompt(orders_summary)
 
 
 def parse_board_response(text: str) -> dict[str, Any]:

@@ -1,5 +1,5 @@
 from dataclasses import replace
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from arena.config import Settings
 from arena.models import AccountSnapshot, OrderIntent, Position, Side, utc_now
@@ -158,6 +158,40 @@ def test_risk_rejects_cooldown() -> None:
         last_trade_at=utc_now() - timedelta(seconds=5),
         now=utc_now(),
     )
+    assert decision.allowed is False
+    assert "ticker_cooldown_seconds" in decision.policy_hits
+
+
+def test_risk_handles_naive_last_trade_time() -> None:
+    """Normalizes repository timestamps before applying ticker cooldown."""
+    engine = RiskEngine(_settings())
+    intent = OrderIntent(
+        agent_id="a",
+        ticker="005930",
+        side=Side.SELL,
+        quantity=1,
+        price_krw=70_000,
+        rationale="test",
+    )
+    now = utc_now()
+    naive_last_trade = datetime(
+        now.year,
+        now.month,
+        now.day,
+        now.hour,
+        now.minute,
+        max(0, now.second - 5),
+    )
+
+    decision = engine.evaluate(
+        intent,
+        _snapshot(),
+        daily_turnover_krw=0,
+        daily_order_count=0,
+        last_trade_at=naive_last_trade,
+        now=now,
+    )
+
     assert decision.allowed is False
     assert "ticker_cooldown_seconds" in decision.policy_hits
 
