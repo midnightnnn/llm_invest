@@ -68,6 +68,18 @@ class TestFetchReddit:
     def test_empty_ticker(self, st: SentimentTools):
         assert st.fetch_reddit_sentiment("") == []
 
+    @patch("arena.tools.sentiment_tools._safe_get")
+    def test_supports_multiple_tickers(self, mock_get, st: SentimentTools):
+        resp = MagicMock()
+        resp.json.return_value = _SAMPLE_REDDIT
+        mock_get.return_value = resp
+
+        result = st.fetch_reddit_sentiment(tickers=["AAPL", "MSFT"], max_posts=1)
+
+        assert result["tickers"] == ["AAPL", "MSFT"]
+        assert result["count"] == 2
+        assert {row["ticker"] for row in result["rows"]} == {"AAPL", "MSFT"}
+
 
 class TestFetchSec:
     @patch("arena.tools.sentiment_tools._safe_get")
@@ -111,6 +123,24 @@ class TestFetchSec:
 
     def test_empty_ticker(self, st: SentimentTools):
         assert st.fetch_sec_filings("") == []
+
+    @patch("arena.tools.sentiment_tools._safe_get")
+    def test_supports_multiple_tickers(self, mock_get, st: SentimentTools):
+        tickers = {
+            "0": {"cik_str": 320193, "ticker": "AAPL", "title": "Apple Inc."},
+            "1": {"cik_str": 789019, "ticker": "MSFT", "title": "Microsoft Corp."},
+        }
+        resp_tickers = MagicMock()
+        resp_tickers.json.return_value = tickers
+        resp_subs = MagicMock()
+        resp_subs.json.return_value = _SAMPLE_SUBMISSIONS
+        mock_get.side_effect = [resp_tickers, resp_subs, resp_tickers, resp_subs]
+
+        result = st.fetch_sec_filings(tickers=["AAPL", "MSFT"], filing_type="10-K", max_items=1)
+
+        assert result["tickers"] == ["AAPL", "MSFT"]
+        assert result["count"] == 2
+        assert {row["ticker"] for row in result["rows"]} == {"AAPL", "MSFT"}
 
 
 class TestSafeGet:

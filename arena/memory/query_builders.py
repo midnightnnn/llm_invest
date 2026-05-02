@@ -62,6 +62,26 @@ def _dedupe(tokens: list[Any], *, limit: int | None = None) -> list[str]:
     return out
 
 
+def _ticker_list_from_args_result(args: dict, result: Any, rows: list[Any]) -> list[str]:
+    tickers: list[Any] = []
+    if isinstance(args.get("tickers"), list):
+        tickers.extend(args.get("tickers") or [])
+    if args.get("ticker"):
+        tickers.append(args.get("ticker"))
+    if isinstance(result, dict):
+        if isinstance(result.get("tickers"), list):
+            tickers.extend(result.get("tickers") or [])
+        if result.get("ticker"):
+            tickers.append(result.get("ticker"))
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        symbol = row.get("ticker") or row.get("symbol")
+        if symbol:
+            tickers.append(symbol)
+    return _dedupe([str(t).strip().upper() for t in tickers if str(t).strip()], limit=6)
+
+
 def _normalize_key(value: Any) -> str:
     text = str(value or "").strip().lower()
     if not text:
@@ -416,23 +436,16 @@ def _earnings_calendar(args: dict, result: Any) -> MemoryQuerySpec | None:
     if not isinstance(rows, list):
         rows = []
     event_classes: list[str] = []
-    tickers: list[str] = []
     for row in rows[:12]:
         if not isinstance(row, dict):
             continue
         event_type = _normalize_key(row.get("event_type"))
         if event_type:
             event_classes.append(event_type)
-        symbol = str(row.get("symbol") or row.get("ticker") or "").strip().upper()
-        if symbol:
-            tickers.append(symbol)
-    ticker = str(result.get("ticker") or args.get("ticker") or "").strip().upper()
-    if ticker:
-        tickers.insert(0, ticker)
     keys = _dedupe(event_classes, limit=4)
     if not keys:
         return None
-    ticker_keys = _dedupe(tickers, limit=3)
+    ticker_keys = _ticker_list_from_args_result(args, result, rows)[:3]
     return _make_spec(
         "earnings_calendar",
         "event_class",
@@ -443,10 +456,13 @@ def _earnings_calendar(args: dict, result: Any) -> MemoryQuerySpec | None:
 
 
 def _fetch_reddit_sentiment(args: dict, result: Any) -> MemoryQuerySpec | None:
-    rows = result if isinstance(result, list) else []
+    if isinstance(result, dict):
+        rows = result.get("rows") if isinstance(result.get("rows"), list) else []
+    else:
+        rows = result if isinstance(result, list) else []
     if not isinstance(rows, list):
         return None
-    ticker = str(args.get("ticker") or "").strip().upper()
+    ticker_keys = _ticker_list_from_args_result(args, result, rows)
     text = " ".join(
         " ".join([str(row.get("title") or ""), str(row.get("selftext_snippet") or ""), str(row.get("subreddit") or "")])
         for row in rows[:8]
@@ -458,13 +474,16 @@ def _fetch_reddit_sentiment(args: dict, result: Any) -> MemoryQuerySpec | None:
         "fetch_reddit_sentiment",
         "theme",
         keys,
-        ["social sentiment", ticker, " ".join(themes)],
-        context_keys=[ticker] if ticker else [],
+        ["social sentiment", " ".join(ticker_keys), " ".join(themes)],
+        context_keys=ticker_keys,
     )
 
 
 def _fetch_sec_filings(args: dict, result: Any) -> MemoryQuerySpec | None:
-    rows = result if isinstance(result, list) else []
+    if isinstance(result, dict):
+        rows = result.get("rows") if isinstance(result.get("rows"), list) else []
+    else:
+        rows = result if isinstance(result, list) else []
     if not isinstance(rows, list):
         return None
     form_types: list[str] = []
@@ -485,12 +504,15 @@ def _fetch_sec_filings(args: dict, result: Any) -> MemoryQuerySpec | None:
     keys = _dedupe(form_types, limit=4)
     if not keys:
         return None
-    context_keys = [ticker, *_dedupe(entities, limit=2)] if ticker else _dedupe(entities, limit=2)
+    ticker_keys = _ticker_list_from_args_result(args, result, rows)
+    if ticker and ticker not in ticker_keys:
+        ticker_keys.insert(0, ticker)
+    context_keys = [*ticker_keys[:3], *_dedupe(entities, limit=3)]
     return _make_spec(
         "fetch_sec_filings",
         "event_class",
         keys,
-        ["filing event", " ".join([*keys, *([ticker] if ticker else [])]), " ".join(_dedupe(entities, limit=2))],
+        ["filing event", " ".join([*keys, *ticker_keys[:3]]), " ".join(_dedupe(entities, limit=3))],
         context_keys=context_keys,
     )
 

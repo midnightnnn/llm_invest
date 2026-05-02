@@ -271,3 +271,55 @@ def test_earnings_calendar_filters_by_ticker(monkeypatch) -> None:
     assert out["count"] == 1
     assert out["rows"][0]["symbol"] == "AAPL"
     assert out["rows"][0]["eps_forecast"] == "2.35"
+
+
+def test_earnings_calendar_filters_by_tickers(monkeypatch) -> None:
+    payload = {
+        "data": {
+            "rows": [
+                {
+                    "symbol": "AAPL",
+                    "name": "Apple Inc",
+                    "time": "After Market Close",
+                    "epsForecast": "2.35",
+                    "noOfEsts": "24",
+                    "lastYearRptDt": "11/02/2025",
+                    "lastYearEPS": "2.11",
+                },
+                {
+                    "symbol": "MSFT",
+                    "name": "Microsoft Corp",
+                    "time": "After Market Close",
+                    "epsForecast": "3.10",
+                    "noOfEsts": "22",
+                    "lastYearRptDt": "10/28/2025",
+                    "lastYearEPS": "2.95",
+                },
+                {
+                    "symbol": "TSLA",
+                    "name": "Tesla Inc",
+                    "time": "Before Market Open",
+                    "epsForecast": "0.55",
+                    "noOfEsts": "18",
+                    "lastYearRptDt": "10/23/2025",
+                    "lastYearEPS": "0.41",
+                },
+            ]
+        }
+    }
+
+    def _fake_get(url, *, headers=None, timeout=10):
+        _ = (url, headers, timeout)
+        return _FakeResp(payload=payload)
+
+    import arena.tools.sentiment_tools as st_mod
+
+    monkeypatch.setattr(st_mod, "_safe_get", _fake_get)
+    st = SentimentTools(settings=_settings())
+
+    out = st.earnings_calendar(tickers=["AAPL", "MSFT"], days_ahead=3, limit=5)
+
+    assert out["ticker"] is None
+    assert out["tickers"] == ["AAPL", "MSFT"]
+    assert out["count"] == 2
+    assert {row["symbol"] for row in out["rows"]} == {"AAPL", "MSFT"}

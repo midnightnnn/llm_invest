@@ -37,6 +37,50 @@ def _compact_rows(
     return out
 
 
+def _count_items(value: Any) -> int | None:
+    if isinstance(value, list):
+        return len(value)
+    if isinstance(value, str) and value.strip():
+        return 1
+    return None
+
+
+def _requested_count(tool_args: dict[str, Any], core: Any) -> int | None:
+    if isinstance(tool_args, dict):
+        for key in ("tickers", "indices", "requested"):
+            count = _count_items(tool_args.get(key))
+            if count is not None:
+                return count
+        count = _count_items(tool_args.get("ticker"))
+        if count is not None:
+            return count
+    if isinstance(core, dict):
+        for key in ("tickers", "indices", "requested"):
+            count = _count_items(core.get(key))
+            if count is not None:
+                return count
+        count = _count_items(core.get("ticker"))
+        if count is not None:
+            return count
+    return None
+
+
+def _compaction_meta(
+    *,
+    requested_count: int | None,
+    returned_count: int,
+    visible_count: int,
+    visible_limit: int,
+) -> dict[str, Any]:
+    return {
+        "requested_count": requested_count if requested_count is not None else returned_count,
+        "returned_count": returned_count,
+        "visible_count": visible_count,
+        "visible_limit": visible_limit,
+        "truncated": returned_count > visible_count,
+    }
+
+
 def _compact_memory_context_rows(rows: Any) -> list[dict[str, Any]]:
     return _compact_rows(
         rows,
@@ -125,7 +169,19 @@ def _compact_tool_result_for_prompt(
             scope = diagnostics.get("selection_scope") or {}
             compacted["selection_scope"] = {
                 key: scope.get(key)
-                for key in ("mode", "requested_max_candidates", "global_limit", "per_profile_limit", "loaded_rows", "requested_buckets")
+                for key in (
+                    "mode",
+                    "requested_max_candidates",
+                    "global_limit",
+                    "per_profile_limit",
+                    "loaded_rows",
+                    "requested_buckets",
+                    "requested_profiles",
+                    "effective_buckets",
+                    "effective_profiles",
+                    "legacy_profile_bucket_tokens",
+                    "loaded_rows_before_filter_fallback",
+                )
                 if scope.get(key) is not None
             }
         if isinstance(diagnostics, dict) and diagnostics.get("warnings"):
@@ -199,8 +255,10 @@ def _compact_tool_result_for_prompt(
             compacted = compacted_rows
     elif token == "technical_signals":
         if isinstance(core, dict) and isinstance(core.get("rows"), list):
+            raw_rows = list(core.get("rows") or [])
+            visible_limit = 10
             rows: list[dict[str, Any]] = []
-            for row in core.get("rows", [])[:10]:
+            for row in raw_rows[:visible_limit]:
                 if not isinstance(row, dict):
                     continue
                 ma = row.get("moving_averages") or {}
@@ -222,9 +280,15 @@ def _compact_tool_result_for_prompt(
                     item["short_sale"] = row["short_sale"]
                 rows.append(item)
             compacted = {
-                "tickers": list(core.get("tickers") or [])[:10],
+                "tickers": list(core.get("tickers") or [])[:visible_limit],
                 "count": len(rows),
                 "rows": rows,
+                "compaction": _compaction_meta(
+                    requested_count=_requested_count(tool_args, core),
+                    returned_count=len(raw_rows),
+                    visible_count=len(rows),
+                    visible_limit=visible_limit,
+                ),
             }
         elif isinstance(core, dict) and "error" not in core:
             ma = core.get("moving_averages") or {}
@@ -329,35 +393,97 @@ def _compact_tool_result_for_prompt(
         if errors:
             compacted["errors"] = errors
     elif token == "fetch_reddit_sentiment":
-        compacted = _compact_rows(
-            core,
-            fields=("title", "subreddit", "score", "num_comments", "created", "selftext_snippet"),
-            limit=6,
-            text_fields=("title", "selftext_snippet"),
-            max_text=140,
-        )
+        visible_limit = 6
+        if isinstance(core, dict):
+            raw_rows = list(core.get("rows") or [])
+            rows = _compact_rows(
+                raw_rows,
+                fields=("ticker", "title", "subreddit", "score", "num_comments", "created", "selftext_snippet"),
+                limit=visible_limit,
+                text_fields=("title", "selftext_snippet"),
+                max_text=140,
+            )
+            compacted = {
+                "tickers": list(core.get("tickers") or []),
+                "count": core.get("count", len(raw_rows)),
+                "rows": rows,
+                "compaction": _compaction_meta(
+                    requested_count=_requested_count(tool_args, core),
+                    returned_count=len(raw_rows),
+                    visible_count=len(rows),
+                    visible_limit=visible_limit,
+                ),
+            }
+            errors = _compact_rows(core.get("errors"), fields=("ticker", "error"), limit=5, text_fields=("error",), max_text=140)
+            if errors:
+                compacted["errors"] = errors
+        else:
+            compacted = _compact_rows(
+                core,
+                fields=("title", "subreddit", "score", "num_comments", "created", "selftext_snippet"),
+                limit=visible_limit,
+                text_fields=("title", "selftext_snippet"),
+                max_text=140,
+            )
     elif token == "fetch_sec_filings":
-        compacted = _compact_rows(
-            core,
-            fields=("form_type", "filed_date", "entity", "description"),
-            limit=6,
-            text_fields=("description",),
-            max_text=140,
-        )
+        visible_limit = 6
+        if isinstance(core, dict):
+            raw_rows = list(core.get("rows") or [])
+            rows = _compact_rows(
+                raw_rows,
+                fields=("ticker", "form_type", "filed_date", "entity", "description"),
+                limit=visible_limit,
+                text_fields=("description",),
+                max_text=140,
+            )
+            compacted = {
+                "tickers": list(core.get("tickers") or []),
+                "filing_type": core.get("filing_type"),
+                "count": core.get("count", len(raw_rows)),
+                "rows": rows,
+                "compaction": _compaction_meta(
+                    requested_count=_requested_count(tool_args, core),
+                    returned_count=len(raw_rows),
+                    visible_count=len(rows),
+                    visible_limit=visible_limit,
+                ),
+            }
+            errors = _compact_rows(core.get("errors"), fields=("ticker", "error"), limit=5, text_fields=("error",), max_text=140)
+            if errors:
+                compacted["errors"] = errors
+        else:
+            compacted = _compact_rows(
+                core,
+                fields=("form_type", "filed_date", "entity", "description"),
+                limit=visible_limit,
+                text_fields=("description",),
+                max_text=140,
+            )
     elif token == "earnings_calendar" and isinstance(core, dict):
+        raw_rows = list(core.get("rows") or [])
+        visible_limit = 10
+        rows = _compact_rows(
+            raw_rows,
+            fields=("date", "symbol", "name", "time", "eps_forecast"),
+            limit=visible_limit,
+            text_fields=("name",),
+            max_text=80,
+        )
         compacted = {
             "ticker": core.get("ticker"),
             "start_date": core.get("start_date"),
             "days_ahead": core.get("days_ahead"),
             "count": core.get("count"),
-            "rows": _compact_rows(
-                core.get("rows"),
-                fields=("date", "symbol", "name", "time", "eps_forecast"),
-                limit=10,
-                text_fields=("name",),
-                max_text=80,
+            "rows": rows,
+            "compaction": _compaction_meta(
+                requested_count=_requested_count(tool_args, core),
+                returned_count=len(raw_rows),
+                visible_count=len(rows),
+                visible_limit=visible_limit,
             ),
         }
+        if core.get("tickers") is not None:
+            compacted["tickers"] = core.get("tickers")
         if core.get("error") is not None:
             compacted["error"] = core.get("error")
     elif token == "macro_snapshot" and isinstance(core, dict):

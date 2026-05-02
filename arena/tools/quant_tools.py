@@ -5,7 +5,7 @@ import os
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 
@@ -45,6 +45,93 @@ from .sector_map import SECTOR_BY_TICKER
 logger = logging.getLogger(__name__)
 
 _RECOMMEND_OPPORTUNITY_MAX_POOL = 500
+OpportunityBucket = Literal["momentum", "pullback", "recovery"]
+OpportunityProfile = Literal[
+    "aggressive",
+    "balanced",
+    "defensive",
+    "value",
+    "tactical",
+    "tactical_leverage",
+    "tactical_inverse",
+    "tactical_hedge",
+]
+ScreenMarketBucket = Literal["balanced", "momentum", "pullback", "recovery", "defensive", "value"]
+ScreenMarketSortBy = Literal["as_of_ts", "ret_20d", "ret_5d", "volatility_20d", "sentiment_score", "close_price_krw"]
+SortOrder = Literal["asc", "desc"]
+PortfolioStrategy = Literal["sharpe", "risk_parity", "forecast"]
+ForecastMode = Literal["all", "stacked", "base", "balanced", "lgbm", "ridge", "avg"]
+IndexSymbol = Literal["KOSPI", "KOSPI200", "KOSDAQ", "SPX", "COMP", "DJI", "WTI", "US10Y", "US30Y", "GOLD"]
+_OPPORTUNITY_BUCKET_TOKENS = frozenset({"momentum", "pullback", "recovery"})
+_OPPORTUNITY_PROFILE_ALIASES: dict[str, tuple[str, ...]] = {
+    "aggressive": ("aggressive",),
+    "balanced": ("balanced",),
+    "defensive": ("defensive",),
+    "value": ("value",),
+    "tactical": ("tactical_leverage", "tactical_inverse", "tactical_hedge"),
+    "tactical_leverage": ("tactical_leverage",),
+    "tactical_inverse": ("tactical_inverse",),
+    "tactical_hedge": ("tactical_hedge",),
+}
+
+
+def _dedupe_tokens(tokens: list[str]) -> list[str]:
+    return list(dict.fromkeys(tokens))
+
+
+def _clean_lower_tokens(values: list[str] | None) -> list[str]:
+    return _dedupe_tokens(
+        [
+            str(value or "").strip().lower()
+            for value in (values or [])
+            if str(value or "").strip()
+        ]
+    )
+
+
+def _expand_opportunity_profile_token(token: str) -> tuple[str, ...]:
+    return _OPPORTUNITY_PROFILE_ALIASES.get(str(token or "").strip().lower(), ())
+
+
+def _normalize_opportunity_filters(
+    *,
+    buckets: list[str] | None,
+    profiles: list[str] | None,
+) -> tuple[list[str], list[str], dict[str, Any]]:
+    """Separates true ranker buckets from profile/style aliases.
+
+    Older prompts often passed profile names through ``buckets``. Treat those
+    tokens as profile filters so calls such as buckets=["balanced"] do not ask
+    BigQuery for bucket='balanced', which is not a ranker bucket.
+    """
+    requested_buckets = _clean_lower_tokens(buckets)
+    requested_profiles = _clean_lower_tokens(profiles)
+
+    bucket_tokens: list[str] = []
+    profile_tokens: list[str] = []
+    legacy_profile_bucket_tokens: list[str] = []
+
+    for token in requested_profiles:
+        expanded = _expand_opportunity_profile_token(token)
+        profile_tokens.extend(expanded or (token,))
+
+    for token in requested_buckets:
+        expanded = _expand_opportunity_profile_token(token)
+        if expanded and token not in _OPPORTUNITY_BUCKET_TOKENS:
+            profile_tokens.extend(expanded)
+            legacy_profile_bucket_tokens.append(token)
+            continue
+        bucket_tokens.append(token)
+
+    bucket_tokens = _dedupe_tokens(bucket_tokens)
+    profile_tokens = _dedupe_tokens(profile_tokens)
+    return bucket_tokens, profile_tokens, {
+        "requested_buckets": requested_buckets,
+        "requested_profiles": requested_profiles,
+        "effective_buckets": bucket_tokens,
+        "effective_profiles": profile_tokens,
+        "legacy_profile_bucket_tokens": _dedupe_tokens(legacy_profile_bucket_tokens),
+    }
 
 
 def _opportunity_selection_limits(
@@ -846,14 +933,14 @@ class QuantTools:
 
     def screen_market(
         self,
-        bucket: str | None = None,
+        bucket: ScreenMarketBucket | None = None,
         top_n: int = 10,
         *,
         per_bucket: int | None = None,
         windows: list[int] = [20, 60, 126],
         vol_adjust: bool = True,
-        sort_by: str | None = None,
-        order: str = "desc",
+        sort_by: ScreenMarketSortBy | None = None,
+        order: SortOrder = "desc",
         min_ret_20d: float | None = None,
         max_volatility: float | None = None,
     ) -> list[dict]:
@@ -1084,7 +1171,8 @@ class QuantTools:
         self,
         top_n: int = 8,
         *,
-        buckets: list[str] | None = None,
+        buckets: list[OpportunityBucket] | None = None,
+        profiles: list[OpportunityProfile] | None = None,
         max_candidates: int | None = None,
         include_watchlist: bool = True,
         max_score_age_hours: int = 30,
@@ -1095,6 +1183,10 @@ class QuantTools:
         stale, surfaces an explicit ``status='unusable'`` so the agent knows
         shared prep must be rerun. There is no heuristic fallback by design —
         silently substituting a different algorithm would hide failures.
+        ``profiles`` filters style buckets (aggressive/balanced/defensive/
+        value/tactical). ``buckets`` filters ranker-native buckets such as
+        momentum, pullback, and recovery; legacy profile tokens passed through
+        ``buckets`` are normalized to profiles.
         """
         diagnostics: dict[str, Any] = {
             "pipeline": ["signal_ic_meta_learner", "opportunity_ranker_scores_latest"],
@@ -1103,12 +1195,10 @@ class QuantTools:
         }
         scope = self._scope()
         market_filter = scope.row_market_filter()
-        bucket_tokens = [
-            str(bucket or "").strip().lower()
-            for bucket in (buckets or [])
-            if str(bucket or "").strip()
-        ]
-        bucket_tokens = list(dict.fromkeys(bucket_tokens))
+        bucket_tokens, profile_tokens, filter_diagnostics = _normalize_opportunity_filters(
+            buckets=buckets,
+            profiles=profiles,
+        )
         global_limit, per_profile_limit, selection_mode = _opportunity_selection_limits(
             top_n=top_n,
             max_candidates=max_candidates,
@@ -1118,7 +1208,7 @@ class QuantTools:
             "requested_max_candidates": max_candidates,
             "global_limit": global_limit,
             "per_profile_limit": per_profile_limit,
-            "requested_buckets": bucket_tokens,
+            **filter_diagnostics,
             "markets": market_filter,
         }
         learned_rows: list[dict[str, Any]] = []
@@ -1129,11 +1219,30 @@ class QuantTools:
                     limit=global_limit,
                     max_age_hours=max(1, min(int(max_score_age_hours), 24 * 14)),
                     buckets=bucket_tokens or None,
+                    profiles=profile_tokens or None,
                     markets=market_filter or None,
                     per_profile_limit=per_profile_limit,
                 ) or []
             except Exception as exc:
                 diagnostics["warnings"].append(f"latest_opportunity_ranker_scores failed: {str(exc)[:160]}")
+            if not learned_rows and filter_diagnostics.get("legacy_profile_bucket_tokens"):
+                diagnostics["selection_scope"]["loaded_rows_before_filter_fallback"] = 0
+                try:
+                    learned_rows = loader(
+                        limit=global_limit,
+                        max_age_hours=max(1, min(int(max_score_age_hours), 24 * 14)),
+                        buckets=None,
+                        profiles=None,
+                        markets=market_filter or None,
+                        per_profile_limit=per_profile_limit,
+                    ) or []
+                    diagnostics["filter_fallback"] = "unfiltered_after_empty_legacy_profile_bucket_filter"
+                    diagnostics["warnings"].append(
+                        "legacy profile/style tokens were passed via buckets and matched no rows; retried without bucket/profile filters"
+                    )
+                    bucket_tokens = []
+                except Exception as exc:
+                    diagnostics["warnings"].append(f"latest_opportunity_ranker_scores fallback failed: {str(exc)[:160]}")
         else:
             diagnostics["warnings"].append("latest_opportunity_ranker_scores unavailable")
         diagnostics["selection_scope"]["loaded_rows"] = len(learned_rows)
@@ -1164,12 +1273,12 @@ class QuantTools:
     def optimize_portfolio(
         self,
         tickers: list[str],
-        strategy: str = "sharpe",
+        strategy: PortfolioStrategy = "sharpe",
         lookback_days: int = 252,
         risk_free_rate: float = 0.04,
         mdd_days: int = 60,
         mu_confidence: float = 1.0,
-        forecast_mode: str | None = None,
+        forecast_mode: ForecastMode | None = None,
         regime_scale: float = 1.0,
         max_weight: float | None = None,
         min_weight: float | None = None,
@@ -1361,7 +1470,7 @@ class QuantTools:
     def forecast_returns(
         self,
         tickers: list[str] | None = None,
-        forecast_mode: str | None = None,
+        forecast_mode: ForecastMode | None = None,
     ) -> list[dict]:
         """Loads direction forecasts from 7-model ensemble (NBEATSx, NHITS, PatchTST, iTransformer, Chronos, TimesFM, Lag-Llama).
 
@@ -1914,7 +2023,7 @@ class QuantTools:
 
     def index_snapshot(
         self,
-        indices: list[str] | None = None,
+        indices: list[IndexSymbol] | None = None,
         lookback_days: int = 30,
     ) -> dict[str, Any]:
         """주요 시장지수, 원자재, 채권 수익률 요약을 반환한다. 에이전트의 타겟 마켓에 따라 적절한 지수를 선택한다."""

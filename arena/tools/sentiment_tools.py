@@ -38,6 +38,25 @@ def _safe_get(url: str, *, headers: dict | None = None, timeout: int = 10) -> re
         return None
 
 
+def _clean_ticker_tokens(ticker: str = "", tickers: list[str] | None = None) -> list[str]:
+    raw: list[Any] = []
+    if tickers is not None:
+        raw.extend(tickers)
+    elif ticker:
+        raw.append(ticker)
+
+    seen: set[str] = set()
+    out: list[str] = []
+    for value in raw:
+        for part in re.split(r"[,;\s]+", str(value or "").upper()):
+            token = re.sub(r"[^A-Z0-9.\-]", "", part).strip()
+            if not token or token in seen:
+                continue
+            seen.add(token)
+            out.append(token)
+    return out
+
+
 @dataclass(slots=True)
 class SentimentTools:
     """External unstructured data tools for LLM-driven sentiment analysis."""
@@ -133,14 +152,11 @@ class SentimentTools:
         series.sort(key=lambda x: x[0])
         return series
 
-    def fetch_reddit_sentiment(self, ticker: str, max_posts: int = 10) -> list[dict[str, Any]]:
+    def _fetch_reddit_sentiment_one(self, ticker: str, *, max_posts: int) -> list[dict[str, Any]]:
         """Fetches recent Reddit posts mentioning a ticker from finance subreddits."""
-        if not self._has_us_market():
-            return [{"error": "fetch_reddit_sentiment is only available for US market agents."}]
         ticker = str(ticker).strip().upper()
         if not ticker:
             return []
-        max_posts = max(1, min(int(max_posts), 25))
 
         logger.info("[cyan]TOOL[/cyan] fetch_reddit_sentiment ticker=%s max_posts=%d", ticker, max_posts)
 
@@ -188,20 +204,57 @@ class SentimentTools:
 
         return posts
 
-    def fetch_sec_filings(
+    def fetch_reddit_sentiment(
         self,
         ticker: str = "",
-        filing_type: str = "10-K",
-        max_items: int = 5,
+        *,
+        tickers: list[str] | None = None,
+        max_posts: int = 10,
+    ) -> list[dict[str, Any]] | dict[str, Any]:
+        """Fetches recent Reddit posts mentioning ticker(s) from finance subreddits."""
+        if not self._has_us_market():
+            return [{"error": "fetch_reddit_sentiment is only available for US market agents."}]
+        max_posts = max(1, min(int(max_posts), 25))
+        tokens = _clean_ticker_tokens(ticker, tickers)
+        if not tokens:
+            return []
+        if tickers is None:
+            return self._fetch_reddit_sentiment_one(tokens[0], max_posts=max_posts)
+
+        rows: list[dict[str, Any]] = []
+        errors: list[dict[str, Any]] = []
+        for token in tokens:
+            result = self._fetch_reddit_sentiment_one(token, max_posts=max_posts)
+            for row in result:
+                if not isinstance(row, dict):
+                    continue
+                if row.get("error"):
+                    errors.append({"ticker": token, "error": row.get("error")})
+                    continue
+                item = dict(row)
+                item["ticker"] = token
+                rows.append(item)
+
+        out: dict[str, Any] = {
+            "tickers": tokens,
+            "count": len(rows),
+            "rows": rows,
+        }
+        if errors:
+            out["errors"] = errors
+        return out
+
+    def _fetch_sec_filings_one(
+        self,
+        ticker: str,
+        *,
+        filing_type: str,
+        max_items: int,
     ) -> list[dict[str, Any]]:
         """Fetches recent SEC filings for a ticker from EDGAR submissions API."""
-        if not self._has_us_market():
-            return [{"error": "fetch_sec_filings is only available for US market agents."}]
-        ticker = str(ticker or "").strip().upper() or self._analysis_default_ticker()
+        ticker = str(ticker or "").strip().upper()
         if not ticker:
             return []
-        max_items = max(1, min(int(max_items), 15))
-        filing_type = re.sub(r"[^A-Za-z0-9\-/]", "", str(filing_type).strip().upper()) or "10-K"
 
         logger.info(
             "[cyan]TOOL[/cyan] fetch_sec_filings ticker=%s type=%s max_items=%d",
@@ -266,6 +319,53 @@ class SentimentTools:
             })
 
         return filings
+
+    def fetch_sec_filings(
+        self,
+        ticker: str = "",
+        *,
+        tickers: list[str] | None = None,
+        filing_type: str = "10-K",
+        max_items: int = 5,
+    ) -> list[dict[str, Any]] | dict[str, Any]:
+        """Fetches recent SEC filings for ticker(s) from EDGAR submissions API."""
+        if not self._has_us_market():
+            return [{"error": "fetch_sec_filings is only available for US market agents."}]
+        max_items = max(1, min(int(max_items), 15))
+        filing_type = re.sub(r"[^A-Za-z0-9\-/]", "", str(filing_type).strip().upper()) or "10-K"
+        tokens = _clean_ticker_tokens(ticker, tickers)
+        if not tokens and tickers is None:
+            default = self._analysis_default_ticker()
+            if default:
+                tokens = [default]
+        if not tokens:
+            return []
+        if tickers is None:
+            return self._fetch_sec_filings_one(tokens[0], filing_type=filing_type, max_items=max_items)
+
+        rows: list[dict[str, Any]] = []
+        errors: list[dict[str, Any]] = []
+        for token in tokens:
+            result = self._fetch_sec_filings_one(token, filing_type=filing_type, max_items=max_items)
+            for row in result:
+                if not isinstance(row, dict):
+                    continue
+                if row.get("error"):
+                    errors.append({"ticker": token, "error": row.get("error")})
+                    continue
+                item = dict(row)
+                item["ticker"] = token
+                rows.append(item)
+
+        out: dict[str, Any] = {
+            "tickers": tokens,
+            "filing_type": filing_type,
+            "count": len(rows),
+            "rows": rows,
+        }
+        if errors:
+            out["errors"] = errors
+        return out
 
     def _nasdaq_headers(self) -> dict[str, str]:
         return {
@@ -484,9 +584,18 @@ class SentimentTools:
         vol_result["sub_components"] = sub_components
         return vol_result
 
-    def _earnings_us(self, ticker: str, days_ahead: int, limit: int) -> dict[str, Any]:
+    def _earnings_us(
+        self,
+        ticker: str,
+        days_ahead: int,
+        limit: int,
+        *,
+        tickers: list[str] | None = None,
+    ) -> dict[str, Any]:
         """US earnings from Nasdaq calendar API."""
         token = str(ticker or "").strip().upper()
+        token_list = _clean_ticker_tokens(tickers=tickers) if tickers is not None else []
+        token_set = set(token_list)
         start = datetime.now(timezone.utc).date()
         rows: list[dict[str, Any]] = []
         scanned = 0
@@ -515,6 +624,8 @@ class SentimentTools:
                     continue
                 if token and sym != token:
                     continue
+                if token_set and sym not in token_set:
+                    continue
                 rows.append({
                     "date": d.isoformat(),
                     "symbol": sym,
@@ -532,8 +643,12 @@ class SentimentTools:
                 break
             if token and rows:
                 break
+            if token_set:
+                found_symbols = {str(row.get("symbol") or "").strip().upper() for row in rows}
+                if token_set.issubset(found_symbols):
+                    break
 
-        return {
+        out = {
             "ticker": token or None,
             "market": "us",
             "start_date": start.isoformat(),
@@ -543,10 +658,23 @@ class SentimentTools:
             "rows": rows[:limit],
             "source": "nasdaq_calendar_api",
         }
+        if tickers is not None:
+            out["ticker"] = None
+            out["tickers"] = token_list
+        return out
 
-    def _earnings_kospi(self, ticker: str, days_ahead: int, limit: int) -> dict[str, Any]:
+    def _earnings_kospi(
+        self,
+        ticker: str,
+        days_ahead: int,
+        limit: int,
+        *,
+        tickers: list[str] | None = None,
+    ) -> dict[str, Any]:
         """KOSPI events: dividends + earnings estimates from KIS API."""
         token = str(ticker or "").strip().upper()
+        token_list = _clean_ticker_tokens(tickers=tickers) if tickers is not None else []
+        token_set = set(token_list)
         start = datetime.now(timezone.utc).date()
         end = start + timedelta(days=days_ahead)
         rows: list[dict[str, Any]] = []
@@ -557,13 +685,15 @@ class SentimentTools:
             div_rows = client.get_domestic_ksdinfo_dividend(
                 start_date=start.strftime("%Y%m%d"),
                 end_date=end.strftime("%Y%m%d"),
-                sht_cd=token,
+                sht_cd=token if tickers is None else "",
             )
             for item in div_rows:
                 sym = str(item.get("sht_cd") or "").strip()
                 if not sym:
                     continue
                 if token and sym != token:
+                    continue
+                if token_set and sym not in token_set:
                     continue
                 rows.append({
                     "date": str(item.get("record_date") or item.get("bsop_date") or "").strip(),
@@ -578,13 +708,18 @@ class SentimentTools:
             logger.debug("KOSPI dividend calendar failed: %s", str(exc)[:80])
 
         # Earnings estimates for specific ticker
-        if token and len(rows) < limit:
+        estimate_tokens = [token] if token else token_list
+        for estimate_token in estimate_tokens:
+            if len(rows) >= limit:
+                break
+            if not estimate_token:
+                continue
             try:
-                est_rows = self._ot().get_domestic_estimate_perform(token)
+                est_rows = self._ot().get_domestic_estimate_perform(estimate_token)
                 for item in est_rows:
                     rows.append({
                         "date": str(item.get("stlm_dt") or "").strip(),
-                        "symbol": token,
+                        "symbol": estimate_token,
                         "name": "",
                         "event_type": "earnings_estimate",
                         "eps_estimate": str(item.get("eps") or "").strip(),
@@ -595,7 +730,7 @@ class SentimentTools:
             except Exception as exc:
                 logger.debug("KOSPI estimate perform failed: %s", str(exc)[:80])
 
-        return {
+        out = {
             "ticker": token or None,
             "market": "kospi",
             "start_date": start.isoformat(),
@@ -604,25 +739,33 @@ class SentimentTools:
             "rows": rows[:limit],
             "source": "kis_ksdinfo",
         }
+        if tickers is not None:
+            out["ticker"] = None
+            out["tickers"] = token_list
+        return out
 
     def earnings_calendar(
         self,
         ticker: str = "",
+        *,
+        tickers: list[str] | None = None,
         days_ahead: int = 14,
         limit: int = 30,
     ) -> dict[str, Any]:
         """Fetches upcoming earnings/dividend events. KOSPI uses KIS API, US uses Nasdaq calendar."""
         days = max(1, min(int(days_ahead), 45))
         lim = max(1, min(int(limit), 200))
+        tokens = _clean_ticker_tokens(ticker, tickers)
         logger.info(
-            "[cyan]TOOL[/cyan] earnings_calendar ticker=%s days_ahead=%d limit=%d",
+            "[cyan]TOOL[/cyan] earnings_calendar ticker=%s tickers=%s days_ahead=%d limit=%d",
             str(ticker or "").strip().upper() or "(all)",
+            ",".join(tokens) if tickers is not None else "",
             days,
             lim,
         )
 
         if self._has_kospi_market():
-            return self._earnings_kospi(ticker, days, lim)
+            return self._earnings_kospi(ticker, days, lim, tickers=tokens if tickers is not None else None)
         if self._has_us_market():
-            return self._earnings_us(ticker, days, lim)
+            return self._earnings_us(ticker, days, lim, tickers=tokens if tickers is not None else None)
         return {"error": "no supported market configured", "rows": []}

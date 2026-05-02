@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 from types import SimpleNamespace
+from typing import get_args, get_type_hints
 
 import pytest
 
@@ -261,6 +262,33 @@ def test_screen_market_returns_rows() -> None:
     assert rows[0]["reason_for"]
     assert rows[0]["reason_risk"]
     assert rows[0]["evidence_level"] == "screened_only"
+
+
+def test_quant_tool_choice_parameters_are_schema_literals() -> None:
+    hints = get_type_hints(QuantTools.screen_market)
+    assert set(get_args(hints["bucket"].__args__[0] if hasattr(hints["bucket"], "__args__") else hints["bucket"])) >= {
+        "balanced",
+        "momentum",
+        "pullback",
+        "recovery",
+        "defensive",
+        "value",
+    }
+    assert set(get_args(hints["order"])) == {"asc", "desc"}
+
+    optimize_hints = get_type_hints(QuantTools.optimize_portfolio)
+    assert set(get_args(optimize_hints["strategy"])) == {"sharpe", "risk_parity", "forecast"}
+
+    forecast_hints = get_type_hints(QuantTools.forecast_returns)
+    forecast_args = forecast_hints["forecast_mode"].__args__
+    forecast_literal = next(arg for arg in forecast_args if get_args(arg))
+    assert set(get_args(forecast_literal)) >= {"all", "stacked", "base", "balanced"}
+
+    index_hints = get_type_hints(QuantTools.index_snapshot)
+    index_args = index_hints["indices"].__args__
+    index_list = next(arg for arg in index_args if get_args(arg))
+    index_literal = get_args(index_list)[0]
+    assert {"SPX", "COMP", "DJI", "US10Y", "GOLD", "KOSPI"} <= set(get_args(index_literal))
 
 
 def test_screen_market_excludes_quote_only_rows_without_history_features() -> None:
@@ -569,7 +597,7 @@ def test_recommend_opportunities_uses_precomputed_learned_scores() -> None:
     assert out["diagnostics"]["selection_scope"]["markets"] == ["us"]
 
 
-def test_recommend_opportunities_uses_bucket_filter_with_profile_context() -> None:
+def test_recommend_opportunities_uses_ranker_bucket_filter() -> None:
     class _Repo(FakeRepo):
         def __init__(self):
             super().__init__()
@@ -593,8 +621,8 @@ def test_recommend_opportunities_uses_bucket_filter_with_profile_context() -> No
                     "score_source": "learned_ic",
                     "ticker": "MSFT",
                     "market": "us",
-                    "profile": "defensive",
-                    "bucket": "defensive",
+                    "profile": "aggressive",
+                    "bucket": "momentum",
                     "recommendation_rank": 1,
                     "recommendation_score": 0.041,
                     "model_confidence": "medium",
@@ -608,13 +636,192 @@ def test_recommend_opportunities_uses_bucket_filter_with_profile_context() -> No
     repo = _Repo()
     qt = QuantTools(repo=repo, settings=_settings())
 
-    out = qt.recommend_opportunities(top_n=8, buckets=["defensive"])
+    out = qt.recommend_opportunities(top_n=8, buckets=["momentum"])
 
     assert out["status"] == "ok"
     assert repo.last_ranker_kwargs["limit"] == 8
     assert repo.last_ranker_kwargs["per_profile_limit"] == 8
-    assert repo.last_ranker_kwargs["buckets"] == ["defensive"]
-    assert out["diagnostics"]["selection_scope"]["requested_buckets"] == ["defensive"]
+    assert repo.last_ranker_kwargs["buckets"] == ["momentum"]
+    assert repo.last_ranker_kwargs["profiles"] is None
+    assert out["diagnostics"]["selection_scope"]["requested_buckets"] == ["momentum"]
+
+
+def test_recommend_opportunities_accepts_profiles_filter() -> None:
+    class _Repo(FakeRepo):
+        def __init__(self):
+            super().__init__()
+            self.last_ranker_kwargs = None
+
+        def latest_opportunity_ranker_scores(self, *, limit=50, max_age_hours=30, tickers=None, profiles=None, buckets=None, markets=None, per_profile_limit=None):
+            self.last_ranker_kwargs = {
+                "limit": limit,
+                "max_age_hours": max_age_hours,
+                "tickers": tickers,
+                "profiles": profiles,
+                "buckets": buckets,
+                "markets": markets,
+                "per_profile_limit": per_profile_limit,
+            }
+            rows = [
+                {
+                    "as_of_date": "2026-04-17",
+                    "computed_at": "2026-04-18T00:00:00+00:00",
+                    "ranker_version": "opportunity_ranker_20260417_test",
+                    "score_source": "learned_ic",
+                    "ticker": "MSFT",
+                    "market": "us",
+                    "profile": "balanced",
+                    "bucket": "pullback",
+                    "recommendation_rank": 1,
+                    "recommendation_score": 0.041,
+                    "model_confidence": "medium",
+                    "action": "candidate",
+                    "evidence_level": "validated",
+                    "feature_json": {},
+                    "explanation_json": {},
+                },
+                {
+                    "as_of_date": "2026-04-17",
+                    "computed_at": "2026-04-18T00:00:00+00:00",
+                    "ranker_version": "opportunity_ranker_20260417_test",
+                    "score_source": "learned_ic",
+                    "ticker": "AAPL",
+                    "market": "us",
+                    "profile": "aggressive",
+                    "bucket": "momentum",
+                    "recommendation_rank": 2,
+                    "recommendation_score": 0.039,
+                    "model_confidence": "medium",
+                    "action": "candidate",
+                    "evidence_level": "validated",
+                    "feature_json": {},
+                    "explanation_json": {},
+                },
+            ]
+            if profiles:
+                allowed_profiles = set(profiles)
+                rows = [row for row in rows if row["profile"] in allowed_profiles]
+            if buckets:
+                allowed_buckets = set(buckets)
+                rows = [row for row in rows if row["bucket"] in allowed_buckets]
+            return rows
+
+    repo = _Repo()
+    qt = QuantTools(repo=repo, settings=_settings())
+
+    out = qt.recommend_opportunities(top_n=3, profiles=["balanced"])
+
+    assert out["status"] == "ok"
+    assert [row["ticker"] for row in out["recommendations"]] == ["MSFT"]
+    assert repo.last_ranker_kwargs["profiles"] == ["balanced"]
+    assert repo.last_ranker_kwargs["buckets"] is None
+    assert out["diagnostics"]["selection_scope"]["requested_profiles"] == ["balanced"]
+
+
+def test_recommend_opportunities_normalizes_legacy_profile_bucket_filter() -> None:
+    class _Repo(FakeRepo):
+        def __init__(self):
+            super().__init__()
+            self.last_ranker_kwargs = None
+
+        def latest_opportunity_ranker_scores(self, *, limit=50, max_age_hours=30, tickers=None, profiles=None, buckets=None, markets=None, per_profile_limit=None):
+            self.last_ranker_kwargs = {
+                "limit": limit,
+                "max_age_hours": max_age_hours,
+                "tickers": tickers,
+                "profiles": profiles,
+                "buckets": buckets,
+                "markets": markets,
+                "per_profile_limit": per_profile_limit,
+            }
+            rows = [
+                {
+                    "as_of_date": "2026-04-17",
+                    "computed_at": "2026-04-18T00:00:00+00:00",
+                    "ranker_version": "opportunity_ranker_20260417_test",
+                    "score_source": "learned_ic",
+                    "ticker": "MSFT",
+                    "market": "us",
+                    "profile": "balanced",
+                    "bucket": "pullback",
+                    "recommendation_rank": 1,
+                    "recommendation_score": 0.041,
+                    "model_confidence": "medium",
+                    "action": "candidate",
+                    "evidence_level": "validated",
+                    "feature_json": {},
+                    "explanation_json": {},
+                }
+            ]
+            if profiles:
+                rows = [row for row in rows if row["profile"] in set(profiles)]
+            if buckets:
+                rows = [row for row in rows if row["bucket"] in set(buckets)]
+            return rows
+
+    repo = _Repo()
+    qt = QuantTools(repo=repo, settings=_settings())
+
+    out = qt.recommend_opportunities(top_n=3, buckets=["balanced"])
+
+    assert out["status"] == "ok"
+    assert [row["ticker"] for row in out["recommendations"]] == ["MSFT"]
+    assert repo.last_ranker_kwargs["profiles"] == ["balanced"]
+    assert repo.last_ranker_kwargs["buckets"] is None
+    assert out["diagnostics"]["selection_scope"]["legacy_profile_bucket_tokens"] == ["balanced"]
+
+
+def test_recommend_opportunities_retries_unfiltered_for_empty_legacy_profile_bucket_filter() -> None:
+    class _Repo(FakeRepo):
+        def __init__(self):
+            super().__init__()
+            self.calls = []
+
+        def latest_opportunity_ranker_scores(self, *, limit=50, max_age_hours=30, tickers=None, profiles=None, buckets=None, markets=None, per_profile_limit=None):
+            self.calls.append(
+                {
+                    "limit": limit,
+                    "max_age_hours": max_age_hours,
+                    "tickers": tickers,
+                    "profiles": profiles,
+                    "buckets": buckets,
+                    "markets": markets,
+                    "per_profile_limit": per_profile_limit,
+                }
+            )
+            if profiles or buckets:
+                return []
+            return [
+                {
+                    "as_of_date": "2026-04-17",
+                    "computed_at": "2026-04-18T00:00:00+00:00",
+                    "ranker_version": "opportunity_ranker_20260417_test",
+                    "score_source": "learned_ic",
+                    "ticker": "AAPL",
+                    "market": "us",
+                    "profile": "aggressive",
+                    "bucket": "momentum",
+                    "recommendation_rank": 1,
+                    "recommendation_score": 0.039,
+                    "model_confidence": "medium",
+                    "action": "candidate",
+                    "evidence_level": "validated",
+                    "feature_json": {},
+                    "explanation_json": {},
+                }
+            ]
+
+    repo = _Repo()
+    qt = QuantTools(repo=repo, settings=_settings())
+
+    out = qt.recommend_opportunities(top_n=3, buckets=["defensive"])
+
+    assert out["status"] == "ok"
+    assert [row["ticker"] for row in out["recommendations"]] == ["AAPL"]
+    assert repo.calls[0]["profiles"] == ["defensive"]
+    assert repo.calls[1]["profiles"] is None
+    assert out["diagnostics"]["selection_scope"]["loaded_rows_before_filter_fallback"] == 0
+    assert "filter_fallback" in out["diagnostics"]
 
 
 def test_recommend_opportunities_learned_missing_is_not_silent_heuristic_fallback() -> None:

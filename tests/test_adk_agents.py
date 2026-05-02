@@ -1454,6 +1454,56 @@ def test_compact_tool_result_technical_signals_multi_returns_summary_rows() -> N
     assert "macd" not in out["rows"][0]
 
 
+def test_compact_tool_result_technical_signals_reports_truncation() -> None:
+    raw_rows = [
+        {
+            "ticker": f"T{i:02d}",
+            "price": 100.0 + i,
+            "rsi_14": 50.0,
+            "rsi_state": "neutral",
+            "macd": {"state": "neutral"},
+            "moving_averages": {"price_vs_sma20": 0.01},
+            "bollinger_20_2": {"state": "inside_bands"},
+            "trend_state": "flat",
+        }
+        for i in range(11)
+    ]
+
+    out = _compact_tool_result_for_prompt(
+        "technical_signals",
+        {"tickers": [row["ticker"] for row in raw_rows], "count": 11, "rows": raw_rows},
+        args={"tickers": [row["ticker"] for row in raw_rows]},
+    )
+
+    assert len(out["rows"]) == 10
+    assert out["compaction"] == {
+        "requested_count": 11,
+        "returned_count": 11,
+        "visible_count": 10,
+        "visible_limit": 10,
+        "truncated": True,
+    }
+
+
+def test_compact_tool_result_earnings_calendar_reports_truncation() -> None:
+    rows = [
+        {"date": "2026-05-01", "symbol": f"T{i:02d}", "name": "Name", "time": "AMC", "eps_forecast": "1.00"}
+        for i in range(11)
+    ]
+
+    out = _compact_tool_result_for_prompt(
+        "earnings_calendar",
+        {"ticker": None, "tickers": [row["symbol"] for row in rows], "count": 11, "rows": rows},
+        args={"tickers": [row["symbol"] for row in rows]},
+    )
+
+    assert len(out["rows"]) == 10
+    assert out["compaction"]["requested_count"] == 11
+    assert out["compaction"]["returned_count"] == 11
+    assert out["compaction"]["visible_limit"] == 10
+    assert out["compaction"]["truncated"] is True
+
+
 def test_compact_tool_result_screen_market_keeps_bucket_reason_and_value_fields() -> None:
     out = _compact_tool_result_for_prompt(
         "screen_market",
@@ -1697,6 +1747,35 @@ def test_build_memory_query_spec_reddit_sentiment_uses_theme_with_ticker_context
     assert spec.query == "social sentiment AAPL ai_capex retail_sentiment"
 
 
+def test_build_memory_query_spec_reddit_sentiment_uses_batch_ticker_context() -> None:
+    spec = build_memory_query_spec(
+        "fetch_reddit_sentiment",
+        {"tickers": ["AAPL", "MSFT"]},
+        {
+            "tickers": ["AAPL", "MSFT"],
+            "rows": [
+                {
+                    "ticker": "AAPL",
+                    "title": "AAPL AI capex debate hits wallstreetbets",
+                    "subreddit": "wallstreetbets",
+                    "selftext_snippet": "Retail sentiment is chasing AI capex beneficiaries.",
+                },
+                {
+                    "ticker": "MSFT",
+                    "title": "MSFT retail sentiment stays constructive",
+                    "subreddit": "stocks",
+                    "selftext_snippet": "Cloud AI capex remains the key debate.",
+                },
+            ],
+        },
+    )
+
+    assert spec is not None
+    assert spec.key_type == "theme"
+    assert spec.context_keys == ("AAPL", "MSFT")
+    assert spec.query == "social sentiment AAPL MSFT ai_capex retail_sentiment"
+
+
 def test_build_memory_query_spec_sec_filings_uses_event_class_with_entity_context() -> None:
     spec = build_memory_query_spec(
         "fetch_sec_filings",
@@ -1709,6 +1788,26 @@ def test_build_memory_query_spec_sec_filings_uses_event_class_with_entity_contex
     assert spec.keys == ("10-k",)
     assert spec.context_keys == ("AAPL", "Apple Inc.")
     assert spec.query == "filing event 10-k AAPL Apple Inc."
+
+
+def test_build_memory_query_spec_sec_filings_uses_batch_ticker_context() -> None:
+    spec = build_memory_query_spec(
+        "fetch_sec_filings",
+        {"tickers": ["AAPL", "MSFT"], "filing_type": "10-K"},
+        {
+            "tickers": ["AAPL", "MSFT"],
+            "rows": [
+                {"ticker": "AAPL", "form_type": "10-K", "entity": "Apple Inc.", "description": "Annual report"},
+                {"ticker": "MSFT", "form_type": "10-K", "entity": "Microsoft Corp.", "description": "Annual report"},
+            ],
+        },
+    )
+
+    assert spec is not None
+    assert spec.key_type == "event_class"
+    assert spec.keys == ("10-k",)
+    assert spec.context_keys == ("AAPL", "MSFT", "Apple Inc.", "Microsoft Corp.")
+    assert spec.query == "filing event 10-k AAPL MSFT Apple Inc. Microsoft Corp."
 
 
 def test_tool_wrapper_injects_memory_for_macro_tools_with_typed_query() -> None:

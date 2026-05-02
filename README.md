@@ -489,6 +489,17 @@ graph LR
 
 ---
 
+## Why Google ADK?
+
+- **One Runner, multiple providers** — Gemini native + Claude / GPT via `LiteLlm`, sharing one `Runner.run_async()` loop with unified reasoning knobs (Anthropic `effort` + adaptive thinking, OpenAI `reasoning_effort` + `verbosity`, Gemini `ThinkingConfig`). → [`arena/agents/adk_models.py`](arena/agents/adk_models.py)
+- **Gemini context caching, measured per cycle** — `ContextCacheConfig` + `cached_content_token_count` logged as `cache_pct`. → [`arena/agents/adk_runner_bootstrap.py`](arena/agents/adk_runner_bootstrap.py)
+- **Tenant-configurable MCP toolsets** — `McpToolset` (SSE / StreamableHTTP) loaded from BigQuery `arena_config.mcp_servers`; new servers attach via admin UI, no redeploy. → [`arena/agents/adk_tool_config.py`](arena/agents/adk_tool_config.py)
+- **Google Search Grounding as the research backbone** — `from google.adk.tools import google_search` powers the 4-phase market briefing pipeline. → [`arena/agents/research_agent.py`](arena/agents/research_agent.py)
+- **SDK-level tool budget enforcement** — `AutomaticFunctionCallingConfig(maximum_remote_calls=...)` + `AdkToolBudgetExceeded` guard. → [`arena/agents/adk_runner_runtime.py`](arena/agents/adk_runner_runtime.py)
+- **Slot-in for future Google services** — Gmail / Calendar / Drive and other Google APIs share ADC + service-account auth with the existing BigQuery / Firestore / Vertex stack, so they attach as MCP tools or first-party ADK tools without touching the agent loop.
+
+---
+
 ## Tech Stack
 
 | Category | Technology |

@@ -489,6 +489,17 @@ graph LR
 
 ---
 
+## 왜 Google ADK인가?
+
+- **하나의 Runner로 여러 프로바이더 동시 운용** — Gemini 네이티브 + Claude / GPT(`LiteLlm`)가 같은 `Runner.run_async()` 루프 위에서 돌고, reasoning 노브(Anthropic `effort` + adaptive thinking, OpenAI `reasoning_effort` + `verbosity`, Gemini `ThinkingConfig`)가 하나의 config 표면으로 통일됩니다. → [`arena/agents/adk_models.py`](arena/agents/adk_models.py)
+- **Gemini 컨텍스트 캐싱 + 사이클별 캐시율 측정** — `ContextCacheConfig` + `cached_content_token_count`를 `cache_pct`로 매 사이클 로그에 박습니다. → [`arena/agents/adk_runner_bootstrap.py`](arena/agents/adk_runner_bootstrap.py)
+- **테넌트 단위로 동적 로딩되는 MCP 툴셋** — `McpToolset`(SSE / StreamableHTTP)이 BigQuery `arena_config.mcp_servers`에서 읽혀와 어드민 UI 변경만으로 다음 사이클에 결합 — 재배포 불필요. → [`arena/agents/adk_tool_config.py`](arena/agents/adk_tool_config.py)
+- **Google Search Grounding이 리서치 백본** — `from google.adk.tools import google_search` 한 줄이 4단계 시장 브리핑 파이프라인을 구동합니다. → [`arena/agents/research_agent.py`](arena/agents/research_agent.py)
+- **SDK 레벨 tool budget 강제** — `AutomaticFunctionCallingConfig(maximum_remote_calls=...)` + `AdkToolBudgetExceeded` 가드. → [`arena/agents/adk_runner_runtime.py`](arena/agents/adk_runner_runtime.py)
+- **향후 Google 서비스 연동도 슬롯-인** — Gmail · Calendar · Drive 등 Google API들이 기존 BigQuery / Firestore / Vertex와 동일한 ADC + 서비스 계정 인증을 공유하므로, 에이전트 루프를 건드리지 않고 MCP 도구나 ADK 네이티브 도구로 바로 붙일 수 있습니다.
+
+---
+
 ## 기술 스택
 
 | 분류 | 기술 |

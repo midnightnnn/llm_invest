@@ -136,14 +136,14 @@ def _base_entries(
             tool_id="screen_market",
             description=(
                 "Low-level diagnostic candidate generator used by recommend_opportunities. "
-                "Surfaces raw screen-only rows across momentum, pullback, recovery, defensive, and value buckets. "
+                "Surfaces raw screen-only rows across discovery buckets. "
                 "Use when inspecting raw bucket screens; it is screen-only and does not provide learned confidence or per-signal IC contributions."
             ),
             category="quant",
             tier="optional",
             callable=qt.screen_market,
             label_ko="시장 스크리닝",
-            description_ko="원시 버킷 스크린을 점검하는 저수준 진단 도구입니다. 모멘텀, 눌림목, 회복, 방어주, 가치주 버킷의 screen-only 결과를 반환하며 learned confidence나 signal-IC 기여도는 제공하지 않습니다.",
+            description_ko="원시 버킷 스크린을 점검하는 저수준 진단 도구입니다. discovery bucket의 screen-only 결과를 반환하며 learned confidence나 signal-IC 기여도는 제공하지 않습니다.",
             enabled=False,
             sort_order=110,
         ),
@@ -152,8 +152,8 @@ def _base_entries(
             description=(
                 "Answers one question: how much of each ticker to hold. "
                 "Computes target weights for a basket (current holdings + new candidates) and emits ready-to-execute "
-                "rebalance orders (BUY target_weight / SELL sell_ratio). strategy='forecast' blends the 7-model ML ensemble into weight "
-                "optimization; 'sharpe' = max-Sharpe Markowitz; 'risk_parity' = HRP. "
+                "rebalance orders (BUY target_weight / SELL sell_ratio). Supports forecast-enhanced, max-Sharpe, "
+                "and HRP optimization modes. "
                 "Gracefully degrades: tickers with insufficient history are excluded (reported in data_quality.excluded); "
                 "forecast strategy falls back to HRP when coverage<50%; a single usable ticker returns weight=1.0. "
                 "Optional constraints — max_weight (per-name cap, e.g. 0.35), min_weight (drop floor, e.g. 0.02), "
@@ -165,7 +165,7 @@ def _base_entries(
             tier="optional",
             callable=qt.optimize_portfolio,
             label_ko="포트폴리오 최적화",
-            description_ko="한 가지 질문에 답합니다: 각 종목을 얼마나 담을지. 보유+후보 바스켓의 목표 비중과 리밸런스 주문(BUY/SELL+비중)을 생성합니다. strategy='forecast'(7-모델 ML 앙상블 반영), 'sharpe'(샤프 극대화), 'risk_parity'(HRP). 데이터 품질이 나쁘면 graceful degrade — 히스토리 부족 종목은 data_quality.excluded에 리포트, forecast coverage<50%면 HRP로 fallback, 단일 종목만 usable하면 weight=1.0. 제약 옵션: max_weight(종목당 상한, 예 0.35), min_weight(하한 drop, 예 0.02), cash_buffer(현금 유보 0.0~0.5). regime_scale(0.3~1.0) 리스크오프 축소. 출력: weights, rebalance_orders, backtest_mdd, data_quality, status(ok/degraded/unusable), decision_summary(headline_code+turnover+confidence), evidence_gaps.",
+            description_ko="한 가지 질문에 답합니다: 각 종목을 얼마나 담을지. 보유+후보 바스켓의 목표 비중과 리밸런스 주문(BUY/SELL+비중)을 생성합니다. forecast-enhanced, 샤프 극대화, HRP 최적화 모드를 지원합니다. 데이터 품질이 나쁘면 graceful degrade — 히스토리 부족 종목은 data_quality.excluded에 리포트, forecast coverage<50%면 HRP로 fallback, 단일 종목만 usable하면 weight=1.0. 제약 옵션: max_weight(종목당 상한, 예 0.35), min_weight(하한 drop, 예 0.02), cash_buffer(현금 유보 0.0~0.5). regime_scale(0.3~1.0) 리스크오프 축소. 출력: weights, rebalance_orders, backtest_mdd, data_quality, status(ok/degraded/unusable), decision_summary(headline_code+turnover+confidence), evidence_gaps.",
             sort_order=120,
         ),
         _tool(
@@ -260,23 +260,23 @@ def _base_entries(
         ),
         _tool(
             tool_id="fetch_reddit_sentiment",
-            description="Fetches recent Reddit posts mentioning a ticker from finance subreddits for retail sentiment.",
+            description="Fetches recent Reddit posts from finance subreddits for retail sentiment.",
             category="sentiment",
             tier="optional",
             callable=st.fetch_reddit_sentiment,
             label_ko="레딧 여론 수집",
-            description_ko="레딧의 금융 서브레딧(r/wallstreetbets, r/stocks 등)에서 특정 종목에 대한 최근 게시글과 댓글을 수집하여 개인 투자자 심리를 파악합니다. 밈 주식 열풍이나 소셜 모멘텀을 포착할 때 유용합니다.",
+            description_ko="레딧의 금융 서브레딧(r/wallstreetbets, r/stocks 등)에서 최근 게시글과 댓글을 수집하여 개인 투자자 심리를 파악합니다. 밈 주식 열풍이나 소셜 모멘텀을 포착할 때 유용합니다.",
             enabled=bool(settings.reddit_sentiment_enabled),
             sort_order=230,
         ),
         _tool(
             tool_id="fetch_sec_filings",
-            description="Fetches recent SEC filings (10-K, 10-Q, 8-K, etc.) for a ticker from EDGAR.",
+            description="Fetches recent SEC filings (10-K, 10-Q, 8-K, etc.) from EDGAR.",
             category="sentiment",
             tier="optional",
             callable=st.fetch_sec_filings,
             label_ko="SEC 공시 조회",
-            description_ko="EDGAR에서 특정 종목의 최근 SEC 공시(10-K 연간보고서, 10-Q 분기보고서, 8-K 수시공시 등)를 조회합니다. 공시 종류·제출일·제목을 반환하여 중요한 기업 이벤트를 빠르게 확인할 수 있습니다.",
+            description_ko="EDGAR에서 최근 SEC 공시(10-K 연간보고서, 10-Q 분기보고서, 8-K 수시공시 등)를 조회합니다. 공시 종류·제출일·제목을 반환하여 중요한 기업 이벤트를 빠르게 확인할 수 있습니다.",
             sort_order=240,
         ),
         _tool(
