@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from datetime import date, datetime, timezone
 from types import SimpleNamespace
@@ -153,6 +154,59 @@ def test_apply_tenant_runtime_credentials_applies_secret_payload(monkeypatch) ->
     assert settings.openai_api_key == "tenant-openai"
     assert settings.gemini_api_key == ""
     assert settings.anthropic_api_key == "tenant-anthropic"
+
+
+def test_apply_tenant_runtime_credentials_clears_base_kis_values(monkeypatch) -> None:
+    monkeypatch.setenv("ARENA_TENANT_ID", "tenant-a")
+    settings = load_settings()
+    settings.kis_api_key = "server-kis-key"
+    settings.kis_api_secret = "server-kis-secret"
+    settings.kis_paper_api_key = "server-paper-key"
+    settings.kis_paper_api_secret = "server-paper-secret"
+    settings.kis_account_no = "1234567801"
+    settings.kis_secret_name = "KISAPI"
+
+    repo = _FakeRepo(
+        row={
+            "tenant_id": "tenant-a",
+            "kis_secret_name": "local-tenant-a-kis",
+            "model_secret_name": "",
+            "kis_env": "real",
+        }
+    )
+
+    out = cli._apply_tenant_runtime_credentials(settings, repo)
+
+    assert out is not None
+    assert settings.kis_secret_name == "local-tenant-a-kis"
+    assert settings.kis_api_key == ""
+    assert settings.kis_api_secret == ""
+    assert settings.kis_paper_api_key == ""
+    assert settings.kis_paper_api_secret == ""
+    assert settings.kis_account_no == ""
+
+
+def test_load_secret_json_reads_local_credential_file(monkeypatch, tmp_path) -> None:
+    credentials_path = tmp_path / "credentials.json"
+    credentials_path.write_text(
+        json.dumps(
+            {
+                "local-tenant-a-models": {
+                    "openai_api_key": "tenant-openai",
+                    "gemini_api_key": "tenant-gemini",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ARENA_LOCAL_CREDENTIALS_FILE", str(credentials_path))
+
+    out = cli._load_secret_json(project="", secret_name="local-tenant-a-models")
+
+    assert out == {
+        "openai_api_key": "tenant-openai",
+        "gemini_api_key": "tenant-gemini",
+    }
 
 
 def test_apply_tenant_runtime_credentials_applies_provider_secret_payload(monkeypatch) -> None:
@@ -384,7 +438,7 @@ def test_prepare_kis_command_repo_applies_runtime_overrides_before_validation(mo
 
     def _fake_apply_credentials(settings, repo, *, tenant_id=None):
         calls.append(("credentials", tenant_id))
-        return {"tenant_id": tenant_id}
+        return {"tenant_id": tenant_id, "kis_secret_name": "kis-midnightnnn"}
 
     def _fake_apply_runtime_overrides(settings, repo, tenant_id):
         calls.append(("overrides", tenant_id))
@@ -410,6 +464,32 @@ def test_prepare_kis_command_repo_applies_runtime_overrides_before_validation(mo
         ("overrides", "midnightnnn"),
     ]
     assert validations == [(True, {"require_kis": True})]
+
+
+def test_prepare_kis_command_repo_rejects_missing_runtime_credentials(monkeypatch) -> None:
+    settings = load_settings()
+    settings.kis_secret_name = "KISAPI"
+    settings.kis_api_key = "server-key"
+    settings.kis_api_secret = "server-secret"
+
+    class _Repo(_FakeRepo):
+        def ensure_dataset(self):
+            pass
+
+        def ensure_tables(self):
+            pass
+
+    repo = _Repo(row=None)
+
+    monkeypatch.setenv("ARENA_TENANT_ID", "tenant-a")
+    monkeypatch.setattr(cli, "_repo_or_exit", lambda settings, tenant_id=None: repo)
+
+    with pytest.raises(RuntimeError, match="tenant runtime credentials missing: tenant=tenant-a"):
+        cli._prepare_kis_command_repo(settings)
+
+    assert settings.kis_secret_name == ""
+    assert settings.kis_api_key == ""
+    assert settings.kis_api_secret == ""
 
 
 def test_run_pipeline_configures_logging_before_weekend_skip(monkeypatch) -> None:

@@ -48,12 +48,36 @@ arena/                           Core business logic
 │   ├── adk_runner_state.py      Mutable execution state tracking (545L)
 │   ├── adk_tool_compaction.py   Tool result compaction (484L)
 │   ├── adk_tool_config.py       Tool configuration/selection (140L)
+│   ├── adk_tool_helpers.py      ADK tool schema/no-op shims shared by dev_ui + investment_chat (27L)
 │   ├── base.py                  TradingAgent protocol (24L)
 │   ├── llm_params.py            Per-provider sampling/token params (165L)
 │   ├── memory_compaction_agent.py  Post-cycle lesson synthesis (786L)
 │   ├── research_agent.py        Gemini + Google Search Grounding (323L)
 │   ├── support_model.py         Helper model builder (105L)
-│   └── prompts/                  Default system/core prompt text files
+│   ├── investment_chat/          User-facing chat advisor agent (15 files)
+│   │   ├── factory.py           ADK Agent builder + chat tool wrapping (118L)
+│   │   ├── registry.py          read-only chat tool registry (analysis whitelist + write marker filter) (48L)
+│   │   ├── tools.py             account/history/order entry aggregator (17L)
+│   │   ├── account_tools.py     stored snapshot + KIS account refresh + sleeve snapshot (201L)
+│   │   ├── history_tools.py     persisted trade history reader (188L)
+│   │   ├── order_tools.py       validate_order_draft + submit_approved_order (2-step approval) (420L)
+│   │   ├── drafts.py            approval_token + arena_config-backed draft store (41L)
+│   │   ├── audit.py             append_runtime_audit_log + tenant config wrapper (60L)
+│   │   ├── memory.py            chat-decision semantic reflection writer (56L)
+│   │   ├── scope.py             account vs agent_sleeve scope + strategy_refs (69L)
+│   │   ├── locks.py             tenant-keyed write RLock (12L)
+│   │   ├── context.py           ContextVars (tenant/user/provider/model) + tenant normalizer (12L)
+│   │   ├── constants.py         APP_NAME/AGENT_ID + analysis whitelist + write markers (40L)
+│   │   ├── utils.py             snapshot/sources/tenant scoping helpers (120L)
+│   │   └── __init__.py
+│   └── prompts/                  Compatibility shim → re-exports arena.prompts.prompt_pack
+├── prompts/                      Central prompt templates + renderers
+│   ├── loader.py                File loader + cached `format_map` renderer (42L)
+│   ├── prompt_pack.py           PromptPack: cycle prompts + investment chat instruction (320L)
+│   ├── memory.py                Memory compaction + relation extraction prompt builders (51L)
+│   ├── adk/                     core_prompt.txt + system_prompt.txt (cycle agent defaults)
+│   ├── investment_chat/         system_prompt.txt (chat advisor instruction)
+│   └── memory/                  compaction_system / relation_extraction_system / relation_extraction_user_template
 ├── memory/                       Multi-tier long-term memory system
 │   ├── policy.py                Single source for all memory controls — 10 groups (2,817L)
 │   ├── store.py                 Write/retrieve events with tier + tagging + graph (887L)
@@ -74,7 +98,8 @@ arena/                           Core business logic
 │   ├── semantic_extractor.py    LLM triple extractor + run audit (429L)
 │   └── semantic_tuning.py       Shadow↔inject auto-tuner with quality gates (638L)
 ├── ui/                           Admin dashboard (FastAPI, modular routes)
-│   ├── app.py                   Main FastAPI router (637L)
+│   ├── app.py                   Main FastAPI router + investment-chat ADK mount (637L)
+│   ├── investment_chat_adk.py   Mounts ADK FastAPI dev-ui at /investment-chat/adk (loader, sessions, static, auth gate) (348L)
 │   ├── routes/                   Route modules
 │   │   ├── auth.py              Google OAuth (269L)
 │   │   ├── board.py             Board viewer (268L)
@@ -83,6 +108,7 @@ arena/                           Core business logic
 │   │   ├── sleeves.py           Sleeve management (859L)
 │   │   ├── ops.py               Operations page (224L)
 │   │   ├── showcase.py          Public showcase page (564L)
+│   │   ├── investment_chat.py   Chat page shell + provider/model selector (156L)
 │   │   ├── settings_page.py     Settings page render (456L)
 │   │   ├── settings_admin.py    Settings CRUD API (1,102L)
 │   │   ├── settings_render.py   Render dispatcher (21L)
@@ -92,12 +118,12 @@ arena/                           Core business logic
 │   │   ├── settings_render_scripts.py   Script management (205L)
 │   │   ├── capital_data.py      Capital data API (294L)
 │   │   └── viewer.py            Data viewer (48L)
-│   ├── templates/               Jinja2 templates (23 files)
+│   ├── templates/               Jinja2 templates (24 files, includes investment_chat_body.jinja2)
 │   ├── vendor/                   Bundled JS libs (three.min.js, 3d-force-graph.min.js)
 │   ├── memory.py                3D memory graph builder + routes (968L)
 │   ├── viewer_data.py           Viewer data assembly (1,024L)
 │   ├── viewer_analytics.py      Analytics computations (96L)
-│   ├── layout.py                Base layout helpers (96L)
+│   ├── layout.py                Base layout helpers + sidebar nav + collapse toggle (96L)
 │   ├── http.py                  JSON/HTML response helpers (22L)
 │   ├── access.py                Access control (60L)
 │   ├── provisioning.py          Tenant auto-provisioning (194L)
@@ -313,6 +339,8 @@ OSS quickstart / 로컬 평가용. GCP 결제·인증 없이 동일 코드 경�
 
 `LocalRepository.__getattr__` 는 5개 로컬 store에 위임하고, 미구현 surface(예: 일부 BQ-전용 dashboard 쿼리)는 `AttributeError`를 던져 `hasattr(repo, "...")` 기반 feature detection이 그대로 동작합니다.
 
+`DuckDBSession`은 BigQuery 방언 SQL을 그대로 받기 위해 실행 전 정규식 폴리필을 통과시킵니다 — `IN UNNEST(arr) → IN (SELECT unnest(arr))`, `TIMESTAMP_SUB/ADD → ± INTERVAL`, `CURRENT_TIMESTAMP() → CURRENT_TIMESTAMP`, `DATE(ts, "tz") → CAST(ts AS DATE)`, 그리고 bound 파라미터 형태의 `INTERVAL $days DAY → ($days * INTERVAL '1 day')`. memory store에는 사이클 단위 회상을 위한 `memory_events_for_cycle`(payload JSON에서 cycle_id를 fallback 추출)이 추가되어 chat agent와 batch agent가 같은 store를 통해 동일 cycle context를 조회할 수 있습니다.
+
 ### 3.2 Schema & Tables (`schema.py`)
 
 40+ 테이블, 날짜 파티셔닝 + tenant/agent/ticker 클러스터링:
@@ -394,7 +422,7 @@ Expected State ←→ Broker Snapshot (비교)
 
 ### 4.1 ADK Agent Architecture (Modular Decomposition)
 
-기존 단일 `adk_agents.py`(~3000L)가 12개의 `adk_*` 모듈로 분리됨:
+기존 단일 `adk_agents.py`(~3000L)가 13개의 `adk_*` 모듈로 분리됨:
 
 ```
 AdkTradingAgent.generate(context)
@@ -413,12 +441,13 @@ AdkTradingAgent.generate(context)
   │
   ├── adk_order_support.py      주문 지원 유틸리티 (시장 데이터, 거래소 코드)
   ├── adk_models.py             LLM 모델 래핑/라우팅
+  ├── adk_tool_helpers.py       schema metadata + no-op ledger/search shims (dev_ui + investment_chat 공유)
   ├── llm_params.py             프로바이더별 샘플링/토큰 파라미터
   │
   └── adk_agents.py             최상위 클래스 + 빌더 (1,702L)
 ```
 
-기본 프롬프트 텍스트는 `agents/prompts/{core_prompt,system_prompt}.txt`에 파일로 보관되며, tenant 오버라이드는 `arena_config.system_prompt`로 관리.
+기본 프롬프트 텍스트는 `arena/prompts/adk/{core_prompt,system_prompt}.txt`(공통 패키지)로 통합되었고, tenant 오버라이드는 `arena_config.system_prompt`로 관리. `arena/agents/prompts/`는 이전 import 경로를 유지하기 위한 compat shim — 실제 로딩/렌더링은 `arena/prompts/{loader,prompt_pack,memory}.py`가 담당. 메모리 compaction과 semantic relation extractor도 동일 패키지의 `memory/*.txt`를 사용해 시스템 프롬프트를 코드에서 분리했습니다.
 
 ### 4.2 Model Mapping
 
@@ -453,6 +482,45 @@ Per-agent 모델 오버라이드: `agents_config[].model` in config
 - 실행 로그 + 보드 포스트 + thesis chain → helper LLM으로 교훈 추출
 - `MemoryEvent(event_type='strategy_reflection')` 저장
 - Thesis chain 기반 post-mortem 우선
+- 시스템 프롬프트는 `arena/prompts/memory/compaction_system.txt`에서 로드
+
+### 4.6 Investment Chat Agent (`agents/investment_chat/`)
+
+운영자/사용자가 동일 ADK 런타임 위에서 채팅으로 계좌·슬리브를 질의하고, 사람 손으로 한 주문을 검증·체결할 수 있게 하는 별도 ADK Agent. 사이클을 도는 batch agent와 LLM·툴·메모리 인프라는 공유하지만, 독립 인스턴스로 빌드되어 자율 사이클 흐름을 침범하지 않습니다.
+
+```
+build_investment_chat_agent(repo, settings, tenant_id, registry, provider, model_override)
+  │
+  ├── prompts/prompt_pack.PromptPack.render_investment_chat_instruction()
+  │     └── arena/prompts/investment_chat/system_prompt.txt
+  │
+  ├── investment_chat/registry.build_chat_registry()
+  │     ├── default_registry.clone() + chat용 _ContextTools 재바인딩
+  │     ├── CHAT_ANALYSIS_TOOL_IDS 화이트리스트만 통과
+  │     ├── WRITE_TOOL_MARKERS(execute/submit/place_order/broker/sync_account/write_/delete_/upsert_) 자동 차단
+  │     └── chat 전용 entry 추가 — account/history/order
+  │
+  ├── adk_runner_bootstrap.build_tool_wrapper(...)
+  │     └── adk_tool_helpers.{apply_tool_schema_metadata, noop_update_candidate_ledger}
+  │
+  └── adk_models._resolve_model(provider, settings, model_override)
+```
+
+| Tool group | Tools | Purpose |
+|------------|-------|---------|
+| **Chat account** | `get_account_snapshot`, `refresh_account_snapshot`, `get_agent_sleeve_snapshot` | 저장된 총계좌/슬리브 스냅샷 조회 + KIS 계좌 즉시 새로고침 (테넌트 KIS secret 없으면 차단) |
+| **Chat history** | `get_trade_history` | 체결/주문 이력 — `judgment_source` 분리(`user+investment_chat` vs 자율 batch) |
+| **Chat order** | `validate_order_draft`, `submit_approved_order` | 2단 승인 주문. validate에서 `RiskEngine` 통과한 draft를 arena_config에 저장(`expires_at`, 기본 15분), 사용자가 정확히 `CONFIRM <approval_token>` 문구를 입력해야 submit 가능 |
+| **Inherited analysis** | recommend_opportunities, optimize_portfolio, forecast_returns, technical_signals, sector_summary, get_fundamentals, index_snapshot, fear_greed_index, earnings_calendar, fetch_reddit_sentiment, fetch_sec_filings, macro_snapshot, search_past_experiences, search_peer_lessons, get_research_briefing, portfolio_diagnosis, trade_performance, screen_market | 사이클 도구를 공유 — 단, write/execute 마커는 위 필터로 제거 |
+
+핵심 안전 장치:
+
+- **Scope contract** — 모든 주문은 `scope ∈ {account, agent_sleeve}`로 명시. agent_sleeve는 `agent_id`로 대상 batch agent를 지정해야 하며, account는 `AGENT_ID="investment_chat"`로 강제 매핑. snapshot 미존재 시 `missing_account_snapshot` 반환.
+- **Approval token** — `OrderIntent` fingerprint + nonce를 SHA-256으로 압축한 24자 토큰. 동일 draft를 두 번 submit하면 `already_submitted` idempotent 응답.
+- **Tenant write lock** — `locks.tenant_lock(tenant_id)`(threading RLock)로 같은 테넌트의 chat 주문이 직렬화. `repo_tenant_scope`로 store 단위 tenant 변수도 함께 바인딩.
+- **Audit + memory trail** — `chat_order_validate`/`chat_order_submit`/`chat_account_refresh`는 `runtime_audit_log`에 기록되고, 체결 성공 시 semantic-tier `MemoryEvent`(`source="investment_chat_order_decision"`, `judgment_source="user+investment_chat"`)가 남아 batch agent의 회상 대상에 포함됩니다.
+
+UI 측 마운트는 §12.2 참조.
 
 ---
 
@@ -670,6 +738,18 @@ Causal graph 위에 얹힌 concept-level 의미 관계 레이어. 투자 LLM과 
 - `signals.py` — Layer 1 signal 정의(momentum, pullback, 평균회귀, 저변동성, forecast, RSI/MA/볼린저, EP/BP/SP/ROE/growth/debt) + `REGIME_FEATURES`
 - `ranker.py` — Signal별 IC를 regime feature로 조건화하여 학습. Runtime score `= Σ predicted_IC_i(today_regime) × signal_i(ticker)`. 결과를 `opportunity_ranker_scores_latest`에 저장 + per-signal contribution, `opportunity_ranker_runs`에 학습 감사 로그. Tactical ETP(인버스/레버리지/헤지)는 별도 profile로 분리.
 
+### 6.8 Investment Chat Tools (`agents/investment_chat/`)
+
+위 도구들은 사이클 batch agent와 chat agent가 공유합니다. chat에서만 노출되는 도구는 `agents/investment_chat/`이 자체 entry로 구성:
+
+| Category | Tool | Purpose |
+|----------|------|---------|
+| Account | `get_account_snapshot` / `refresh_account_snapshot` / `get_agent_sleeve_snapshot` | 저장된 총계좌·슬리브 스냅샷 + 테넌트 KIS 자격증명이 있을 때만 동기화 |
+| History | `get_trade_history` | 정확한 체결/주문 이력. `judgment_source`가 `user+investment_chat`인지 자율 batch인지 분리 |
+| Order | `validate_order_draft` / `submit_approved_order` | 2단 승인 — validate에서 risk 통과한 draft를 arena_config에 TTL 저장, `CONFIRM <token>` 정확 일치 시 submit |
+
+도구 어댑팅은 batch agent와 동일하게 `adk_runner_bootstrap.build_tool_wrapper`를 통과하지만, candidate ledger와 ReAct memory injection은 `adk_tool_helpers.noop_*`로 비활성화 (사이클 메트릭에 영향 없도록).
+
 ---
 
 ## 7. Context Builder
@@ -726,6 +806,34 @@ ExecutionGateway.process(intent, snapshot)
 | `KISOpenTradingBroker` | 실거래 (KIS API → US + KOSPI) |
 | `PaperBroker` | 시뮬레이션 (즉시 체결) |
 | `KISHttpBroker` | 사용자 엔드포인트 기반 |
+
+### 8.3 Chat-Driven Order Flow
+
+투자챗봇이 내는 주문도 동일한 `ExecutionGateway` + `RiskEngine` + broker 조합을 거치며, 차이는 LLM이 직접 게이트웨이를 호출하지 않고 사용자 confirmation을 사이에 끼운다는 점뿐:
+
+```
+chat agent
+  │
+  ▼
+validate_order_draft(scope, agent_id, ticker, side, qty, price_krw, ...)
+  ├── snapshot_for_order_scope() → account 또는 agent_sleeve snapshot
+  ├── RiskEngine.evaluate(intent, snapshot, recent_metrics)
+  ├── approval_token = sha256(fingerprint + nonce)[:24]
+  ├── arena_config[draft_key] = { intent, risk, expires_at, approved_by }
+  └── return { approval_token, required_confirmation: "CONFIRM <token>" }
+        │
+        ▼ user types "CONFIRM <token>"
+        │
+submit_approved_order(approval_token, confirmation_text)
+  ├── load_draft + 만료/중복 submit 가드
+  ├── tenant_lock(tenant) + repo_tenant_scope(repo, tenant)
+  ├── ExecutionGateway.process(intent, snapshot)         ← batch와 동일 경로
+  ├── 성공 시 MemoryStore.record_reflection(semantic, judgment_source="user+investment_chat")
+  ├── append_runtime_audit_log(action="chat_order_submit")
+  └── return execution_report + memory_warnings
+```
+
+검증 단계에서 risk가 떨어지면 draft는 `risk_rejected`로 남고 submit은 거부됩니다. 사이클 batch agent와 chat이 같은 `ExecutionGateway`를 공유하므로 broker, ledger, sleeve replay, NAV 계산은 별도 코드 경로 없이 자동으로 일관 유지.
 
 ---
 
@@ -813,7 +921,7 @@ Per-agent 오버라이드: `AgentConfig.risk_overrides` 병합 후 평가.
 
 FastAPI Admin Dashboard — 모듈화된 라우트 구조.
 
-### Route Structure
+### 12.1 Route Structure
 
 | Module | Path | Purpose |
 |--------|------|---------|
@@ -824,6 +932,7 @@ FastAPI Admin Dashboard — 모듈화된 라우트 구조.
 | `trades.py` | `/trades` | 실행 이력 |
 | `sleeves.py` | `/sleeves` | 슬리브 관리 |
 | `ops.py` | `/ops` | 운영 상태 |
+| `investment_chat.py` | `/investment-chat` | 투자챗봇 페이지 (provider/model 선택 + iframe shell) |
 | `settings_page.py` | `/settings` | 설정 페이지 |
 | `settings_admin.py` | `/admin/*` | 설정 CRUD (에이전트, 리스크, 도구, MCP, 메모리) |
 | `settings_render_agents.py` | — | 에이전트 설정 패널 |
@@ -833,13 +942,39 @@ FastAPI Admin Dashboard — 모듈화된 라우트 구조.
 | `capital_data.py` | `/api/capital/*` | 자본 데이터 API |
 | `viewer.py` | `/viewer/*` | 데이터 뷰어 |
 
-### Memory 3D Graph (`memory.py`, 968L)
+사이드바 nav는 `arena/ui/layout.py:tailwind_layout`이 조립합니다. `tenant`가 있으면 `?tenant_id=...`를 자동으로 붙이고, `hide_page_header`/`main_class` 옵션으로 챗봇처럼 헤더 없이 풀폭 iframe을 그릴 수 있습니다. `base_layout.jinja2`에는 데스크톱 전용 사이드바 collapse 토글이 추가되어 있어 `body.sidebar-collapsed` 토글만으로 너비를 `--sidebar-collapsed-w`로 줄입니다.
+
+### 12.2 Investment Chat Mount (`ui/investment_chat_adk.py`, 348L)
+
+`/investment-chat`(셸 페이지) + `/investment-chat/adk`(ADK FastAPI dev-ui sub-app)의 2단 구성. 기존 admin UI에 ADK가 제공하는 풀 챗 UX를 끼워 넣되, 인증·테넌트·모델 선택은 admin 측 컨벤션을 그대로 따릅니다.
+
+```
+/investment-chat (HTML shell)
+  └── form: provider/model select → query string으로 sub-app 재로드
+       └── iframe → /investment-chat/adk/dev-ui/
+                       └── google.adk.cli.fast_api.get_fast_api_app(
+                              agent_loader=InvestmentChatAgentLoader,
+                              session_service_uri=sqlite:///data/arena-investment-chat-adk-sessions.sqlite,
+                              artifact_service_uri=memory://,
+                              web=False, url_prefix=/investment-chat/adk,
+                              auto_create_session=False)
+```
+
+| 구성요소 | 역할 |
+|---------|------|
+| `InvestmentChatAgentLoader` | tenant + provider + model 조합을 base64로 인코딩한 `app_name`으로 ADK에 노출. 같은 조합은 LRU(64)로 캐시. |
+| `_install_auth_gate` middleware | 세션/쿼리/env(`ARENA_CHAT_*`)에서 tenant·provider·model을 확정해 `REQUEST_*` ContextVar에 바인딩. `auth_enabled=true`면 미로그인 HTML 요청은 `/auth/google/login`으로 redirect, API 요청은 `401 auth required`. |
+| `_mount_adk_static` | ADK 패키지의 `browser/` 정적 자산을 임시 디렉터리로 복사하고, `assets/config/runtime-config.json`의 `backendUrl`을 마운트 prefix로 patch (ADK 버전 + prefix 해시로 캐시). |
+| Session/Artifact store | sqlite 파일은 `arena/data/arena-investment-chat-adk-sessions.sqlite`(env로 override 가능), artifact는 in-memory 기본. |
+| Provider/Model 선택 | `_CHAT_MODEL_PRESETS`에서 provider별 후보를 노출, default는 `default_model_for_provider(settings, provider)`. 사용자가 폼에서 바꾸면 query string과 세션에 저장. |
+
+### 12.3 Memory 3D Graph (`memory.py`, 968L)
 
 10개 그룹 → Branch → Leaf Field 구조. Click node → edit value → save to arena_config. Three.js + 3d-force-graph는 `arena/ui/vendor/`에 번들.
 
-### Templates
+### 12.4 Templates
 
-23개 Jinja2 템플릿: base/board/nav/trades/sleeves/ops/settings + memory panel + 인증 알림 + 자격증명 카드.
+24개 Jinja2 템플릿: base/board/nav/trades/sleeves/ops/settings + memory panel + 인증 알림 + 자격증명 카드 + `investment_chat_body.jinja2`(provider/model select 폼 + ADK iframe).
 
 ---
 
@@ -878,7 +1013,7 @@ FastAPI Admin Dashboard — 모듈화된 라우트 구조.
 |------|---------|-------|----------|
 | Boot defaults | `.env` / env vars | process | 기본 Settings 부트스트랩 (`ARENA_MODE` 포함) |
 | Secret metadata | `runtime_credentials` (BQ) / 동일 컬럼을 가진 DuckDB 테이블 | tenant | KIS/모델 secret, key availability |
-| Secret payload | Secret Manager (gcp) / `~/.llm-arena/credentials.json` mode 0600 (local) | tenant | KIS 계좌 + 모델 API 키 페이로드 |
+| Secret payload | Secret Manager (gcp) / `~/.llm-arena/credentials.json` mode 0600 (local) | tenant | KIS 계좌 + 모델 API 키 페이로드. `kis_secret_name`이 `local-` 접두면 `arena/security/credential_store_env.load_local_secret_payload`로 동일 JSON 파일을 직접 읽어 GCP Secret Manager 호출을 우회 (cli_runtime, OpenTradingClient 공통). 이 경로는 `_apply_tenant_runtime_credentials`/`_prepare_kis_command_repo`에서 KIS 필드를 명시 클리어한 뒤 적용해, 다른 테넌트의 fallback 자격증명이 새지 않도록 강제합니다. |
 | Editable config | `arena_config` | tenant | 프롬프트, 리스크, 에이전트, 메모리 정책 |
 | Safety gate | distribution_mode, real_trading_approved | process + tenant | 실거래 허용 여부 |
 
@@ -1087,7 +1222,8 @@ class TradingAgent(Protocol):
 - Checkpoint는 recovery seed, canonical source는 이벤트
 
 ### Agent Decomposition
-- 12개 `adk_*` 파일로 ADK 에이전트 책임 분리 + helper/research/compaction 3개 파일
+- 13개 `adk_*` 파일로 ADK 에이전트 책임 분리 + base/llm_params + research/compaction/support 3개 파일
+- chat 전용 빌더(`agents/investment_chat/`)는 동일 ADK 빌딩 블록(`adk_runner_bootstrap`, `adk_models`, `adk_tool_helpers`, `_ContextTools`)을 재사용해 batch 사이클과 코드 경로를 공유
 - 테스트 용이성 + 단일 책임 원칙
 
 ### Virtual Sleeving
@@ -1172,6 +1308,8 @@ class TradingAgent(Protocol):
 11. **ADK tools are async** — LLM 호출은 ReAct 루프에서 블로킹. 동시 에이전트는 ThreadPoolExecutor.
 12. **Tenant isolation** — 모든 쿼리 `tenant_id` 필터.
 13. **Market hours** — 스케줄링 전 holiday 체크 필수.
+14. **Investment chat scope** — chat의 모든 주문은 `judgment_source="user+investment_chat"`로 기록되며 `OrderIntent.agent_id`는 scope에 따라 `investment_chat`(account) 또는 대상 batch agent(`agent_sleeve`)로 강제. batch agent가 자율 판단한 것처럼 보이지 않게 하기 위해 strategy_refs에 `source:investment_chat` + `judgment:user+investment_chat`이 함께 박힙니다.
+15. **Prompt 패키지 위치** — `arena/agents/prompts/`는 compat shim. 신규 프롬프트는 `arena/prompts/{adk,investment_chat,memory}/*.txt`에 두고, `PromptPack`(또는 `arena.prompts.memory`의 헬퍼)를 통해 로드해야 lru_cache + tenant override 경로가 일관되게 적용됩니다.
 
 ---
 
@@ -1183,7 +1321,9 @@ class TradingAgent(Protocol):
 | **Config** | `arena/config.py` | 1,137 |
 | **Data** | `arena/data/bq.py` + `bigquery/` (8 stores + session) | 144 + 8,877 |
 | **Schema** | `arena/data/schema.py` | 1,106 |
-| **Agents** | `arena/agents/` (12 adk_* + base + llm_params + support/research/compaction) | 5,862 + 1,403 |
+| **Agents** | `arena/agents/` (13 adk_* + base + llm_params + support/research/compaction) | 5,889 + 1,403 |
+| **Investment Chat** | `arena/agents/investment_chat/` (15 files) + `arena/ui/investment_chat_adk.py` + route + template | 1,287 + 348 + 156 + 58 |
+| **Prompts** | `arena/prompts/` (loader/prompt_pack/memory + adk/investment_chat/memory text) | 413 + text |
 | **Memory** | `arena/memory/` (16 files) | 8,859 |
 | **Tools** | `arena/tools/` (9 files) | 5,358 |
 | **Recommendation** | `arena/recommendation/` (ranker + signals) | 918 |

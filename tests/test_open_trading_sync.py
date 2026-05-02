@@ -609,6 +609,56 @@ def test_account_sync_overseas_prefers_current_quantity_over_carry_quantity() ->
     assert snapshot.positions["CCEP"].quantity == pytest.approx(7.0)
 
 
+def test_account_sync_overseas_reads_native_usd_cash_from_currency_rows() -> None:
+    repo = FakeRepo()
+    settings = _settings("nasdaq", ["AAPL"])
+    client = FakeClient()
+
+    def _present_balance(*, tr_mket_cd=None, max_pages=8):
+        _ = (tr_mket_cd, max_pages)
+        return (
+            [
+                {
+                    "pdno": "AAPL",
+                    "cblc_qty13": "2",
+                    "ccld_qty_smtl1": "2",
+                    "ord_psbl_qty1": "2",
+                    "avg_unpr3": "100",
+                    "ovrs_now_pric1": "120",
+                    "bass_exrt": "1476.1",
+                    "ovrs_excg_cd": "NASD",
+                    "tr_crcy_cd": "USD",
+                }
+            ],
+            [
+                {
+                    "crcy_cd": "USD",
+                    "frcr_dncl_amt_2": "179.750000",
+                    "frcr_drwg_psbl_amt_1": "179.750000",
+                    "frcr_evlu_amt2": "265328.000000",
+                }
+            ],
+            [{"tot_dncl_amt": "1173554", "frcr_use_psbl_amt": "265328.00", "tot_asst_amt": "1523554"}],
+        )
+
+    client.get_overseas_present_balance = _present_balance
+    snapshot = AccountSyncService(settings=settings, repo=repo, client=client).sync_account_snapshot()
+
+    assert snapshot.cash_krw == pytest.approx(1_173_554.0)
+    assert snapshot.cash_foreign == pytest.approx(179.75)
+    assert snapshot.cash_foreign_currency == "USD"
+    assert snapshot.usd_krw_rate == pytest.approx(1476.1)
+
+
+def test_account_sync_combined_preserves_usd_fx_rate() -> None:
+    repo = FakeRepo()
+    settings = _settings("us,kospi", ["AAPL", "005930"])
+    snapshot = AccountSyncService(settings=settings, repo=repo, client=FakeClient()).sync_account_snapshot()
+
+    assert snapshot.usd_krw_rate == pytest.approx(1300.0)
+    assert snapshot.cash_foreign_currency == "USD"
+
+
 def test_account_sync_overseas_merges_multi_exchange_balances() -> None:
     repo = FakeRepo()
     settings = _settings("us", ["AAPL", "VZ"])

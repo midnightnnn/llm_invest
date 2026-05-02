@@ -104,6 +104,126 @@ class LocalMemoryStore:
             },
         )
 
+    def memory_events_for_cycle(
+        self,
+        *,
+        agent_id: str,
+        cycle_id: str,
+        event_types: list[str] | None = None,
+        limit: int = 20,
+        trading_mode: str = "paper",
+        tenant_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        tenant = self.session.resolve_tenant_id(tenant_id)
+        params: dict[str, Any] = {
+            "tenant_id": tenant,
+            "agent_id": str(agent_id or "").strip(),
+            "trading_mode": trading_mode,
+            "cycle_id": str(cycle_id or "").strip(),
+            "limit": max(1, int(limit)),
+        }
+        filters = [
+            "tenant_id = $tenant_id",
+            "agent_id = $agent_id",
+            "trading_mode = $trading_mode",
+            "("
+            "COALESCE(cycle_id, json_extract_string(payload_json, '$.cycle_id'), "
+            "json_extract_string(payload_json, '$.intent.cycle_id'), '') = $cycle_id"
+            ")",
+        ]
+        clean_types = [str(token or "").strip() for token in (event_types or []) if str(token or "").strip()]
+        if clean_types:
+            filters.append("event_type IN (SELECT unnest($event_types))")
+            params["event_types"] = clean_types
+        return self.session.fetch_rows(
+            f"""
+            SELECT {_MEMORY_SELECT_COLUMNS}
+            FROM agent_memory_events
+            WHERE {' AND '.join(filters)}
+            ORDER BY created_at DESC
+            LIMIT $limit
+            """,
+            params,
+        )
+
+    def latest_memory_compaction_cycle_id(
+        self,
+        *,
+        agent_ids: list[str],
+        event_types: list[str],
+        trading_mode: str = "paper",
+        tenant_id: str | None = None,
+    ) -> str:
+        tenant = self.session.resolve_tenant_id(tenant_id)
+        clean_agents = [str(token or "").strip() for token in (agent_ids or []) if str(token or "").strip()]
+        clean_types = [str(token or "").strip() for token in (event_types or []) if str(token or "").strip()]
+        if not clean_agents or not clean_types:
+            return ""
+        rows = self.session.fetch_rows(
+            """
+            SELECT cycle_id_key AS cycle_id
+            FROM (
+              SELECT
+                COALESCE(
+                  cycle_id,
+                  json_extract_string(payload_json, '$.cycle_id'),
+                  json_extract_string(payload_json, '$.intent.cycle_id'),
+                  ''
+                ) AS cycle_id_key,
+                created_at
+              FROM agent_memory_events
+              WHERE tenant_id = $tenant_id
+                AND agent_id IN (SELECT unnest($agent_ids))
+                AND trading_mode = $trading_mode
+                AND event_type IN (SELECT unnest($event_types))
+            )
+            WHERE cycle_id_key <> ''
+            GROUP BY cycle_id_key
+            ORDER BY MAX(created_at) DESC
+            LIMIT 1
+            """,
+            {
+                "tenant_id": tenant,
+                "agent_ids": clean_agents,
+                "event_types": clean_types,
+                "trading_mode": trading_mode,
+            },
+        )
+        return str((rows[0] if rows else {}).get("cycle_id") or "").strip()
+
+    def compaction_reflections_for_cycle(
+        self,
+        *,
+        agent_id: str,
+        cycle_id: str,
+        trading_mode: str = "paper",
+        limit: int = 10,
+        tenant_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        tenant = self.session.resolve_tenant_id(tenant_id)
+        return self.session.fetch_rows(
+            f"""
+            SELECT {_MEMORY_SELECT_COLUMNS}
+            FROM agent_memory_events
+            WHERE tenant_id = $tenant_id
+              AND agent_id = $agent_id
+              AND trading_mode = $trading_mode
+              AND event_type = 'strategy_reflection'
+              AND COALESCE(cycle_id, json_extract_string(payload_json, '$.cycle_id'), '') = $cycle_id
+              AND json_extract_string(payload_json, '$.source') IN (SELECT unnest($sources))
+            ORDER BY created_at DESC
+            LIMIT $limit
+            """,
+            {
+                "tenant_id": tenant,
+                "agent_id": str(agent_id or "").strip(),
+                "cycle_id": str(cycle_id or "").strip(),
+                "trading_mode": trading_mode,
+                "sources": ["memory_compaction", "thesis_chain_compaction"],
+                "limit": max(1, int(limit)),
+            },
+        )
+
     # ------------------------------------------------------------------
     # Board posts
     # ------------------------------------------------------------------

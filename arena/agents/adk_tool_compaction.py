@@ -598,6 +598,33 @@ def _compact_tool_result_for_prompt(
             compacted["backtest_mdd"] = core.get("backtest_mdd")
         if core.get("error") is not None:
             compacted["error"] = core.get("error")
+    elif token == "validate_order_draft" and isinstance(core, dict):
+        risk = core.get("risk") if isinstance(core.get("risk"), dict) else {}
+        intent = core.get("intent") if isinstance(core.get("intent"), dict) else {}
+        compacted = {
+            "status": core.get("status"),
+            "tenant_id": core.get("tenant_id"),
+            "scope": core.get("scope"),
+            "target_agent_id": core.get("target_agent_id"),
+            "judgment_source": core.get("judgment_source"),
+            "intent": {
+                key: intent.get(key)
+                for key in ("ticker", "side", "quantity", "price_krw", "price_native", "quote_currency", "fx_rate", "exchange_code", "instrument_id", "rationale")
+                if intent.get(key) is not None
+            },
+            "risk": {
+                key: risk.get(key)
+                for key in ("allowed", "reason", "policy_hits")
+                if risk.get(key) is not None
+            },
+            "notional_krw": core.get("notional_krw"),
+            "submission_status": core.get("submission_status"),
+            "approval_required": core.get("approval_required"),
+            "approval_ui": "approval_card" if core.get("approval_required") else None,
+        }
+        compacted = {key: value for key, value in compacted.items() if value is not None}
+        if core.get("error") is not None:
+            compacted["error"] = core.get("error")
 
     if memory_ctx:
         compacted_memory = _compact_memory_context_rows(memory_ctx)

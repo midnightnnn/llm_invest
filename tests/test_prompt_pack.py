@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from arena.agents.prompts.prompt_pack import PromptPack
+from arena.prompts.prompt_pack import PromptPack
 from arena.tools.registry import ToolEntry, ToolRegistry
 
 
@@ -19,6 +19,22 @@ def test_prompt_pack_renders_explore_prompt_from_single_entrypoint() -> None:
     assert '"explore_status": "complete"' in prompt
     assert "Context payload JSON" in prompt
     assert '"max_tool_calls": 7' in prompt
+
+
+def test_legacy_agent_prompt_pack_import_stays_compatible() -> None:
+    from arena.agents.prompts.prompt_pack import PromptPack as LegacyPromptPack
+
+    assert LegacyPromptPack is PromptPack
+
+
+def test_prompt_pack_loads_text_templates_from_central_package() -> None:
+    from arena.prompts.loader import prompt_path
+
+    assert prompt_path("adk", "core_prompt.txt").exists()
+    assert prompt_path("adk", "system_prompt.txt").exists()
+    assert prompt_path("investment_chat", "system_prompt.txt").exists()
+    assert "{agent_id}" in PromptPack.file_core_prompt()
+    assert "적극적인 포트폴리오 관리" in PromptPack.file_user_prompt_default()
 
 
 def test_prompt_pack_renders_resume_and_board_prompts() -> None:
@@ -76,3 +92,22 @@ def test_prompt_pack_builds_tool_catalog_payload_from_registry() -> None:
         "description": "Temporary Python scratch workspace.",
     }
     assert [row["tool_id"] for row in payload] == ["scratch_run_python", "mcp_toolsets"]
+
+
+def test_prompt_pack_renders_investment_chat_instruction() -> None:
+    prompt = PromptPack.render_investment_chat_instruction(
+        tenant_id="MidNightNnN",
+        provider="gpt",
+        model_id="gpt-5.5",
+    )
+
+    assert "tenant 'midnightnnn'" in prompt
+    assert "validate_order_draft" in prompt
+    assert "get_order_approval_status" in prompt
+    assert "get_trade_history" in prompt
+    assert "scope='agent_sleeve'" in prompt
+    assert "user+investment_chat judgment" in prompt
+    assert "Default to Korean" in prompt
+    assert "approval card" in prompt
+    assert "Do not ask the user to type CONFIRM" in prompt
+    assert "exact confirmation phrase" not in prompt

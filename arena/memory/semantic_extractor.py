@@ -22,6 +22,10 @@ from arena.config import Settings
 from arena.memory.relation_ontology import ONTOLOGY_VERSION, ontology_prompt_block
 from arena.memory.relation_validation import RelationSource, RejectedRelation, validate_extracted_relations
 from arena.models import utc_now
+from arena.prompts.memory import (
+    RELATION_EXTRACTOR_SYSTEM_INSTRUCTION,
+    build_relation_extraction_prompt,
+)
 from arena.providers.registry import canonical_provider, get_provider_spec
 
 logger = logging.getLogger(__name__)
@@ -38,11 +42,7 @@ DEFAULT_MEMORY_EVENT_TYPES: tuple[str, ...] = (
     "thesis_realized",
 )
 
-_SYSTEM_INSTRUCTION = (
-    "You extract source-grounded semantic relation triples for an investment memory graph. "
-    "Use only facts explicitly present in the source. "
-    "Return JSON only."
-)
+_SYSTEM_INSTRUCTION = RELATION_EXTRACTOR_SYSTEM_INSTRUCTION
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,39 +175,10 @@ def source_from_pending_row(row: dict[str, Any], *, tenant_id: str | None = None
 
 
 def build_extraction_prompt(source: RelationSource, *, max_triples: int = 6) -> str:
-    source_payload = {
-        "source_table": source.source_table,
-        "source_id": source.source_id,
-        "source_label": source.source_label,
-        "agent_id": source.agent_id,
-        "trading_mode": source.trading_mode,
-        "cycle_id": source.cycle_id,
-        "text": source.source_text,
-    }
-    schema = {
-        "triples": [
-            {
-                "subject": {"label": "exact entity label", "type": "ticker|risk|catalyst|..."},
-                "predicate": "supports|contradicts|risk_to|caused_by|leads_to|similar_setup|invalidates|outcome_of|mentions|contains",
-                "object": {"label": "exact entity label", "type": "ticker|thesis|outcome|..."},
-                "confidence": 0.0,
-                "evidence_text": "copy one exact span from source text",
-            }
-        ]
-    }
-    return "\n\n".join(
-        [
-            "Extract up to "
-            + str(max(1, int(max_triples)))
-            + " high-signal semantic relation triples.",
-            "Prefer causal, risk, support, contradiction, invalidation, and outcome relations. Use mentions only when no stronger predicate is justified.",
-            "Every evidence_text must be copied verbatim from the source text. Do not use outside knowledge.",
-            "Use ticker type only for actual ticker symbols or exchange codes, such as NVDA or 005930. Use company for company names.",
-            "Use uppercase labels for ticker entities when the ticker has letters.",
-            ontology_prompt_block(),
-            "Return JSON matching this schema:\n" + json.dumps(schema, ensure_ascii=False),
-            "Source:\n" + json.dumps(source_payload, ensure_ascii=False, default=str),
-        ]
+    return build_relation_extraction_prompt(
+        source,
+        max_triples=max_triples,
+        ontology_block=ontology_prompt_block(),
     )
 
 

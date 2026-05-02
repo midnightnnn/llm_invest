@@ -1,2 +1,4 @@
-"""Prompt templates and renderers for ADK agents."""
+"""Compatibility package for legacy prompt imports.
 
+New prompt templates live under :mod:`arena.prompts`.
+"""

@@ -35,6 +35,7 @@
 - **에이전트가 스스로 판단** — LLM이 도구를 선택하고 이전 기억을 참조하여 매매를 결정하고 포트폴리오를 관리합니다. 
 - **에이전트간 경쟁과 협력** — 에이전트들은 게시판에 분석을 공유하고, 서로의 픽을 리뷰하고, 과거 교훈을 참조합니다
 - **에이전트 커스터마이징** — 프롬프트, 도구 구성, 기억관리, 리스크 한도를 관리자 UI에서 자유롭게 커스텀해서 나만의 투자 에이전트를 만들 수 있습니다
+- **같은 런타임 위의 챗봇 어드바이저** — 운영자가 채팅으로 동일 에이전트들에게 보유 종목을 묻고, 자율 사이클이 사용하는 동일한 리스크 엔진·실행 게이트웨이를 통해 사람이 직접 확인한 주문을 낼 수 있는 투자챗봇이 내장되어 있습니다
 
 <details>
 <summary><b>💬 에이전트 보드 예시</b></summary>
@@ -198,6 +199,7 @@ flowchart TB
         CLI(["CLI\nrun-pipeline --market us|kospi"])
         SCHED(["Cloud Scheduler\nUS 15:00 ET / KR 14:30 KST"])
         ADMIN(["관리자 UI\n프롬프트 / 리스크 / 도구 / 메모리"])
+        CHAT(["투자챗봇\nADK 챗 에이전트\n사용자 확인 주문"])
     end
 
     ORCH{{"오케스트레이터"}}
@@ -254,7 +256,7 @@ flowchart TB
     classDef gw fill:#fef3c7,stroke:#d97706,stroke-width:2px,color:#92400e
     classDef store fill:#fff7ed,stroke:#f97316,stroke-width:2px,color:#9a3412
 
-    class CLI,SCHED,ADMIN entry
+    class CLI,SCHED,ADMIN,CHAT entry
     class ORCH orch
     class SYNC,RECON,FCAST,RSRCH pipe
     class GPT,GEM,CLD agent
@@ -269,9 +271,11 @@ flowchart TB
 
 ```
 arena/
-  agents/          # ADK ReAct 에이전트 + 리서치 + 메모리 압축 + 프롬프트 파일
+  agents/          # ADK ReAct 사이클 에이전트 + 리서치 + 메모리 압축
+    investment_chat/   # 사용자용 투자챗봇 에이전트 (계좌/이력/주문 도구, 2단 승인 흐름)
+  prompts/         # 공통 프롬프트 템플릿 (adk / investment_chat / memory) + 로더
   memory/          # 장기 메모리 (저장, 벡터, 정책, 쿼리, 정리, 시맨틱 관계)
-  ui/              # 관리자 UI (FastAPI + Jinja2 + HTMX)
+  ui/              # 관리자 UI (FastAPI + Jinja2 + HTMX) + 투자챗봇 ADK 마운트
   tools/           # 도구 레지스트리 (퀀트, 센티먼트, 매크로, 컨텍스트)
   recommendation/  # recommend_opportunities 를 구동하는 signal-IC 메타 러너
   data/            # 저장 백엔드 (BigQuery + DuckDB 로컬) + 공통 스키마
@@ -284,13 +288,13 @@ arena/
   strategy/        # 전략 레퍼런스 카탈로그 + MCP 서버
   backtest/        # Walk-forward 백테스트
   board/           # 에이전트 간 게시판
-  security/        # Secret Manager 연동
+  security/        # Secret Manager 연동 (+ 로컬 JSON 자격증명 백엔드)
   config.py        # 설정 + 런타임 오버라이드
   context.py       # 컨텍스트 빌더 + 메모리 리랭킹
   orchestrator.py  # 사이클 오케스트레이션
   reconciliation.py # 상태 재조정 + 자동 복구
   risk.py          # 리스크 엔진
-tests/             # 67개 테스트 파일 (pytest)
+tests/             # 67개+ 테스트 파일 (pytest)
 scripts/           # 배포 스크립트
 ```
 
@@ -311,6 +315,47 @@ scripts/           # 배포 스크립트
 | **도구** | 사이클별 내장 도구 켜기/끄기 |
 | **MCP** | 커스텀 도구 서버 등록 |
 | **메모리** | 메모리 정책의 3D 신경망 그래프 시각화 |
+| **투자챗봇** | 에이전트와 채팅으로 보유 종목을 묻고, 동일한 리스크 게이트웨이를 통해 사람이 확인한 주문을 낼 수 있는 페이지 |
+
+---
+
+## 투자챗봇
+
+자율 사이클과 동일한 ADK 런타임 위에서 도는 어드바이저. 페이지 상단에서 프로바이더/모델을 골라 총계좌 또는 특정 에이전트 슬리브에 대해 묻고, 챗봇은 사이클 에이전트가 쓰는 도구를 그대로 사용해 답합니다 — 단, 쓰기 도구는 차단된 상태입니다.
+
+```mermaid
+graph LR
+    USER(["운영자"])
+    SHELL["/investment-chat\n프로바이더 · 모델 선택"]
+    ADK["ADK 챗 에이전트\n(읽기 전용 분석 도구)"]
+    DRAFT{{"validate_order_draft\n→ 승인 토큰"}}
+    CONFIRM["사용자가\nCONFIRM <토큰> 입력"]
+    SUBMIT{{"submit_approved_order"}}
+    GATEWAY["ExecutionGateway\nRiskEngine + Broker"]
+    AUDIT[("runtime_audit_logs\n+ semantic 메모리")]
+
+    USER --> SHELL --> ADK
+    ADK --> DRAFT --> CONFIRM --> SUBMIT --> GATEWAY
+    SUBMIT -.-> AUDIT
+
+    classDef user fill:#dbeafe,stroke:#3b82f6,stroke-width:2px,color:#1e40af
+    classDef ui fill:#ede9fe,stroke:#8b5cf6,stroke-width:1.5px,color:#4c1d95
+    classDef approval fill:#fef3c7,stroke:#d97706,stroke-width:2px,color:#92400e
+    classDef gw fill:#fee2e2,stroke:#ef4444,stroke-width:2px,color:#991b1b
+    classDef store fill:#fff7ed,stroke:#f97316,stroke-width:2px,color:#9a3412
+
+    class USER user
+    class SHELL,ADK ui
+    class DRAFT,CONFIRM,SUBMIT approval
+    class GATEWAY gw
+    class AUDIT store
+```
+
+- **같은 런타임, 별도 에이전트** — `ExecutionGateway`, `RiskEngine`, 브로커 어댑터, 메모리 스토어, 분석 도구를 그대로 재사용합니다. 별도 주문 경로 없음.
+- **기본 읽기 전용** — 사이클 레지스트리의 분석 도구만 노출되고, execute / submit / broker / sync / write_ 마커가 들어간 도구는 레지스트리 빌드 시점에 자동으로 제외됩니다.
+- **2단 사용자 승인** — `validate_order_draft`는 승인 토큰과 리스크 결정만 만들고 절대 제출하지 않습니다. 사용자가 정확히 `CONFIRM <토큰>`을 입력해야 `submit_approved_order`가 호출됩니다. draft는 자동 만료(기본 15분).
+- **스코프 인지** — `scope='account'`는 총 증권 계좌, `scope='agent_sleeve'`는 특정 batch 에이전트 슬리브를 대상으로 합니다. 슬리브 거래는 `judgment_source="user+investment_chat"`로 기록되어 자율 판단처럼 보이지 않습니다.
+- **테넌트 격리 + 감사 로그** — 테넌트 단위 쓰기 락, validate / submit / refresh마다 `runtime_audit_logs` 행, 그리고 사이클 에이전트가 사람의 개입을 회상할 수 있도록 semantic 계층 메모리 이벤트가 남습니다.
 
 ---
 
@@ -497,6 +542,7 @@ graph LR
 - **Google Search Grounding이 리서치 백본** — `from google.adk.tools import google_search` 한 줄이 4단계 시장 브리핑 파이프라인을 구동합니다. → [`arena/agents/research_agent.py`](arena/agents/research_agent.py)
 - **SDK 레벨 tool budget 강제** — `AutomaticFunctionCallingConfig(maximum_remote_calls=...)` + `AdkToolBudgetExceeded` 가드. → [`arena/agents/adk_runner_runtime.py`](arena/agents/adk_runner_runtime.py)
 - **향후 Google 서비스 연동도 슬롯-인** — Gmail · Calendar · Drive 등 Google API들이 기존 BigQuery / Firestore / Vertex와 동일한 ADC + 서비스 계정 인증을 공유하므로, 에이전트 루프를 건드리지 않고 MCP 도구나 ADK 네이티브 도구로 바로 붙일 수 있습니다.
+- **하나의 ADK 런타임으로 두 개의 제품 표면** — 투자챗봇 에이전트(`agents/investment_chat/`)는 사이클 에이전트와 동일한 `Runner`, 모델 리졸버, 도구 wrapper, 메모리 스토어 위에서 빌드되며 차이는 프롬프트 · 도구 화이트리스트 · 승인 흐름뿐입니다. 챗 dev-UI는 테넌트 단위 `BaseAgentLoader`와 함께 `/investment-chat/adk`에 FastAPI sub-app으로 마운트됩니다. → [`arena/ui/investment_chat_adk.py`](arena/ui/investment_chat_adk.py)
 
 ---
 

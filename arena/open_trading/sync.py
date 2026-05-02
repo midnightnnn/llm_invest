@@ -1824,6 +1824,33 @@ class AccountSyncService:
             fx_rate=fx,
         )
 
+    @staticmethod
+    def _native_overseas_cash(currency_rows: list[dict[str, Any]]) -> tuple[float, str]:
+        """Returns native USD cash from KIS output2 rows.
+
+        KIS output3 fields such as frcr_use_psbl_amt/frcr_evlu_tota are KRW
+        valuation fields in this endpoint, despite the "frcr" prefix. Native
+        currency amounts are exposed in output2 as frcr_*_amt_1/2 fields.
+        """
+        best_amount = 0.0
+        best_currency = ""
+        native_fields = (
+            "frcr_drwg_psbl_amt_1",
+            "frcr_dncl_amt_2",
+            "nxdy_frcr_drwg_psbl_amt",
+        )
+        for row in currency_rows:
+            if not isinstance(row, dict):
+                continue
+            currency = str(row.get("crcy_cd") or row.get("tr_crcy_cd") or "").strip().upper()
+            if currency and currency != "USD":
+                continue
+            amount = max((_to_float(row.get(field), default=0.0) for field in native_fields), default=0.0)
+            if amount > best_amount:
+                best_amount = amount
+                best_currency = currency or "USD"
+        return best_amount, best_currency
+
     def _position_from_domestic_row(self, row: dict[str, object]) -> Position | None:
         """Builds one Position object from domestic balance response row."""
         ticker = str(row.get("pdno", "")).strip().upper()
@@ -1854,18 +1881,20 @@ class AccountSyncService:
         """Loads overseas account and builds snapshot."""
         balance_market_codes = self._us_balance_market_codes()
         positions_rows: list[dict[str, Any]] = []
+        currency_rows: list[dict[str, Any]] = []
         summary_rows: list[dict[str, Any]] = []
         rows_by_market_code: dict[str, list[dict[str, Any]]] = {}
         summary_by_market_code: dict[str, list[dict[str, Any]]] = {}
         if balance_market_codes:
             for market_code in balance_market_codes:
-                rows1, _, rows3 = self.client.get_overseas_present_balance(tr_mket_cd=market_code)
+                rows1, rows2, rows3 = self.client.get_overseas_present_balance(tr_mket_cd=market_code)
                 positions_rows.extend(rows1)
+                currency_rows.extend(rows2)
                 summary_rows.extend(rows3)
                 rows_by_market_code[market_code] = [dict(row) for row in rows1 if isinstance(row, dict)]
                 summary_by_market_code[market_code] = [dict(row) for row in rows3 if isinstance(row, dict)]
         else:
-            positions_rows, _, summary_rows = self.client.get_overseas_present_balance()
+            positions_rows, currency_rows, summary_rows = self.client.get_overseas_present_balance()
 
         tickers = [
             str((row or {}).get("pdno") or "").strip().upper()
@@ -1908,9 +1937,9 @@ class AccountSyncService:
                 live_fx = _to_float(row.get("bass_exrt"), default=0.0)
 
         summary_candidates = [dict(row) for row in summary_rows if isinstance(row, dict)]
-        cash_foreign = 0.0
-        for summary in summary_candidates:
-            cash_foreign = max(cash_foreign, _to_float(summary.get("frcr_use_psbl_amt"), default=0.0))
+        cash_foreign, cash_foreign_currency = self._native_overseas_cash(
+            [dict(row) for row in currency_rows if isinstance(row, dict)]
+        )
         if live_fx <= 0:
             live_fx = self._latest_usd_krw_fx_rate()
             logger.warning(
@@ -1966,7 +1995,7 @@ class AccountSyncService:
             positions=positions,
             usd_krw_rate=usd_krw,
             cash_foreign=max(cash_foreign, 0.0),
-            cash_foreign_currency="USD",
+            cash_foreign_currency=cash_foreign_currency or "USD",
         )
 
     def _us_balance_market_codes(self) -> list[str]:
@@ -2056,6 +2085,7 @@ class AccountSyncService:
                 cash_krw=us_snap.cash_krw + kr_snap.cash_krw,
                 cash_foreign=us_snap.cash_foreign,
                 cash_foreign_currency=us_snap.cash_foreign_currency,
+                usd_krw_rate=us_snap.usd_krw_rate,
                 total_equity_krw=us_snap.total_equity_krw + kr_snap.total_equity_krw,
                 positions=merged_positions,
             )

@@ -56,7 +56,18 @@ def _prepare_kis_command_repo(settings: Settings) -> BigQueryRepository:
     repo = cli._repo_or_exit(settings, tenant_id=tenant)
     repo.ensure_dataset()
     repo.ensure_tables()
-    cli._apply_tenant_runtime_credentials(settings, repo, tenant_id=tenant)
+    settings.kis_secret_name = ""
+    settings.kis_api_key = ""
+    settings.kis_api_secret = ""
+    settings.kis_paper_api_key = ""
+    settings.kis_paper_api_secret = ""
+    settings.kis_account_no = ""
+    settings.kis_account_key_suffix = ""
+    runtime_row = cli._apply_tenant_runtime_credentials(settings, repo, tenant_id=tenant)
+    if not runtime_row:
+        raise RuntimeError(f"tenant runtime credentials missing: tenant={tenant}")
+    if not str(runtime_row.get("kis_secret_name") or "").strip():
+        raise RuntimeError(f"tenant kis_secret_name missing: tenant={tenant}")
     cli.apply_runtime_overrides(settings, repo, tenant_id=tenant)
     cli._validate_or_exit(settings, require_kis=True)
     return repo

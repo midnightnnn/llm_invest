@@ -47,6 +47,21 @@ class LocalExecutionStore:
             "ELSE 'paper' END)"
         )
 
+    @staticmethod
+    def _normalize_history_statuses(statuses: list[str] | tuple[str, ...] | None) -> list[str]:
+        allowed = {"FILLED", "SIMULATED", "SUBMITTED", "ERROR", "REJECTED"}
+        out: list[str] = []
+        for raw in statuses or ["FILLED", "SIMULATED", "SUBMITTED"]:
+            token = str(raw or "").strip().upper()
+            if token in allowed and token not in out:
+                out.append(token)
+        return out or ["FILLED", "SIMULATED", "SUBMITTED"]
+
+    @staticmethod
+    def _normalize_history_scope(scope: str | None) -> str:
+        token = str(scope or "all").strip().lower()
+        return token if token in {"all", "account", "agent_sleeve"} else "all"
+
     def recent_turnover_krw(
         self,
         day: date,
@@ -274,6 +289,77 @@ class LocalExecutionStore:
             FROM execution_reports
             WHERE {' AND '.join(filters)}
             ORDER BY created_at DESC
+            LIMIT $limit
+            """,
+            params,
+        )
+
+    def recent_trade_history(
+        self,
+        *,
+        tenant_id: str | None = None,
+        ticker: str = "",
+        agent_id: str = "",
+        scope: str = "all",
+        days: int = 365,
+        limit: int = 50,
+        statuses: list[str] | tuple[str, ...] | None = None,
+        account_agent_id: str = "investment_chat",
+    ) -> list[dict[str, Any]]:
+        """Returns recent executions joined to the originating order intent metadata."""
+        tenant = self._tenant_token(tenant_id)
+        scope_token = self._normalize_history_scope(scope)
+        params: dict[str, Any] = {
+            "tenant_id": tenant,
+            "days": max(1, min(int(days), 3650)),
+            "limit": max(1, min(int(limit), 100)),
+            "statuses": self._normalize_history_statuses(statuses),
+            "scope": scope_token,
+        }
+        filters = [
+            "er.tenant_id = $tenant_id",
+            "er.status IN (SELECT unnest($statuses))",
+            "er.created_at >= current_timestamp - ($days * INTERVAL '1 day')",
+            "$scope IN ('all', 'account', 'agent_sleeve')",
+        ]
+        ticker_token = str(ticker or "").strip().upper()
+        if ticker_token:
+            filters.append("er.ticker = $ticker")
+            params["ticker"] = ticker_token
+
+        agent_token = str(agent_id or "").strip().lower()
+        account_agent = str(account_agent_id or "investment_chat").strip().lower()
+        if scope_token == "account":
+            filters.append("COALESCE(er.agent_id, '') = $account_agent_id")
+            params["account_agent_id"] = account_agent
+        elif scope_token == "agent_sleeve":
+            if agent_token:
+                filters.append("er.agent_id = $agent_id")
+                params["agent_id"] = agent_token
+            else:
+                filters.append("COALESCE(er.agent_id, '') != $account_agent_id")
+                params["account_agent_id"] = account_agent
+        elif agent_token:
+            filters.append("er.agent_id = $agent_id")
+            params["agent_id"] = agent_token
+
+        return self.session.fetch_rows(
+            f"""
+            SELECT
+              er.order_id, er.intent_id, er.created_at, er.trading_mode, er.agent_id,
+              er.ticker, er.exchange_code, er.instrument_id, er.side,
+              er.requested_qty, er.filled_qty, er.avg_price_krw, er.avg_price_native,
+              er.quote_currency, er.fx_rate, er.status, er.message,
+              oi.created_at AS intent_created_at,
+              oi.quantity AS intent_quantity,
+              oi.price_krw AS intent_price_krw,
+              oi.notional_krw AS intent_notional_krw,
+              oi.rationale, oi.strategy_refs, oi.allowed, oi.risk_reason, oi.policy_hits
+            FROM execution_reports er
+            LEFT JOIN agent_order_intents oi
+              ON er.tenant_id = oi.tenant_id AND er.intent_id = oi.intent_id
+            WHERE {' AND '.join(filters)}
+            ORDER BY er.created_at DESC, er.order_id DESC, er.intent_id DESC
             LIMIT $limit
             """,
             params,

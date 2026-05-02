@@ -29,6 +29,23 @@ def default_credentials_path() -> Path:
     return (Path.home() / ".llm-arena" / "credentials.json").resolve()
 
 
+def load_local_secret_payload(*, secret_id: str, path: str | Path | None = None) -> dict[str, Any]:
+    token = str(secret_id or "").strip()
+    if not token:
+        return {}
+    credentials_path = Path(path).expanduser().resolve() if path is not None else default_credentials_path()
+    try:
+        data = json.loads(credentials_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except Exception:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    payload = data.get(token)
+    return dict(payload) if isinstance(payload, dict) else {}
+
+
 class EnvCredentialStore:
     """Stores local credentials in a private JSON file and records metadata in repo."""
 
@@ -78,8 +95,7 @@ class EnvCredentialStore:
         return f"{'*' * (len(text) - 4)}{text[-4:]}"
 
     def _latest_secret_json(self, *, secret_id: str) -> dict[str, Any]:
-        data = self._read().get(str(secret_id or "").strip())
-        return dict(data) if isinstance(data, dict) else {}
+        return load_local_secret_payload(secret_id=secret_id, path=self.path)
 
     def _upsert_secret_json(self, *, secret_id: str, payload: dict[str, Any]) -> str:
         data = self._read()

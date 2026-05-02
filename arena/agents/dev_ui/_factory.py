@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import inspect
 import logging
 import os
 from pathlib import Path
@@ -11,11 +10,15 @@ from arena.agents.adk_runner_bootstrap import (
     resolve_adk_tools,
     resolve_max_tool_events,
 )
+from arena.agents.adk_tool_helpers import (
+    apply_tool_schema_metadata,
+    noop_search_tool_memories,
+    noop_update_candidate_ledger,
+)
 from arena.config import AgentConfig, Settings, apply_runtime_overrides, load_settings
 from arena.data.factory import get_repository
 from arena.providers.registry import default_model_for_provider
 from arena.tools.default_registry import build_default_registry
-from arena.tools.registry import ToolEntry
 
 logger = logging.getLogger(__name__)
 
@@ -68,26 +71,6 @@ def _agent_config_for_provider(settings: Settings, provider: str) -> AgentConfig
     )
 
 
-def _apply_tool_schema_metadata(fn: Any, *, entry: ToolEntry, sig: inspect.Signature) -> Any:
-    name = str(entry.name or entry.tool_id or getattr(fn, "__name__", "tool")).strip() or "tool"
-    description = str(entry.description or "").strip()
-    fn.__name__ = name
-    fn.__qualname__ = name
-    if description:
-        fn.__doc__ = description
-    fn.__signature__ = sig
-    return fn
-
-
-def _noop_update_candidate_ledger(tool_name: str, args_preview: dict[str, Any], result: Any) -> None:
-    _ = tool_name, args_preview, result
-
-
-def _noop_search_tool_memories(query_spec: Any) -> list[dict[str, Any]] | None:
-    _ = query_spec
-    return None
-
-
 def build_dev_agent(provider: str) -> Any:
     """Builds one module-level ADK ``root_agent`` for ``adk web`` discovery."""
     provider_key = str(provider or "").strip().lower()
@@ -115,9 +98,9 @@ def build_dev_agent(provider: str) -> Any:
         settings=settings,
         agent_id=provider_key,
         tool_events=tool_events,
-        update_candidate_ledger=_noop_update_candidate_ledger,
-        search_tool_memories=_noop_search_tool_memories,
-        apply_tool_schema_metadata=_apply_tool_schema_metadata,
+        update_candidate_ledger=noop_update_candidate_ledger,
+        search_tool_memories=noop_search_tool_memories,
+        apply_tool_schema_metadata=apply_tool_schema_metadata,
     )
     logger.info(
         "Built ADK dev UI agent provider=%s tenant=%s tools=%d",

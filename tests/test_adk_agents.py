@@ -1312,6 +1312,34 @@ def test_compact_portfolio_diagnosis_no_hrp_allocation() -> None:
     assert out["benchmarks"]["current_sleeve"]["excess_return_vs_benchmark"] == -0.06
 
 
+def test_compact_validate_order_draft_hides_manual_confirmation_phrase() -> None:
+    out = _compact_tool_result_for_prompt(
+        "validate_order_draft",
+        {
+            "status": "ok",
+            "tenant_id": "local",
+            "scope": "account",
+            "target_agent_id": "investment_chat",
+            "judgment_source": "user+investment_chat",
+            "approval_token": "abc123",
+            "required_confirmation": "CONFIRM abc123",
+            "submission_status": "not_submitted",
+            "approval_required": True,
+            "notional_krw": 100000,
+            "intent": {"ticker": "AAPL", "side": "BUY", "quantity": 1, "rationale": "test"},
+            "risk": {"allowed": True, "reason": "ok", "policy_hits": []},
+        },
+    )
+
+    assert out["approval_required"] is True
+    assert out["approval_ui"] == "approval_card"
+    assert out["submission_status"] == "not_submitted"
+    assert out["intent"]["ticker"] == "AAPL"
+    assert out["risk"] == {"allowed": True, "reason": "ok", "policy_hits": []}
+    assert "approval_token" not in out
+    assert "required_confirmation" not in out
+
+
 def test_search_peer_lessons_returns_only_compactor_reflections() -> None:
     tool = _ContextTools.__new__(_ContextTools)
     tool.repo = _RepoForPeerLessons()

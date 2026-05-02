@@ -45,6 +45,7 @@
       --bg-b: #fce7f3;
       --bg-c: #ede9fe;
       --sidebar-w: 200px;
+      --sidebar-collapsed-w: 52px;
     }
     body {
       font-family: 'Space Grotesk', ui-sans-serif, system-ui, sans-serif;
@@ -220,6 +221,59 @@
     }
     .sidebar-link.active:hover { background: #1e293b; }
     /* mobile sidebar slide drawer */
+    .arena-sidebar {
+      width: var(--sidebar-w);
+      min-width: var(--sidebar-w);
+      flex: 0 0 var(--sidebar-w);
+      overflow-x: hidden;
+      transition: width 0.24s cubic-bezier(0.16, 1, 0.3, 1), min-width 0.24s cubic-bezier(0.16, 1, 0.3, 1), flex-basis 0.24s cubic-bezier(0.16, 1, 0.3, 1), transform 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+      will-change: width, min-width, flex-basis, transform;
+    }
+    .sidebar-brand,
+    .sidebar-status,
+    #arena-sidebar nav,
+    .sidebar-footer {
+      transition: opacity 0.12s ease, visibility 0.12s ease;
+    }
+    .sidebar-collapse-toggle {
+      flex: 0 0 auto;
+      display: none; align-items: center; justify-content: center;
+      width: 32px; height: 32px; border-radius: 8px;
+      border: 1px solid rgba(226,232,240,0.9); background: rgba(255,255,255,0.9);
+      color: #475569; box-shadow: 0 8px 24px rgba(15,23,42,0.08);
+      backdrop-filter: blur(10px);
+      transition: transform 0.2s ease, color 0.2s ease;
+    }
+    .sidebar-collapse-toggle:hover { color: #0f172a; transform: translateY(-1px); }
+    .sidebar-collapse-toggle svg { transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1); }
+    @media (min-width: 768px) {
+      .sidebar-collapse-toggle { display: inline-flex; }
+      body.sidebar-collapsed .arena-sidebar {
+        width: var(--sidebar-collapsed-w);
+        min-width: var(--sidebar-collapsed-w);
+        flex-basis: var(--sidebar-collapsed-w);
+      }
+      body.sidebar-collapsed .sidebar-header {
+        padding-left: 10px;
+        padding-right: 10px;
+      }
+      body.sidebar-collapsed .sidebar-header-row {
+        justify-content: center;
+      }
+      body.sidebar-collapsed .sidebar-brand {
+        width: 0;
+        opacity: 0;
+        overflow: hidden;
+      }
+      body.sidebar-collapsed .sidebar-status,
+      body.sidebar-collapsed #arena-sidebar nav,
+      body.sidebar-collapsed .sidebar-footer {
+        opacity: 0;
+        visibility: hidden;
+        pointer-events: none;
+      }
+      body.sidebar-collapsed .sidebar-collapse-toggle svg { transform: rotate(180deg); }
+    }
     @media (max-width: 767px) {
       .arena-sidebar {
         transform: translateX(-100%);
@@ -256,10 +310,15 @@
   <div id="sidebar-backdrop" class="sidebar-backdrop md:hidden"></div>
   <div class="flex min-h-screen">
     {# ── Left sidebar ── #}
-    <aside id="arena-sidebar" class="arena-sidebar fixed left-0 top-0 z-50 flex h-screen md:min-h-screen w-[var(--sidebar-w)] flex-col border-r border-ink-200/30 bg-white/80 backdrop-blur-xl md:sticky md:flex overflow-y-auto">
-      <div class="px-5 pb-2 pt-6">
-        <h1 class="font-display text-lg font-bold tracking-tight text-ink-900">LLM INVEST</h1>
-        <div class="mt-2 flex items-center gap-1.5">
+    <aside id="arena-sidebar" class="arena-sidebar fixed left-0 top-0 z-50 flex h-screen md:min-h-screen flex-col border-r border-ink-200/30 bg-white/80 backdrop-blur-xl md:sticky md:flex overflow-y-auto">
+      <div class="sidebar-header px-5 pb-2 pt-6">
+        <div class="sidebar-header-row flex items-center justify-between gap-3">
+          <h1 class="sidebar-brand font-display text-lg font-bold tracking-tight text-ink-900">LLM INVEST</h1>
+          <button id="sidebar-collapse-toggle" type="button" class="sidebar-collapse-toggle" aria-label="Toggle sidebar">
+            <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>
+          </button>
+        </div>
+        <div class="sidebar-status mt-2 flex items-center gap-1.5">
           <span class="relative flex h-1.5 w-1.5">
             <span class="animate-ping absolute inline-flex h-full w-full rounded-full {{ status_ping_color }} opacity-75"></span>
             <span class="relative inline-flex rounded-full h-1.5 w-1.5 {{ status_dot_color }}"></span>
@@ -274,7 +333,7 @@
         {% endfor %}
       </nav>
 
-      <div class="border-t border-ink-200/30 px-3 py-3">
+      <div class="sidebar-footer border-t border-ink-200/30 px-3 py-3">
         {% if showcase %}
         <a href="/auth/google/login" class="sidebar-link bg-brand-500 text-white hover:bg-brand-700 justify-center font-semibold text-xs">내 아레나 만들기</a>
         {% elif auth_enabled %}
@@ -284,7 +343,7 @@
     </aside>
 
     {# ── Main content ── #}
-    <main class="flex-1 min-w-0 w-full px-4 py-8 sm:px-6 lg:px-10 box-border">
+    <main class="{{ main_class }}">
       <div class="mx-auto {{ max_width_class }}">
         {% if showcase %}
         <div class="mb-4 flex items-center gap-2 rounded-xl border border-brand-300/40 bg-brand-50/60 px-4 py-2.5 text-xs text-brand-700 backdrop-blur">
@@ -292,10 +351,12 @@
           <span>쇼케이스 모드</span>
         </div>
         {% endif %}
+        {% if not hide_page_header %}
         <div class="reveal mb-6 flex items-center justify-between">
           <h2 class="font-display text-2xl font-bold tracking-tight text-ink-900">{{ title }}</h2>
           {{ header_extra|safe }}
         </div>
+        {% endif %}
         {{ body_html|safe }}
       </div>
     </main>
@@ -339,14 +400,28 @@
     })();
     (function() {
       var toggle = document.getElementById('sidebar-toggle');
+      var collapseToggle = document.getElementById('sidebar-collapse-toggle');
       var sidebar = document.getElementById('arena-sidebar');
       var backdrop = document.getElementById('sidebar-backdrop');
-      if (!toggle || !sidebar) return;
+      if (!sidebar) return;
+      try {
+        if (localStorage.getItem('arenaSidebarCollapsed') === '1' && window.innerWidth >= 768) {
+          document.body.classList.add('sidebar-collapsed');
+        }
+      } catch (_err) {}
       function openSidebar() { sidebar.classList.add('open'); if (backdrop) backdrop.classList.add('open'); }
       function closeSidebar() { sidebar.classList.remove('open'); if (backdrop) backdrop.classList.remove('open'); }
-      toggle.addEventListener('click', function() {
-        sidebar.classList.contains('open') ? closeSidebar() : openSidebar();
-      });
+      if (toggle) {
+        toggle.addEventListener('click', function() {
+          sidebar.classList.contains('open') ? closeSidebar() : openSidebar();
+        });
+      }
+      if (collapseToggle) {
+        collapseToggle.addEventListener('click', function() {
+          var collapsed = document.body.classList.toggle('sidebar-collapsed');
+          try { localStorage.setItem('arenaSidebarCollapsed', collapsed ? '1' : '0'); } catch (_err) {}
+        });
+      }
       if (backdrop) backdrop.addEventListener('click', closeSidebar);
       sidebar.querySelectorAll('a').forEach(function(a) {
         a.addEventListener('click', function() {

@@ -1,0 +1,259 @@
+<section class="flex h-screen min-h-[560px] flex-col overflow-hidden bg-white">
+  {% if provider_options %}
+  <form method="get" action="/investment-chat" class="flex min-h-[54px] flex-wrap items-center gap-2 border-b border-ink-200/70 bg-white/90 px-3 py-2 backdrop-blur" data-chat-selector-form>
+    <input type="hidden" name="tenant_id" value="{{ tenant }}" />
+    <select
+      name="provider"
+      class="h-9 rounded-md border border-ink-200 bg-white px-2 text-xs font-semibold text-ink-700 outline-none focus:border-brand-500"
+      aria-label="Provider"
+      data-chat-provider
+    >
+      {% for item in provider_options %}
+      <option value="{{ item.value }}" {{ 'selected' if item.value == provider else '' }}>{{ item.label }}</option>
+      {% endfor %}
+    </select>
+    <select
+      name="model"
+      class="h-9 min-w-[240px] flex-1 rounded-md border border-ink-200 bg-white px-2 font-mono text-xs text-ink-700 outline-none focus:border-brand-500 sm:max-w-[460px]"
+      aria-label="Model"
+      data-chat-model
+    >
+      {% for option in model_options %}
+      <option value="{{ option }}" {{ 'selected' if option == model else '' }}>{{ option }}</option>
+      {% endfor %}
+    </select>
+    <button
+      type="submit"
+      class="h-9 rounded-md bg-ink-900 px-3 text-xs font-semibold text-white hover:bg-ink-800"
+    >Apply</button>
+  </form>
+  <iframe
+    src="{{ iframe_src }}"
+    title="투자챗봇"
+    class="min-h-0 flex-1 border-0"
+    loading="eager"
+    referrerpolicy="same-origin"
+    data-adk-chat-frame
+  ></iframe>
+  <aside
+    class="pointer-events-none fixed bottom-4 right-4 z-40 hidden w-[min(420px,calc(100vw-2rem))]"
+    data-order-draft-panel
+  >
+    <div class="pointer-events-auto rounded-lg border border-ink-200 bg-white p-4 shadow-xl">
+      <div class="flex items-start justify-between gap-3">
+        <div class="min-w-0">
+          <p class="text-xs font-semibold uppercase tracking-wide text-ink-500">Order Approval</p>
+          <h3 class="mt-1 truncate text-sm font-bold text-ink-900" data-order-draft-title></h3>
+        </div>
+        <button type="button" class="rounded-md px-2 py-1 text-xs text-ink-500 hover:bg-ink-50" data-order-draft-close>닫기</button>
+      </div>
+      <dl class="mt-3 grid grid-cols-2 gap-2 text-xs">
+        <div>
+          <dt class="text-ink-400">금액</dt>
+          <dd class="font-semibold text-ink-800" data-order-draft-notional></dd>
+        </div>
+        <div>
+          <dt class="text-ink-400">범위</dt>
+          <dd class="font-semibold text-ink-800" data-order-draft-scope></dd>
+        </div>
+      </dl>
+      <p class="mt-3 rounded-md bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800" data-order-draft-risk></p>
+      <button
+        type="button"
+        class="mt-3 h-10 w-full rounded-md bg-ink-900 px-3 text-sm font-semibold text-white hover:bg-ink-800 disabled:cursor-not-allowed disabled:bg-ink-300"
+        data-order-draft-submit
+      >주문 승인</button>
+      <p class="mt-2 hidden text-xs text-ink-500" data-order-draft-status></p>
+    </div>
+  </aside>
+  {% else %}
+  <div class="flex flex-1 items-center justify-center px-6">
+    <div class="max-w-md rounded-lg border border-amber-200 bg-amber-50 p-5 text-sm leading-relaxed text-amber-900">
+      등록된 LLM API key가 없습니다. 설정에서 이 tenant의 OpenAI, Gemini, Claude 중 하나 이상의 API key를 등록한 뒤 투자챗봇을 사용할 수 있습니다.
+    </div>
+  </div>
+  {% endif %}
+</section>
+<script type="application/json" id="investment-chat-model-map">{{ model_presets | tojson }}</script>
+<script>
+  (function() {
+    var provider = document.querySelector('[data-chat-provider]');
+    var model = document.querySelector('[data-chat-model]');
+    var form = document.querySelector('[data-chat-selector-form]');
+    var raw = document.getElementById('investment-chat-model-map');
+    if (!provider || !model || !raw) return;
+    var presets = {};
+    try { presets = JSON.parse(raw.textContent || '{}') || {}; } catch (_err) { presets = {}; }
+    function submitSelection() {
+      if (!form) return;
+      if (typeof form.requestSubmit === 'function') form.requestSubmit();
+      else form.submit();
+    }
+    provider.addEventListener('change', function() {
+      var values = presets[provider.value] || [];
+      model.innerHTML = '';
+      values.forEach(function(value) {
+        var option = document.createElement('option');
+        option.value = value;
+        option.textContent = value;
+        model.appendChild(option);
+      });
+      if (values.length) model.value = values[0];
+      submitSelection();
+    });
+    model.addEventListener('change', submitSelection);
+  })();
+</script>
+{% if provider_options %}
+<script>
+  (function() {
+    var tenant = {{ tenant | tojson }};
+    var panel = document.querySelector('[data-order-draft-panel]');
+    if (!panel) return;
+    var title = panel.querySelector('[data-order-draft-title]');
+    var notional = panel.querySelector('[data-order-draft-notional]');
+    var scope = panel.querySelector('[data-order-draft-scope]');
+    var risk = panel.querySelector('[data-order-draft-risk]');
+    var submit = panel.querySelector('[data-order-draft-submit]');
+    var status = panel.querySelector('[data-order-draft-status]');
+    var close = panel.querySelector('[data-order-draft-close]');
+    var activeToken = '';
+    var dismissed = {};
+
+    function fmtKrw(value) {
+      var number = Number(value || 0);
+      if (!isFinite(number)) return '-';
+      return Math.round(number).toLocaleString('ko-KR') + '원';
+    }
+
+    function setStatus(text) {
+      if (!status) return;
+      status.textContent = text || '';
+      status.classList.toggle('hidden', !text);
+    }
+
+    function submitResultMessage(body) {
+      var reportMessage = body && body.execution_report && body.execution_report.message;
+      return body && (body.message || body.error) || reportMessage || ('status=' + (body && body.status || 'unknown'));
+    }
+
+    function isAdkChatBusy(doc) {
+      return !!(
+        doc &&
+        (
+          doc.querySelector('mat-progress-bar') ||
+          doc.querySelector('.agent-loading-indicator') ||
+          doc.querySelector('[role="progressbar"]')
+        )
+      );
+    }
+
+    function deliverOrderResultToChat(text, attempt) {
+      var message = String(text || '').trim();
+      if (!message) return false;
+      var tries = Number(attempt || 0);
+      var frame = document.querySelector('[data-adk-chat-frame]');
+      if (!frame) return false;
+      var doc = null;
+      try {
+        doc = frame.contentDocument || (frame.contentWindow && frame.contentWindow.document);
+      } catch (_err) {
+        return false;
+      }
+      if (isAdkChatBusy(doc)) {
+        if (tries < 80) {
+          window.setTimeout(function() { deliverOrderResultToChat(message, tries + 1); }, 500);
+        }
+        return false;
+      }
+      var textarea = doc && doc.querySelector('textarea.chat-input-box');
+      var sendButton = doc && doc.querySelector('button.send-message-btn');
+      if (!textarea || !sendButton) {
+        if (tries < 80) {
+          window.setTimeout(function() { deliverOrderResultToChat(message, tries + 1); }, 500);
+        }
+        return false;
+      }
+      var EventCtor = (doc.defaultView && doc.defaultView.Event) || Event;
+      textarea.focus();
+      textarea.value = message;
+      textarea.dispatchEvent(new EventCtor('input', {bubbles: true}));
+      textarea.dispatchEvent(new EventCtor('change', {bubbles: true}));
+      sendButton.click();
+      return true;
+    }
+
+    function deliverSubmitResult(body) {
+      return deliverOrderResultToChat(body && body.chat_delivery_text);
+    }
+
+    function renderDraft(draft) {
+      if (!draft || !draft.approval_token) return;
+      activeToken = draft.approval_token;
+      var intent = draft.intent || {};
+      var riskObj = draft.risk || {};
+      var side = String(intent.side || '').toUpperCase();
+      title.textContent = [intent.ticker, side, intent.quantity ? ('x ' + intent.quantity) : ''].filter(Boolean).join(' ');
+      notional.textContent = fmtKrw(draft.notional_krw || intent.price_krw * intent.quantity);
+      scope.textContent = draft.scope || 'account';
+      var hits = riskObj.policy_hits || [];
+      risk.textContent = draft.submittable ? '리스크 검증 통과. 버튼을 누르면 저장된 주문 초안을 제출합니다.' : ('제출 불가: ' + (hits.length ? hits.join(', ') : draft.status));
+      submit.disabled = !draft.submittable;
+      setStatus('');
+      panel.classList.remove('hidden');
+    }
+
+    function pollDrafts() {
+      fetch('/investment-chat/order-drafts?tenant_id=' + encodeURIComponent(tenant), {credentials: 'same-origin'})
+        .then(function(resp) { return resp.ok ? resp.json() : null; })
+        .then(function(payload) {
+          var drafts = payload && payload.drafts || [];
+          var draft = drafts.find(function(item) {
+            return item && item.approval_token && !dismissed[item.approval_token] && ['draft', 'risk_rejected'].indexOf(String(item.status || '')) >= 0;
+          });
+          if (draft) renderDraft(draft);
+        })
+        .catch(function() {});
+    }
+
+    if (close) {
+      close.addEventListener('click', function() {
+        if (activeToken) dismissed[activeToken] = true;
+        panel.classList.add('hidden');
+      });
+    }
+    if (submit) {
+      submit.addEventListener('click', function() {
+        if (!activeToken || submit.disabled) return;
+        submit.disabled = true;
+        setStatus('제출 중...');
+        fetch('/investment-chat/order-drafts/' + encodeURIComponent(activeToken) + '/submit?tenant_id=' + encodeURIComponent(tenant), {
+          method: 'POST',
+          credentials: 'same-origin'
+        })
+          .then(function(resp) { return resp.json().then(function(body) { return {ok: resp.ok, body: body}; }); })
+          .then(function(result) {
+            var body = result.body || {};
+            if (body.status === 'submitted' || body.status === 'already_submitted') {
+              setStatus(body.status === 'already_submitted' ? '이미 제출된 주문입니다.' : '제출 완료');
+              deliverSubmitResult(body);
+              dismissed[activeToken] = true;
+              window.setTimeout(function() { panel.classList.add('hidden'); }, 1200);
+            } else {
+              submit.disabled = false;
+              deliverSubmitResult(body);
+              setStatus('제출 실패: ' + submitResultMessage(body));
+            }
+          })
+          .catch(function() {
+            submit.disabled = false;
+            setStatus('제출 실패');
+          });
+      });
+    }
+
+    pollDrafts();
+    window.setInterval(pollDrafts, 2500);
+  })();
+</script>
+{% endif %}

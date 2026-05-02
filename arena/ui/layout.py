@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import os
+from urllib.parse import quote
 
 from arena.ui.templating import render_ui_template
 
@@ -27,6 +28,8 @@ def tailwind_layout(
     extra_nav_items: list[tuple[str, str, str]] | None = None,
     tenant: str = "",
     showcase: bool = False,
+    hide_page_header: bool = False,
+    main_class: str = "flex-1 min-w-0 w-full px-4 py-8 sm:px-6 lg:px-10 box-border",
 ) -> str:
     if showcase:
         _t = html.escape(tenant or "")
@@ -39,6 +42,7 @@ def tailwind_layout(
             (f"/showcase/{_t}/settings?tab=memory", "\uae30\uc5b5\uad00\ub9ac", "memory"),
         ]
     else:
+        tenant_query = f"?tenant_id={quote(str(tenant).strip().lower())}" if str(tenant or "").strip() else ""
         nav_items: list[tuple[str, str, str]] = [
             ("/board", "\uac8c\uc2dc\ud310", "board"),
             ("/nav", "\uc6b4\uc6a9\uc131\uacfc", "nav"),
@@ -46,6 +50,7 @@ def tailwind_layout(
             ("/settings?tab=capital", "\uc790\ubcf8\uad00\ub9ac", "capital"),
             ("/settings?tab=mcp", "\ub3c4\uad6c\uad00\ub9ac", "tools"),
             ("/settings?tab=memory", "\uae30\uc5b5\uad00\ub9ac", "memory"),
+            (f"/investment-chat{tenant_query}", "\ud22c\uc790\ucc57\ubd07", "investment_chat"),
         ]
     if extra_nav_items:
         nav_items = nav_items + list(extra_nav_items)
@@ -60,6 +65,7 @@ def tailwind_layout(
     ]
     auth_enabled = str(os.getenv("ARENA_UI_AUTH_ENABLED", "false")).strip().lower() in {"1", "true", "yes", "on"}
     safe_max_width = str(max_width_class or "max-w-7xl")
+    safe_main_class = str(main_class or "flex-1 min-w-0 w-full px-4 py-8 sm:px-6 lg:px-10 box-border")
 
     # Status indicator color mapping
     _COLOR_MAP = {
@@ -86,9 +92,11 @@ def tailwind_layout(
         needs_echarts=needs_echarts,
         header_extra=header_extra,
         max_width_class=safe_max_width,
+        main_class=safe_main_class,
         nav_links=nav_links,
         auth_enabled=auth_enabled,
         showcase=showcase,
+        hide_page_header=hide_page_header,
         status_display=_status_display,
         status_ping_color=_status_ping_color,
         status_dot_color=_status_dot_color,

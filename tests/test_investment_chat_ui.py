@@ -1,0 +1,1347 @@
+from __future__ import annotations
+
+import json
+from datetime import datetime, timezone
+from types import SimpleNamespace
+
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from arena.config import load_settings
+from arena.models import AccountSnapshot, ExecutionReport, ExecutionStatus, Position
+from arena.tools.registry import ToolEntry, ToolRegistry
+from arena.ui.layout import tailwind_layout
+from arena.ui.server import _build_app
+from tests.direct_route_client import DirectRouteClient
+from tests.test_ui_admin_routes import _DummyRepo
+
+
+def test_investment_chat_factory_delegates_tool_implementations() -> None:
+    import inspect
+
+    from arena.agents.investment_chat import factory
+
+    source = inspect.getsource(factory)
+
+    assert "def get_account_snapshot(" not in source
+    assert "def validate_order_draft(" not in source
+    assert "def submit_approved_order(" not in source
+
+
+def test_default_layout_places_investment_chat_under_memory_nav() -> None:
+    html = tailwind_layout("Board", "<div>body</div>", active="investment_chat")
+
+    assert "/investment-chat" in html
+    assert "투자챗봇" in html
+    assert 'href="/investment-chat" class="sidebar-link active"' in html
+    assert html.index("기억관리") < html.index("투자챗봇")
+    assert "bottom_nav_links" not in html
+
+
+def test_layout_preserves_tenant_in_investment_chat_nav() -> None:
+    html = tailwind_layout("Board", "<div>body</div>", active="board", tenant="MidNightNnN")
+
+    assert 'href="/investment-chat?tenant_id=midnightnnn"' in html
+
+
+def test_build_investment_chat_agent_filters_write_tools(monkeypatch) -> None:
+    from arena.agents.investment_chat import factory
+
+    settings = load_settings()
+    repo = _DummyRepo()
+    registry = ToolRegistry(
+        [
+            ToolEntry(
+                tool_id="recommend_opportunities",
+                name="recommend_opportunities",
+                description="read tool",
+                category="quant",
+                callable=lambda top_n=8: {"top_n": top_n},
+            ),
+            ToolEntry(
+                tool_id="execute_order",
+                name="execute_order",
+                description="write tool",
+                category="execution",
+                callable=lambda: {"submitted": True},
+            ),
+            ToolEntry(
+                tool_id="screen_market",
+                name="screen_market",
+                description="safe diagnostic read tool",
+                category="quant",
+                callable=lambda bucket="momentum": {"bucket": bucket},
+            ),
+            ToolEntry(
+                tool_id="scratch_run_python",
+                name="scratch_run_python",
+                description="scratch tool",
+                category="analysis",
+                callable=lambda code="": {"code": code},
+            ),
+        ]
+    )
+
+    monkeypatch.setattr(factory, "_resolve_model", lambda *args, **kwargs: "fake-model")
+    monkeypatch.setattr(factory, "Agent", lambda **kwargs: SimpleNamespace(**kwargs))
+
+    agent = factory.build_investment_chat_agent(
+        repo=repo,
+        settings=settings,
+        tenant_id="local",
+        registry=registry,
+    )
+
+    tool_names = {getattr(tool, "__name__", "") for tool in agent.tools}
+    assert "recommend_opportunities" in tool_names
+    assert "screen_market" in tool_names
+    assert "get_account_snapshot" in tool_names
+    assert "get_agent_sleeve_snapshot" in tool_names
+    assert "get_trade_history" in tool_names
+    assert "get_order_approval_status" in tool_names
+    assert "validate_order_draft" in tool_names
+    assert "refresh_account_snapshot" in tool_names
+    assert "submit_approved_order" in tool_names
+    assert "execute_order" not in tool_names
+    assert "submit_order" not in tool_names
+    assert "scratch_run_python" not in tool_names
+    assert "live" not in agent.instruction.lower()
+
+
+def test_investment_chat_builds_analysis_tools_with_total_account_market_scope(monkeypatch) -> None:
+    from arena.agents.investment_chat import factory
+    from arena.agents.investment_chat import registry as chat_registry
+
+    settings = load_settings()
+    settings.kis_target_market = "us"
+    repo = _ChatOrderRepo()
+    repo.set_config("local", "investment_chat_account_markets", "us,kospi", "tester")
+    captured: dict[str, object] = {}
+
+    def fake_default_registry(repo, settings, *, tenant_id="local"):
+        _ = repo, tenant_id
+        captured["kis_target_market"] = settings.kis_target_market
+        return ToolRegistry([])
+
+    monkeypatch.setattr(chat_registry, "build_default_registry", fake_default_registry)
+    monkeypatch.setattr(factory, "_resolve_model", lambda *args, **kwargs: "fake-model")
+    monkeypatch.setattr(factory, "Agent", lambda **kwargs: SimpleNamespace(**kwargs))
+
+    factory.build_investment_chat_agent(
+        repo=repo,
+        settings=settings,
+        tenant_id="local",
+        registry=None,
+    )
+
+    assert captured["kis_target_market"] == "us,kospi"
+
+
+def test_build_investment_chat_agent_injects_tool_memory_for_request_tenant(monkeypatch) -> None:
+    from arena.agents.investment_chat import factory
+    from arena.memory.query_builders import MemoryQuerySpec
+
+    settings = load_settings()
+    repo = _ChatOrderRepo()
+    registry = ToolRegistry(
+        [
+            ToolEntry(
+                tool_id="recommend_opportunities",
+                name="recommend_opportunities",
+                description="read tool",
+                category="quant",
+                callable=lambda top_n=8: {"top_n": top_n},
+            )
+        ]
+    )
+
+    class _VectorStore:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        def search_similar_memories(self, **kwargs):
+            self.calls.append(dict(kwargs))
+            return [
+                {
+                    "event_id": "mem-chat-1",
+                    "summary": "AAPL 급등 후 추격매수보다 분할 접근이 나았다.",
+                    "importance_score": 0.82,
+                }
+            ]
+
+    class _MemoryStore:
+        instances: list["_MemoryStore"] = []
+
+        def __init__(self, *, repo, trading_mode, memory_policy):
+            self.repo = repo
+            self.trading_mode = trading_mode
+            self.memory_policy = memory_policy
+            self.vector_store = _VectorStore()
+            self.__class__.instances.append(self)
+
+        def _tenant(self) -> str:
+            return self.repo.resolve_tenant_id()
+
+    captured: dict[str, object] = {}
+
+    def fake_build_tool_wrapper(
+        entry,
+        *,
+        settings,
+        agent_id,
+        tool_events,
+        update_candidate_ledger,
+        search_tool_memories,
+        apply_tool_schema_metadata,
+    ):
+        _ = settings, tool_events, update_candidate_ledger, apply_tool_schema_metadata
+        captured["agent_id"] = agent_id
+
+        def wrapped():
+            return search_tool_memories(
+                MemoryQuerySpec(
+                    tool_name="recommend_opportunities",
+                    key_type="ticker",
+                    keys=("AAPL",),
+                    query="AAPL opportunity",
+                )
+            )
+
+        wrapped.__name__ = str(entry.name)
+        return wrapped
+
+    monkeypatch.setattr(factory, "MemoryStore", _MemoryStore, raising=False)
+    monkeypatch.setattr(factory, "build_tool_wrapper", fake_build_tool_wrapper)
+    monkeypatch.setattr(factory, "_resolve_model", lambda *args, **kwargs: "fake-model")
+    monkeypatch.setattr(factory, "Agent", lambda **kwargs: SimpleNamespace(**kwargs))
+
+    agent = factory.build_investment_chat_agent(
+        repo=repo,
+        settings=settings,
+        tenant_id="czxnms",
+        registry=registry,
+    )
+
+    memories = agent.tools[0]()
+
+    assert captured["agent_id"] == "investment_chat"
+    assert memories == [
+        {
+            "summary": "AAPL 급등 후 추격매수보다 분할 접근이 나았다.",
+            "importance_score": 0.82,
+        }
+    ]
+    store = _MemoryStore.instances[0]
+    assert store.vector_store.calls[0]["agent_id"] == "investment_chat"
+    assert store.vector_store.calls[0]["tenant_id"] == "czxnms"
+    assert repo.resolve_tenant_id() == "local"
+
+
+class _ChatOrderRepo(_DummyRepo):
+    tenant_id = "local"
+
+    def __init__(
+        self,
+        *,
+        account_snapshot: AccountSnapshot | None = None,
+        sleeve_snapshot: AccountSnapshot | None = None,
+    ) -> None:
+        super().__init__()
+        self.audit_logs: list[dict[str, object]] = []
+        self.order_intents: list[dict[str, object]] = []
+        self.execution_reports: list[dict[str, object]] = []
+        self.trade_history_rows: list[dict[str, object]] = []
+        self.trade_history_calls: list[dict[str, object]] = []
+        self.sleeve_calls: list[dict[str, object]] = []
+        self.account_snapshot = account_snapshot or AccountSnapshot(
+            cash_krw=9_000_000.0,
+            total_equity_krw=10_000_000.0,
+            usd_krw_rate=1400.0,
+            positions={
+                "AAPL": Position(
+                    ticker="AAPL",
+                    quantity=2,
+                    avg_price_krw=120_000,
+                    market_price_krw=130_000,
+                )
+            },
+        )
+        self.sleeve_snapshot = sleeve_snapshot or AccountSnapshot(
+            cash_krw=4_000_000.0,
+            total_equity_krw=5_000_000.0,
+            usd_krw_rate=1400.0,
+            positions={
+                "AAPL": Position(
+                    ticker="AAPL",
+                    quantity=2,
+                    avg_price_krw=120_000,
+                    market_price_krw=130_000,
+                )
+            },
+        )
+
+    def resolve_tenant_id(self, tenant_id: str | None = None) -> str:
+        return str(tenant_id or self.tenant_id or "local").strip().lower() or "local"
+
+    def latest_account_snapshot(self, *, tenant_id: str | None = None):
+        _ = tenant_id
+        return self.account_snapshot
+
+    def build_agent_sleeve_snapshot(self, *, agent_id, sources=None, include_simulated=True, tenant_id=None):
+        self.sleeve_calls.append(
+            {
+                "agent_id": agent_id,
+                "sources": sources,
+                "include_simulated": include_simulated,
+                "tenant_id": tenant_id,
+            }
+        )
+        return self.sleeve_snapshot, float(self.sleeve_snapshot.total_equity_krw), {"source": "test_sleeve"}
+
+    def recent_turnover_krw(self, *args, **kwargs) -> float:
+        _ = args, kwargs
+        return 0.0
+
+    def recent_intent_count(self, *args, **kwargs) -> int:
+        _ = args, kwargs
+        return 0
+
+    def last_trade_time(self, *args, **kwargs):
+        _ = args, kwargs
+        return None
+
+    def recent_trade_history(self, **kwargs):
+        self.trade_history_calls.append(dict(kwargs))
+        return list(self.trade_history_rows)
+
+    def write_order_intent(self, intent, decision) -> None:
+        self.order_intents.append({"intent": intent, "decision": decision})
+
+    def write_execution_report(self, intent, report) -> None:
+        self.execution_reports.append({"intent": intent, "report": report})
+
+    def append_runtime_audit_log(self, **kwargs) -> None:
+        self.audit_logs.append(dict(kwargs))
+
+
+class _FakeExecutionMemory:
+    instances: list["_FakeExecutionMemory"] = []
+
+    def __init__(self, *args, **kwargs) -> None:
+        self.args = args
+        self.kwargs = kwargs
+        self.executions: list[dict[str, object]] = []
+        self.theses: list[dict[str, object]] = []
+        self.reflections: list[dict[str, object]] = []
+        self.__class__.instances.append(self)
+
+    def record_execution(self, *, intent, decision, report) -> None:
+        self.executions.append({"intent": intent, "decision": decision, "report": report})
+
+    def record_thesis_lifecycle(self, *, intent, decision, report, snapshot_before=None) -> None:
+        self.theses.append(
+            {
+                "intent": intent,
+                "decision": decision,
+                "report": report,
+                "snapshot_before": snapshot_before,
+            }
+        )
+
+    def record_reflection(self, agent_id, summary, *, score=0.5, payload=None, semantic_key=None) -> None:
+        self.reflections.append(
+            {
+                "agent_id": agent_id,
+                "summary": summary,
+                "score": score,
+                "payload": payload or {},
+                "semantic_key": semantic_key,
+            }
+        )
+
+
+def _build_fake_chat_agent(monkeypatch, repo: _ChatOrderRepo):
+    from arena.agents.investment_chat import factory
+    from arena.agents.investment_chat import memory as chat_memory
+
+    settings = load_settings()
+    settings.trading_mode = "paper"
+    settings.kis_target_market = "us"
+
+    _FakeExecutionMemory.instances.clear()
+    monkeypatch.setattr(chat_memory, "MemoryStore", _FakeExecutionMemory, raising=False)
+    monkeypatch.setattr(factory, "_resolve_model", lambda *args, **kwargs: "fake-model")
+    monkeypatch.setattr(factory, "Agent", lambda **kwargs: SimpleNamespace(**kwargs))
+    return factory.build_investment_chat_agent(
+        repo=repo,
+        settings=settings,
+        tenant_id="local",
+        registry=ToolRegistry([]),
+    )
+
+
+def _build_raw_chat_tools(monkeypatch, repo: _ChatOrderRepo, *, settings=None):
+    from arena.agents.investment_chat import memory as chat_memory
+    from arena.agents.investment_chat.registry import build_chat_registry
+
+    tool_settings = settings or load_settings()
+    if settings is None:
+        tool_settings.trading_mode = "paper"
+    tool_settings.kis_target_market = str(getattr(tool_settings, "kis_target_market", "") or "us")
+
+    _FakeExecutionMemory.instances.clear()
+    monkeypatch.setattr(chat_memory, "MemoryStore", _FakeExecutionMemory, raising=False)
+    registry = build_chat_registry(repo=repo, settings=tool_settings, tenant_id="local", registry=ToolRegistry([]))
+    return {entry.name: entry.callable for entry in registry.list_entries(require_callable=True)}
+
+
+def test_chat_order_tools_require_confirmation_and_are_idempotent(monkeypatch) -> None:
+    from arena.agents.investment_chat.context import REQUEST_USER_EMAIL
+    from arena.agents.investment_chat.drafts import draft_key
+
+    repo = _ChatOrderRepo()
+    tools = _build_raw_chat_tools(monkeypatch, repo)
+
+    user_token = REQUEST_USER_EMAIL.set("trader@example.com")
+    try:
+        draft = tools["validate_order_draft"](
+            ticker="AAPL",
+            side="BUY",
+            quantity=1,
+            price_krw=100_000,
+            rationale="test buy",
+            exchange_code="NASD",
+            instrument_id="NASD:AAPL",
+        )
+
+        token = str(draft.get("approval_token") or "")
+        assert draft["submission_status"] == "not_submitted"
+        assert token
+        assert repo.get_config("local", draft_key(token))
+
+        blocked = tools["submit_approved_order"](approval_token=token, confirmation_text="승인")
+
+        assert blocked["status"] == "blocked"
+        assert "CONFIRM" in blocked["required_confirmation"]
+        assert repo.execution_reports == []
+
+        submitted = tools["submit_approved_order"](
+            approval_token=token,
+            confirmation_text=f"CONFIRM {token}",
+        )
+        repeated = tools["submit_approved_order"](
+            approval_token=token,
+            confirmation_text=f"CONFIRM {token}",
+        )
+    finally:
+        REQUEST_USER_EMAIL.reset(user_token)
+
+    assert submitted["status"] == "submitted"
+    assert submitted["execution_report"]["status"] == ExecutionStatus.SIMULATED.value
+    assert repeated["status"] == "already_submitted"
+    assert len(repo.execution_reports) == 1
+    assert any(row.get("action") == "chat_order_submit" for row in repo.audit_logs)
+    assert {row.get("user_email") for row in repo.audit_logs} == {"trader@example.com"}
+
+    second_draft = tools["validate_order_draft"](
+        ticker="AAPL",
+        side="BUY",
+        quantity=1,
+        price_krw=100_000,
+        rationale="test buy",
+        exchange_code="NASD",
+        instrument_id="NASD:AAPL",
+    )
+
+    assert second_draft["approval_token"] != token
+    assert tools["submit_approved_order"](token, f"CONFIRM {token}")["status"] == "already_submitted"
+
+
+def test_get_trade_history_tool_reads_tenant_scoped_execution_history(monkeypatch) -> None:
+    repo = _ChatOrderRepo()
+    repo.trade_history_rows = [
+        {
+            "order_id": "order-1",
+            "intent_id": "intent-1",
+            "created_at": datetime(2026, 4, 28, 1, 1, tzinfo=timezone.utc),
+            "trading_mode": "paper",
+            "agent_id": "gpt",
+            "ticker": "AAPL",
+            "exchange_code": "NASD",
+            "instrument_id": "NASD:AAPL",
+            "side": "SELL",
+            "requested_qty": 2.0,
+            "filled_qty": 1.0,
+            "avg_price_krw": 150_000.0,
+            "avg_price_native": 100.0,
+            "quote_currency": "USD",
+            "fx_rate": 1500.0,
+            "status": "SIMULATED",
+            "message": "paper fill",
+            "rationale": "사용자와 투자챗봇이 과열 구간 일부 익절을 판단함",
+            "risk_reason": "ok",
+            "policy_hits": ["chat_confirmation"],
+            "strategy_refs": ["scope:agent_sleeve", "judgment:user+investment_chat"],
+        }
+    ]
+    tools = _build_raw_chat_tools(monkeypatch, repo)
+
+    result = tools["get_trade_history"](
+        ticker="aapl",
+        agent_id="gpt",
+        scope="agent_sleeve",
+        days=30,
+        limit=5,
+    )
+
+    assert result["status"] == "ok"
+    assert result["tenant_id"] == "local"
+    assert result["count"] == 1
+    assert repo.trade_history_calls == [
+        {
+            "tenant_id": "local",
+            "ticker": "AAPL",
+            "agent_id": "gpt",
+            "scope": "agent_sleeve",
+            "days": 30,
+            "limit": 5,
+            "statuses": ["FILLED", "SIMULATED", "SUBMITTED"],
+        }
+    ]
+    trade = result["trades"][0]
+    assert trade["ticker"] == "AAPL"
+    assert trade["scope"] == "agent_sleeve"
+    assert trade["judgment_source"] == "user+investment_chat"
+    assert trade["notional_krw"] == 150_000.0
+    assert trade["rationale"] == "사용자와 투자챗봇이 과열 구간 일부 익절을 판단함"
+
+
+def test_chat_sleeve_order_uses_sleeve_snapshot_and_syncs_target_agent_memory(monkeypatch) -> None:
+    from arena.agents.investment_chat.context import REQUEST_USER_EMAIL
+
+    repo = _ChatOrderRepo(
+        account_snapshot=AccountSnapshot(cash_krw=9_000_000.0, total_equity_krw=10_000_000.0, positions={}),
+        sleeve_snapshot=AccountSnapshot(
+            cash_krw=1_000_000.0,
+            total_equity_krw=1_260_000.0,
+            usd_krw_rate=1400.0,
+            positions={
+                "AAPL": Position(
+                    ticker="AAPL",
+                    quantity=2,
+                    avg_price_krw=120_000,
+                    market_price_krw=130_000,
+                )
+            },
+        ),
+    )
+    tools = _build_raw_chat_tools(monkeypatch, repo)
+
+    user_token = REQUEST_USER_EMAIL.set("trader@example.com")
+    try:
+        draft = tools["validate_order_draft"](
+            ticker="AAPL",
+            side="SELL",
+            quantity=1,
+            price_krw=130_000,
+            rationale="사용자가 AAPL 비중을 낮추고 현금 여력을 확보하기로 판단함",
+            scope="agent_sleeve",
+            agent_id="gpt",
+            exchange_code="NASD",
+            instrument_id="NASD:AAPL",
+        )
+        token = str(draft["approval_token"])
+        submitted = tools["submit_approved_order"](
+            approval_token=token,
+            confirmation_text=f"CONFIRM {token}",
+        )
+    finally:
+        REQUEST_USER_EMAIL.reset(user_token)
+
+    assert draft["status"] == "ok"
+    assert draft["risk"]["allowed"] is True
+    assert draft["scope"] == "agent_sleeve"
+    assert draft["intent"]["agent_id"] == "gpt"
+    assert submitted["status"] == "submitted"
+    assert len(repo.sleeve_calls) >= 2
+    assert {str(call["agent_id"]) for call in repo.sleeve_calls} == {"gpt"}
+    assert len(repo.order_intents) == 1
+    intent = repo.order_intents[0]["intent"]
+    assert intent.agent_id == "gpt"
+    assert "scope:agent_sleeve" in intent.strategy_refs
+    assert "judgment:user+investment_chat" in intent.strategy_refs
+    assert "approved_by:trader@example.com" in intent.strategy_refs
+    assert len(_FakeExecutionMemory.instances) == 1
+    memory = _FakeExecutionMemory.instances[0]
+    assert [row["intent"].agent_id for row in memory.executions] == ["gpt"]
+    assert [row["intent"].agent_id for row in memory.theses] == ["gpt"]
+    assert [row["agent_id"] for row in memory.reflections] == ["gpt"]
+    reflection = memory.reflections[0]
+    assert "사용자+투자챗봇 판단" in reflection["summary"]
+    assert "AAPL 비중을 낮추고" in reflection["summary"]
+    assert reflection["payload"]["source"] == "investment_chat_order_decision"
+    assert reflection["payload"]["judgment_source"] == "user+investment_chat"
+    assert reflection["payload"]["scope"] == "agent_sleeve"
+    assert reflection["payload"]["approved_by"] == "trader@example.com"
+
+
+def test_chat_order_submit_blocks_live_mode_without_explicit_permission(monkeypatch) -> None:
+    repo = _ChatOrderRepo()
+    settings = load_settings()
+    settings.trading_mode = "live"
+    settings.allow_live_trading = False
+    settings.kis_target_market = "us"
+
+    tools = _build_raw_chat_tools(monkeypatch, repo, settings=settings)
+
+    draft = tools["validate_order_draft"](
+        ticker="AAPL",
+        side="BUY",
+        quantity=1,
+        price_krw=100_000,
+        rationale="test buy",
+    )
+    token = str(draft["approval_token"])
+    submitted = tools["submit_approved_order"](
+        approval_token=token,
+        confirmation_text=f"CONFIRM {token}",
+    )
+
+    assert submitted["status"] == "blocked"
+    assert "live trading" in submitted["error"]
+    assert repo.execution_reports == []
+
+
+def test_refresh_account_snapshot_tool_calls_sync_service(monkeypatch) -> None:
+    from arena.agents.investment_chat import account_tools
+
+    repo = _ChatOrderRepo()
+    repo.runtime_credentials["local"] = {"kis_secret_name": "local-local-kis"}
+    agent = _build_fake_chat_agent(monkeypatch, repo)
+    tools = {getattr(tool, "__name__", ""): tool for tool in agent.tools}
+    calls: dict[str, object] = {}
+
+    class _FakeAccountSyncService:
+        def __init__(self, *, settings, repo):
+            calls["settings"] = settings
+            calls["repo"] = repo
+
+        def sync_account_snapshot(self):
+            calls["synced_at"] = datetime.now(timezone.utc)
+            return AccountSnapshot(cash_krw=1.0, total_equity_krw=2.0, positions={})
+
+    monkeypatch.setattr(account_tools, "AccountSyncService", _FakeAccountSyncService)
+
+    result = tools["refresh_account_snapshot"]()
+
+    assert result["status"] == "ok"
+    assert result["total_equity_krw"] == 2.0
+    assert calls["repo"] is repo
+
+
+def test_refresh_account_snapshot_defaults_to_total_account_markets(monkeypatch) -> None:
+    from arena.agents.investment_chat import account_tools
+
+    repo = _ChatOrderRepo()
+    repo.runtime_credentials["local"] = {"kis_secret_name": "local-local-kis"}
+    agent = _build_fake_chat_agent(monkeypatch, repo)
+    tools = {getattr(tool, "__name__", ""): tool for tool in agent.tools}
+    calls: dict[str, object] = {}
+
+    class _FakeAccountSyncService:
+        def __init__(self, *, settings, repo):
+            calls["market"] = settings.kis_target_market
+            calls["repo"] = repo
+
+        def sync_account_snapshot(self):
+            return AccountSnapshot(cash_krw=1.0, total_equity_krw=2.0, positions={})
+
+    monkeypatch.setattr(account_tools, "AccountSyncService", _FakeAccountSyncService)
+
+    result = tools["refresh_account_snapshot"]()
+
+    assert result["status"] == "ok"
+    assert calls["market"] == "us,kospi"
+    assert repo.audit_logs[-1]["detail"]["target_market"] == "us,kospi"
+
+
+def test_refresh_account_snapshot_uses_chat_account_market_override(monkeypatch) -> None:
+    from arena.agents.investment_chat import account_tools
+
+    repo = _ChatOrderRepo()
+    repo.runtime_credentials["local"] = {"kis_secret_name": "local-local-kis"}
+    repo.set_config("local", "investment_chat_account_markets", "us,kospi", "tester")
+    agent = _build_fake_chat_agent(monkeypatch, repo)
+    tools = {getattr(tool, "__name__", ""): tool for tool in agent.tools}
+    calls: dict[str, object] = {}
+
+    class _FakeAccountSyncService:
+        def __init__(self, *, settings, repo):
+            calls["market"] = settings.kis_target_market
+            calls["repo"] = repo
+
+        def sync_account_snapshot(self):
+            return AccountSnapshot(cash_krw=1.0, total_equity_krw=2.0, positions={})
+
+    monkeypatch.setattr(account_tools, "AccountSyncService", _FakeAccountSyncService)
+
+    result = tools["refresh_account_snapshot"]()
+
+    assert result["status"] == "ok"
+    assert calls["market"] == "us,kospi"
+    assert repo.audit_logs[-1]["detail"]["target_market"] == "us,kospi"
+
+
+def test_refresh_account_snapshot_blocks_server_fallback_credentials(monkeypatch) -> None:
+    from arena.agents.investment_chat import account_tools, factory
+
+    repo = _ChatOrderRepo()
+    settings = load_settings()
+    settings.kis_secret_name = "KISAPI"
+    settings.kis_api_key = "server-default-key"
+    settings.kis_api_secret = "server-default-secret"
+    settings.kis_account_no = "1234567890"
+    settings.kis_target_market = "us"
+
+    monkeypatch.setattr(factory, "_resolve_model", lambda *args, **kwargs: "fake-model")
+    monkeypatch.setattr(factory, "Agent", lambda **kwargs: SimpleNamespace(**kwargs))
+
+    calls: dict[str, object] = {}
+
+    class _FakeAccountSyncService:
+        def __init__(self, *, settings, repo):
+            calls["settings"] = settings
+            calls["repo"] = repo
+
+        def sync_account_snapshot(self):
+            calls["synced"] = True
+            return AccountSnapshot(cash_krw=1.0, total_equity_krw=2.0, positions={})
+
+    monkeypatch.setattr(account_tools, "AccountSyncService", _FakeAccountSyncService)
+
+    agent = factory.build_investment_chat_agent(
+        repo=repo,
+        settings=settings,
+        tenant_id="czxnms",
+        registry=ToolRegistry([]),
+    )
+    tools = {getattr(tool, "__name__", ""): tool for tool in agent.tools}
+
+    result = tools["refresh_account_snapshot"]()
+
+    assert result["status"] == "blocked"
+    assert result["tenant_id"] == "czxnms"
+    assert "tenant KIS credentials" in result["error"]
+    assert "synced" not in calls
+
+
+def test_investment_chat_loader_binds_default_tenant(monkeypatch) -> None:
+    from arena.ui import investment_chat_adk
+
+    calls: dict[str, object] = {}
+    settings = load_settings()
+
+    def fake_build_agent(**kwargs):
+        calls.update(kwargs)
+        return SimpleNamespace(name="investment_chat", description="chat")
+
+    monkeypatch.setattr(investment_chat_adk, "build_investment_chat_agent", fake_build_agent)
+
+    loader = investment_chat_adk.InvestmentChatAgentLoader(
+        repo=_DummyRepo(),
+        settings_for_tenant=lambda tenant: settings,
+        get_default_registry=lambda tenant: ToolRegistry([]),
+        default_tenant="MidNightNnN",
+    )
+
+    agent = loader.load_agent("investment_chat")
+
+    assert agent.name == "investment_chat"
+    assert loader.list_agents() == ["investment_chat__midnightnnn__gemini__m_Z2VtaW5pLTMtZmxhc2gtcHJldmlldw"]
+    assert calls["tenant_id"] == "midnightnnn"
+    assert calls["settings"] is settings
+    assert calls["registry"] is None
+
+    loader.load_agent("investment_chat__research")
+    assert calls["tenant_id"] == "research"
+
+
+def test_investment_chat_loader_separates_model_selection(monkeypatch) -> None:
+    from arena.agents.investment_chat.context import REQUEST_MODEL, REQUEST_PROVIDER
+    from arena.ui import investment_chat_adk
+
+    calls: dict[str, object] = {}
+    settings = load_settings()
+
+    def fake_build_agent(**kwargs):
+        calls.update(kwargs)
+        return SimpleNamespace(name="investment_chat", description="chat")
+
+    monkeypatch.setattr(investment_chat_adk, "build_investment_chat_agent", fake_build_agent)
+    loader = investment_chat_adk.InvestmentChatAgentLoader(
+        repo=_DummyRepo(),
+        settings_for_tenant=lambda tenant: settings,
+        get_default_registry=lambda tenant: ToolRegistry([]),
+        default_tenant="local",
+    )
+
+    provider_token = REQUEST_PROVIDER.set("gpt")
+    model_token = REQUEST_MODEL.set("gpt-5.5")
+    try:
+        listed = loader.list_agents()
+        loader.load_agent(listed[0])
+    finally:
+        REQUEST_MODEL.reset(model_token)
+        REQUEST_PROVIDER.reset(provider_token)
+
+    assert listed == ["investment_chat__local__gpt__m_Z3B0LTUuNQ"]
+    assert calls["tenant_id"] == "local"
+    assert calls["provider"] == "gpt"
+    assert calls["model_override"] == "gpt-5.5"
+
+    calls.clear()
+    second_loader = investment_chat_adk.InvestmentChatAgentLoader(
+        repo=_DummyRepo(),
+        settings_for_tenant=lambda tenant: settings,
+        get_default_registry=lambda tenant: ToolRegistry([]),
+        default_tenant="local",
+    )
+    second_loader.load_agent(listed[0])
+
+    assert calls["provider"] == "gpt"
+    assert calls["model_override"] == "gpt-5.5"
+
+    calls.clear()
+    gemini_provider = REQUEST_PROVIDER.set("gemini")
+    gemini_model = REQUEST_MODEL.set("gemini-3.1-pro-preview")
+    try:
+        gemini_listed = second_loader.list_agents()
+    finally:
+        REQUEST_MODEL.reset(gemini_model)
+        REQUEST_PROVIDER.reset(gemini_provider)
+    third_loader = investment_chat_adk.InvestmentChatAgentLoader(
+        repo=_DummyRepo(),
+        settings_for_tenant=lambda tenant: settings,
+        get_default_registry=lambda tenant: ToolRegistry([]),
+        default_tenant="local",
+    )
+    third_loader.load_agent(gemini_listed[0])
+
+    assert gemini_listed == ["investment_chat__local__gemini__m_Z2VtaW5pLTMuMS1wcm8tcHJldmlldw"]
+    assert calls["provider"] == "gemini"
+    assert calls["model_override"] == "gemini-3.1-pro-preview"
+
+
+def test_investment_chat_loader_request_selection_overrides_stale_adk_app_name(monkeypatch) -> None:
+    from arena.agents.investment_chat.context import REQUEST_MODEL, REQUEST_PROVIDER, REQUEST_TENANT
+    from arena.ui import investment_chat_adk
+
+    calls: dict[str, object] = {}
+    settings = load_settings()
+
+    def fake_build_agent(**kwargs):
+        calls.update(kwargs)
+        return SimpleNamespace(name="investment_chat", description="chat")
+
+    monkeypatch.setattr(investment_chat_adk, "build_investment_chat_agent", fake_build_agent)
+    loader = investment_chat_adk.InvestmentChatAgentLoader(
+        repo=_DummyRepo(),
+        settings_for_tenant=lambda tenant: settings,
+        get_default_registry=lambda tenant: ToolRegistry([]),
+        default_tenant="local",
+    )
+
+    tenant_token = REQUEST_TENANT.set("czxnms")
+    provider_token = REQUEST_PROVIDER.set("gemini")
+    model_token = REQUEST_MODEL.set("gemini-3-flash-preview")
+    try:
+        stale_app_name = "investment_chat__midnightnnn__gpt__m_Z3B0LTUuMg"
+        loader.load_agent(stale_app_name)
+    finally:
+        REQUEST_MODEL.reset(model_token)
+        REQUEST_PROVIDER.reset(provider_token)
+        REQUEST_TENANT.reset(tenant_token)
+
+    assert calls["tenant_id"] == "czxnms"
+    assert calls["provider"] == "gemini"
+    assert calls["model_override"] == "gemini-3-flash-preview"
+
+
+def test_investment_chat_loader_uses_encoded_claude_selection_without_request_context(monkeypatch) -> None:
+    from arena.ui import investment_chat_adk
+
+    calls: dict[str, object] = {}
+    settings = load_settings()
+
+    def fake_build_agent(**kwargs):
+        calls.update(kwargs)
+        return SimpleNamespace(name="investment_chat", description="chat")
+
+    monkeypatch.setattr(investment_chat_adk, "build_investment_chat_agent", fake_build_agent)
+    loader = investment_chat_adk.InvestmentChatAgentLoader(
+        repo=_DummyRepo(),
+        settings_for_tenant=lambda tenant: settings,
+        get_default_registry=lambda tenant: ToolRegistry([]),
+        default_tenant="local",
+    )
+
+    claude_app_name = "investment_chat__local__claude__m_Y2xhdWRlLXNvbm5ldC00LTY"
+    loader.load_agent(claude_app_name)
+
+    assert calls["provider"] == "claude"
+    assert calls["model_override"] == "claude-sonnet-4-6"
+
+
+def test_ui_registers_investment_chat_page_and_adk_mount(monkeypatch) -> None:
+    import arena.ui.app as ui_app
+
+    monkeypatch.setenv("ARENA_UI_AUTH_ENABLED", "false")
+    monkeypatch.setattr(
+        ui_app,
+        "build_investment_chat_adk_app",
+        lambda **kwargs: FastAPI(title="stub-adk"),
+    )
+
+    app = _build_app(repo=_DummyRepo(), settings=load_settings())
+    client = DirectRouteClient(app)
+
+    response = client.get("/investment-chat", params={"tenant_id": "local", "provider": "gpt", "model": "gpt-5.2"})
+
+    assert response.status_code == 200
+    assert "투자챗봇" in response.text
+    assert ">투자챗봇</h2>" not in response.text
+    assert "/investment-chat/adk/dev-ui/?tenant_id=local&amp;provider=gpt&amp;model=gpt-5.2" in response.text
+    assert 'id="sidebar-collapse-toggle"' in response.text
+    assert response.text.index('id="arena-sidebar"') < response.text.index('id="sidebar-collapse-toggle"') < response.text.index("<nav")
+    collapsed_rule = response.text.split("body.sidebar-collapsed .arena-sidebar {", 1)[1].split("}", 1)[0]
+    assert "margin-left" not in collapsed_rule
+    assert "width: var(--sidebar-collapsed-w)" in collapsed_rule
+    assert "flex-basis: var(--sidebar-collapsed-w)" in collapsed_rule
+    assert "transform:" not in collapsed_rule
+    assert "body.sidebar-collapsed #arena-sidebar nav" in response.text
+    assert "body.sidebar-collapsed .sidebar-footer" in response.text
+    assert client.session["investment_chat_tenant_id"] == "local"
+    assert client.session["investment_chat_provider"] == "gpt"
+    assert client.session["investment_chat_model"] == "gpt-5.2"
+    assert 'name="provider"' in response.text
+    assert "data-chat-selector-form" in response.text
+    assert '<select\n      name="model"' in response.text
+    assert "requestSubmit" in response.text
+    assert "model.addEventListener('change', submitSelection)" in response.text
+    assert "submitResultMessage" in response.text
+    assert "execution_report.message" in response.text
+    assert "deliverOrderResultToChat" in response.text
+    assert "isAdkChatBusy" in response.text
+    assert "mat-progress-bar" in response.text
+    assert "textarea.chat-input-box" in response.text
+    assert "button.send-message-btn" in response.text
+    assert 'list="investment-chat-model-presets"' not in response.text
+    assert 'value="gpt-5.2"' in response.text
+    assert "gpt-5.5" in response.text
+    assert "gemini-3.1-flash-preview" in response.text
+    assert "gemini-3.1-pro-preview" in response.text
+    assert 'h-screen' in response.text
+    assert any(getattr(route, "path", "") == "/investment-chat/adk" for route in app.routes)
+
+
+def test_investment_chat_model_select_renders_all_provider_presets(monkeypatch) -> None:
+    import arena.ui.app as ui_app
+
+    monkeypatch.setenv("ARENA_UI_AUTH_ENABLED", "false")
+    monkeypatch.setattr(
+        ui_app,
+        "build_investment_chat_adk_app",
+        lambda **kwargs: FastAPI(title="stub-adk"),
+    )
+
+    app = _build_app(repo=_DummyRepo(), settings=load_settings())
+    client = DirectRouteClient(app)
+
+    response = client.get(
+        "/investment-chat",
+        params={"tenant_id": "local", "provider": "claude", "model": "claude-sonnet-4-6"},
+    )
+
+    assert response.status_code == 200
+    assert '<select\n      name="model"' in response.text
+    assert '<option value="claude-sonnet-4-6" selected>claude-sonnet-4-6</option>' in response.text
+    assert 'value="claude-opus-4-7"' in response.text
+    assert 'value="claude-opus-4-5"' in response.text
+    assert 'value="claude-sonnet-4-5"' in response.text
+
+
+def test_investment_chat_provider_options_come_from_adk_provider_registry(monkeypatch) -> None:
+    import arena.ui.app as ui_app
+
+    monkeypatch.setenv("ARENA_UI_AUTH_ENABLED", "false")
+    monkeypatch.setattr(
+        ui_app,
+        "build_investment_chat_adk_app",
+        lambda **kwargs: FastAPI(title="stub-adk"),
+    )
+
+    app = _build_app(repo=_DummyRepo(), settings=load_settings())
+    client = DirectRouteClient(app)
+
+    response = client.get(
+        "/investment-chat",
+        params={"tenant_id": "local", "provider": "deepseek", "model": "deepseek-reasoner"},
+    )
+
+    assert response.status_code == 200
+    assert '<option value="deepseek" selected>DeepSeek</option>' in response.text
+    assert '<option value="gpt"' in response.text
+    assert '<option value="gemini"' in response.text
+    assert '<option value="claude"' in response.text
+    assert client.session["investment_chat_provider"] == "deepseek"
+    assert client.session["investment_chat_model"] == "deepseek-reasoner"
+
+
+def test_investment_chat_provider_options_are_limited_to_tenant_model_keys(monkeypatch) -> None:
+    import arena.ui.app as ui_app
+
+    monkeypatch.setenv("ARENA_UI_AUTH_ENABLED", "false")
+    monkeypatch.setattr(
+        ui_app,
+        "build_investment_chat_adk_app",
+        lambda **kwargs: FastAPI(title="stub-adk"),
+    )
+    repo = _DummyRepo()
+    repo.runtime_credentials["czxnms"] = {
+        "tenant_id": "czxnms",
+        "model_secret_name": "local-czxnms-models",
+        "has_openai": False,
+        "has_gemini": False,
+        "has_anthropic": True,
+    }
+    app = _build_app(repo=repo, settings=load_settings())
+    client = DirectRouteClient(app)
+
+    response = client.get(
+        "/investment-chat",
+        params={"tenant_id": "czxnms", "provider": "gemini", "model": "gemini-3-flash-preview"},
+    )
+
+    assert response.status_code == 200
+    assert '<option value="claude" selected>Anthropic Claude</option>' in response.text
+    assert '<option value="gemini"' not in response.text
+    assert '<option value="gpt"' not in response.text
+    assert "/investment-chat/adk/dev-ui/?tenant_id=czxnms&amp;provider=claude" in response.text
+    assert "gemini-3-flash-preview" not in response.text
+    assert client.session["investment_chat_provider"] == "claude"
+    assert client.session["investment_chat_model"].startswith("claude-")
+
+
+def test_investment_chat_provider_options_show_no_iframe_when_no_tenant_model_keys(monkeypatch) -> None:
+    import arena.ui.app as ui_app
+
+    monkeypatch.setenv("ARENA_UI_AUTH_ENABLED", "false")
+    monkeypatch.setattr(
+        ui_app,
+        "build_investment_chat_adk_app",
+        lambda **kwargs: FastAPI(title="stub-adk"),
+    )
+    repo = _DummyRepo()
+    repo.runtime_credentials["czxnms"] = {
+        "tenant_id": "czxnms",
+        "model_secret_name": "local-czxnms-models",
+        "has_openai": False,
+        "has_gemini": False,
+        "has_anthropic": False,
+    }
+    app = _build_app(repo=repo, settings=load_settings())
+    client = DirectRouteClient(app)
+
+    response = client.get("/investment-chat", params={"tenant_id": "czxnms"})
+
+    assert response.status_code == 200
+    assert "등록된 LLM API key가 없습니다" in response.text
+    assert "<iframe" not in response.text
+
+
+def test_investment_chat_loader_restricts_selection_to_tenant_model_keys(monkeypatch) -> None:
+    from arena.agents.investment_chat.context import REQUEST_MODEL, REQUEST_PROVIDER
+    from arena.ui import investment_chat_adk
+
+    calls: dict[str, object] = {}
+    settings = load_settings()
+    repo = _DummyRepo()
+    repo.runtime_credentials["czxnms"] = {
+        "tenant_id": "czxnms",
+        "model_secret_name": "local-czxnms-models",
+        "has_openai": False,
+        "has_gemini": False,
+        "has_anthropic": True,
+    }
+
+    def fake_build_agent(**kwargs):
+        calls.update(kwargs)
+        return SimpleNamespace(name="investment_chat", description="chat")
+
+    monkeypatch.setattr(investment_chat_adk, "build_investment_chat_agent", fake_build_agent)
+    loader = investment_chat_adk.InvestmentChatAgentLoader(
+        repo=repo,
+        settings_for_tenant=lambda tenant: settings,
+        get_default_registry=lambda tenant: ToolRegistry([]),
+        default_tenant="czxnms",
+    )
+
+    provider_token = REQUEST_PROVIDER.set("gemini")
+    model_token = REQUEST_MODEL.set("gemini-3-flash-preview")
+    try:
+        listed = loader.list_agents()
+        loader.load_agent(listed[0])
+    finally:
+        REQUEST_MODEL.reset(model_token)
+        REQUEST_PROVIDER.reset(provider_token)
+
+    assert listed[0].startswith("investment_chat__czxnms__claude__m_")
+    assert calls["provider"] == "claude"
+    assert str(calls["model_override"]).startswith("claude-")
+
+
+def test_investment_chat_order_draft_api_lists_and_submits_pending_draft(monkeypatch) -> None:
+    import arena.ui.app as ui_app
+    from arena.agents.investment_chat import order_tools
+    from arena.agents.investment_chat.registry import build_chat_registry
+
+    monkeypatch.setenv("ARENA_UI_AUTH_ENABLED", "false")
+    monkeypatch.setattr(
+        ui_app,
+        "build_investment_chat_adk_app",
+        lambda **kwargs: FastAPI(title="stub-adk"),
+    )
+    monkeypatch.setattr(order_tools, "build_execution_memory", lambda repo, settings: _FakeExecutionMemory())
+    settings = load_settings()
+    settings.trading_mode = "paper"
+    repo = _ChatOrderRepo()
+    repo.recent_runtime_audit_logs = lambda limit=50: list(reversed(repo.audit_logs[-limit:]))  # type: ignore[method-assign]
+    registry = build_chat_registry(repo=repo, settings=settings, tenant_id="local", registry=None)
+    validate = registry.get("validate_order_draft").callable
+
+    draft = validate(ticker="AAPL", side="BUY", quantity=1, price_krw=100_000, rationale="button approval test")
+    token = str(draft["approval_token"])
+    app = _build_app(repo=repo, settings=settings)
+    client = DirectRouteClient(app)
+
+    listed = client.get("/investment-chat/order-drafts", params={"tenant_id": "local"})
+
+    assert listed.status_code == 200
+    payload = listed.json()
+    assert payload["drafts"][0]["approval_token"] == token
+    assert payload["drafts"][0]["submittable"] is True
+    assert payload["drafts"][0]["intent"]["ticker"] == "AAPL"
+    assert "required_confirmation" not in payload["drafts"][0]
+
+    submitted = client.post(f"/investment-chat/order-drafts/{token}/submit", params={"tenant_id": "local"})
+
+    assert submitted.status_code == 200
+    result = submitted.json()
+    assert result["status"] == "submitted"
+    assert len(repo.execution_reports) == 1
+
+
+def test_investment_chat_order_draft_api_surfaces_broker_error_message(monkeypatch) -> None:
+    import arena.ui.app as ui_app
+    from arena.agents.investment_chat import order_tools
+    from arena.agents.investment_chat.registry import build_chat_registry
+
+    monkeypatch.setenv("ARENA_UI_AUTH_ENABLED", "false")
+    monkeypatch.setattr(
+        ui_app,
+        "build_investment_chat_adk_app",
+        lambda **kwargs: FastAPI(title="stub-adk"),
+    )
+    monkeypatch.setattr(order_tools, "build_execution_memory", lambda repo, settings: _FakeExecutionMemory())
+
+    class _RejectingBroker:
+        def place_order(self, intent, *, fx_rate=None):
+            _ = intent, fx_rate
+            return ExecutionReport(
+                status=ExecutionStatus.ERROR,
+                order_id="err_holiday",
+                filled_qty=0,
+                avg_price_krw=0,
+                message="금일은 해외 휴장일로 주문이 불가합니다.",
+            )
+
+    monkeypatch.setattr(order_tools, "PaperBroker", _RejectingBroker)
+    settings = load_settings()
+    settings.trading_mode = "paper"
+    repo = _ChatOrderRepo()
+    repo.recent_runtime_audit_logs = lambda limit=50: list(reversed(repo.audit_logs[-limit:]))  # type: ignore[method-assign]
+    registry = build_chat_registry(repo=repo, settings=settings, tenant_id="local", registry=None)
+    validate = registry.get("validate_order_draft").callable
+
+    draft = validate(ticker="AAPL", side="BUY", quantity=1, price_krw=100_000, rationale="button approval test")
+    token = str(draft["approval_token"])
+    app = _build_app(repo=repo, settings=settings)
+    client = DirectRouteClient(app)
+
+    submitted = client.post(f"/investment-chat/order-drafts/{token}/submit", params={"tenant_id": "local"})
+
+    assert submitted.status_code == 200
+    result = submitted.json()
+    assert result["status"] == "error"
+    assert result["message"] == "금일은 해외 휴장일로 주문이 불가합니다."
+    assert result["error"] == "금일은 해외 휴장일로 주문이 불가합니다."
+    assert result["execution_report"]["message"] == "금일은 해외 휴장일로 주문이 불가합니다."
+    assert result["chat_delivery_text"] == "방금 AAPL BUY 1주 주문 승인 결과를 확인해서 알려줘."
+    assert "[주문 승인 패널 결과]" not in result["chat_delivery_text"]
+    assert "금일은 해외 휴장일로 주문이 불가합니다." not in result["chat_delivery_text"]
+    assert "/uapi/" not in result["chat_delivery_text"]
+    assert token not in result["chat_delivery_text"]
+    assert "CONFIRM" not in result["chat_delivery_text"]
+
+
+def test_get_order_approval_status_reads_latest_button_result(monkeypatch) -> None:
+    import arena.ui.app as ui_app
+    from arena.agents.investment_chat import order_tools
+    from arena.agents.investment_chat.registry import build_chat_registry
+
+    monkeypatch.setenv("ARENA_UI_AUTH_ENABLED", "false")
+    monkeypatch.setattr(
+        ui_app,
+        "build_investment_chat_adk_app",
+        lambda **kwargs: FastAPI(title="stub-adk"),
+    )
+    monkeypatch.setattr(order_tools, "build_execution_memory", lambda repo, settings: _FakeExecutionMemory())
+
+    class _RejectingBroker:
+        def place_order(self, intent, *, fx_rate=None):
+            _ = intent, fx_rate
+            return ExecutionReport(
+                status=ExecutionStatus.ERROR,
+                order_id="err_holiday",
+                filled_qty=0,
+                avg_price_krw=0,
+                message="금일은 해외 휴장일로 주문이 불가합니다.",
+            )
+
+    monkeypatch.setattr(order_tools, "PaperBroker", _RejectingBroker)
+    settings = load_settings()
+    settings.trading_mode = "paper"
+    repo = _ChatOrderRepo()
+    repo.recent_runtime_audit_logs = lambda limit=50: list(reversed(repo.audit_logs[-limit:]))  # type: ignore[method-assign]
+    registry = build_chat_registry(repo=repo, settings=settings, tenant_id="local", registry=None)
+    validate = registry.get("validate_order_draft").callable
+    status_tool = registry.get("get_order_approval_status").callable
+
+    draft = validate(ticker="AAPL", side="BUY", quantity=1, price_krw=100_000, rationale="button approval test")
+    token = str(draft["approval_token"])
+    app = _build_app(repo=repo, settings=settings)
+    client = DirectRouteClient(app)
+    client.post(f"/investment-chat/order-drafts/{token}/submit", params={"tenant_id": "local"})
+
+    status = status_tool(approval_token=token)
+
+    assert status["status"] == "ok"
+    assert status["orders"][0]["status"] == "error"
+    assert status["orders"][0]["ticker"] == "AAPL"
+    assert status["orders"][0]["message"] == "금일은 해외 휴장일로 주문이 불가합니다."
+
+
+def test_get_order_approval_status_reads_latest_button_result_from_detail_json(monkeypatch) -> None:
+    from arena.agents.investment_chat import order_tools
+    from arena.agents.investment_chat.registry import build_chat_registry
+
+    monkeypatch.setattr(order_tools, "build_execution_memory", lambda repo, settings: _FakeExecutionMemory())
+
+    class _RejectingBroker:
+        def place_order(self, intent, *, fx_rate=None):
+            _ = intent, fx_rate
+            return ExecutionReport(
+                status=ExecutionStatus.ERROR,
+                order_id="err_holiday",
+                filled_qty=0,
+                avg_price_krw=0,
+                message="금일은 해외 휴장일로 주문이 불가합니다.",
+            )
+
+    monkeypatch.setattr(order_tools, "PaperBroker", _RejectingBroker)
+    settings = load_settings()
+    settings.trading_mode = "paper"
+    repo = _ChatOrderRepo()
+    repo.recent_runtime_audit_logs = lambda limit=50: list(reversed(repo.audit_logs[-limit:]))  # type: ignore[method-assign]
+    registry = build_chat_registry(repo=repo, settings=settings, tenant_id="local", registry=None)
+    validate = registry.get("validate_order_draft").callable
+    submit = registry.get("submit_approved_order").callable
+    status_tool = registry.get("get_order_approval_status").callable
+
+    draft = validate(ticker="AAPL", side="BUY", quantity=1, price_krw=100_000, rationale="button approval test")
+    token = str(draft["approval_token"])
+    submit(approval_token=token, confirmation_text=f"CONFIRM {token}")
+    for row in repo.audit_logs:
+        detail = row.pop("detail", None)
+        if detail is not None:
+            row["detail_json"] = json.dumps(detail)
+
+    status = status_tool()
+
+    assert status["status"] == "ok"
+    assert status["count"] == 1
+    assert status["orders"][0]["approval_token"] == token
+    assert status["orders"][0]["status"] == "error"
+    assert status["orders"][0]["message"] == "금일은 해외 휴장일로 주문이 불가합니다."
+
+
+def test_investment_chat_adk_api_requires_ui_auth(monkeypatch) -> None:
+    from arena.ui import investment_chat_adk
+
+    def fake_get_fast_api_app(**kwargs):
+        _ = kwargs
+        app = FastAPI(title="fake-adk")
+
+        @app.get("/list-apps")
+        def list_apps():
+            return ["investment_chat"]
+
+        return app
+
+    monkeypatch.setattr(investment_chat_adk, "get_fast_api_app", fake_get_fast_api_app)
+    monkeypatch.setattr(investment_chat_adk, "_mount_adk_static", lambda app, url_prefix: None)
+
+    blocked_app = investment_chat_adk.build_investment_chat_adk_app(
+        repo=_DummyRepo(),
+        settings_for_tenant=lambda tenant: load_settings(),
+        get_default_registry=lambda tenant: ToolRegistry([]),
+        default_tenant="local",
+        auth_enabled=True,
+        current_user=lambda request: None,
+    )
+    allowed_app = investment_chat_adk.build_investment_chat_adk_app(
+        repo=_DummyRepo(),
+        settings_for_tenant=lambda tenant: load_settings(),
+        get_default_registry=lambda tenant: ToolRegistry([]),
+        default_tenant="local",
+        auth_enabled=True,
+        current_user=lambda request: {"email": "user@example.com"},
+    )
+
+    assert TestClient(blocked_app).get("/list-apps", headers={"accept": "application/json"}).status_code == 401
+    assert TestClient(allowed_app).get("/list-apps").status_code == 200
+
+
+def test_investment_chat_adk_defaults_to_data_sqlite_sessions(monkeypatch) -> None:
+    from arena.ui import investment_chat_adk
+
+    calls: dict[str, object] = {}
+
+    def fake_get_fast_api_app(**kwargs):
+        calls.update(kwargs)
+        return FastAPI(title="fake-adk")
+
+    monkeypatch.delenv("ARENA_CHAT_SESSION_SERVICE_URI", raising=False)
+    monkeypatch.setattr(investment_chat_adk, "get_fast_api_app", fake_get_fast_api_app)
+    monkeypatch.setattr(investment_chat_adk, "_mount_adk_static", lambda app, url_prefix: None)
+
+    investment_chat_adk.build_investment_chat_adk_app(
+        repo=_DummyRepo(),
+        settings_for_tenant=lambda tenant: load_settings(),
+        get_default_registry=lambda tenant: ToolRegistry([]),
+        default_tenant="local",
+    )
+
+    expected = investment_chat_adk.Path(investment_chat_adk.__file__).resolve().parents[2]
+    expected = expected / "data" / "arena-investment-chat-adk-sessions.sqlite"
+    assert calls["session_service_uri"] == f"sqlite:///{expected}"

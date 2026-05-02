@@ -116,6 +116,40 @@ def test_secret_accounts_selects_by_key_suffix(monkeypatch) -> None:
     assert prdt_cd == "02"
 
 
+def test_local_secret_file_loads_kis_payload(monkeypatch, tmp_path) -> None:
+    credentials_path = tmp_path / "credentials.json"
+    credentials_path.write_text(
+        json.dumps(
+            {
+                "local-tenant-kis": {
+                    "ACCOUNTS": [
+                        {
+                            "app_key": "LOCALKEY",
+                            "app_secret": "LOCALSECRET",
+                            "cano": "99998888",
+                            "prdt_cd": "01",
+                        }
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ARENA_LOCAL_CREDENTIALS_FILE", str(credentials_path))
+    settings = _settings()
+    settings.google_cloud_project = ""
+    settings.kis_secret_name = "local-tenant-kis"
+    client = OpenTradingClient(settings)
+
+    app_key, app_secret = client._credentials()
+    cano, prdt_cd = client._split_account()
+
+    assert app_key == "LOCALKEY"
+    assert app_secret == "LOCALSECRET"
+    assert cano == "99998888"
+    assert prdt_cd == "01"
+
+
 def test_secret_accounts_selects_by_account_number(monkeypatch) -> None:
     payload = {
         "ACCOUNTS": [

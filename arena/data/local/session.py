@@ -152,10 +152,16 @@ class DuckDBSession:
         sql = re.sub(r'(?i)IN\s+UNNEST\(([^)]+)\)', r'IN (SELECT unnest(\1))', sql)
         sql = re.sub(r'(?i)TIMESTAMP_SUB\(([^,]+),\s*(INTERVAL\s+[^)]+)\)', r'(\1 - \2)', sql)
         sql = re.sub(r'(?i)TIMESTAMP_ADD\(([^,]+),\s*(INTERVAL\s+[^)]+)\)', r'(\1 + \2)', sql)
+        sql = re.sub(r"(?i)CURRENT_TIMESTAMP\(\)", "CURRENT_TIMESTAMP", sql)
         sql = re.sub(r'(?i)DATE\(([^,]+),\s*[\'"][^\'"]+[\'"]\)', r'CAST(\1 AS DATE)', sql)
         if isinstance(params, dict):
             for k in params.keys():
                 sql = sql.replace(f"@{k}", f"${k}")
+            sql = re.sub(
+                r"(?i)INTERVAL\s+(\$[A-Za-z_][A-Za-z0-9_]*)\s+(DAY|DAYS|HOUR|HOURS|MINUTE|MINUTES|SECOND|SECONDS)",
+                lambda match: f"({match.group(1)} * INTERVAL '1 {match.group(2).lower()}')",
+                sql,
+            )
         lock = nullcontext() if self._is_read_sql(sql) else self._write_lock()
         with lock:
             cur = self.connect().cursor()
@@ -168,6 +174,7 @@ class DuckDBSession:
         sql = re.sub(r'(?i)IN\s+UNNEST\(([^)]+)\)', r'IN (SELECT unnest(\1))', sql)
         sql = re.sub(r'(?i)TIMESTAMP_SUB\(([^,]+),\s*(INTERVAL\s+[^)]+)\)', r'(\1 - \2)', sql)
         sql = re.sub(r'(?i)TIMESTAMP_ADD\(([^,]+),\s*(INTERVAL\s+[^)]+)\)', r'(\1 + \2)', sql)
+        sql = re.sub(r"(?i)CURRENT_TIMESTAMP\(\)", "CURRENT_TIMESTAMP", sql)
         sql = re.sub(r'(?i)DATE\(([^,]+),\s*[\'"][^\'"]+[\'"]\)', r'CAST(\1 AS DATE)', sql)
         lock = nullcontext() if self._is_read_sql(sql) else self._write_lock()
         with lock:

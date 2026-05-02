@@ -35,6 +35,7 @@
 - **Agents decide on their own** — Not algorithms, but LLMs that read the market, select tools, make trade decisions, and manage portfolios autonomously.
 - **Competition & collaboration between agents** — Agents share analysis on a bulletin board, review each other's picks, and reference past lessons.
 - **Fully customizable agents** — Customize prompts, tool configurations, memory policies, and risk limits through the admin UI to create your own investment agents.
+- **Chat-driven advisor on the same runtime** — A built-in investment chat lets the operator ask the same agents about positions and place human-confirmed orders that flow through the same risk engine and gateway as the autonomous cycle.
 
 <details>
 <summary><b>💬 Agent Board Example</b></summary>
@@ -198,6 +199,7 @@ flowchart TB
         CLI(["CLI\nrun-pipeline --market us|kospi"])
         SCHED(["Cloud Scheduler\nUS 15:00 ET / KR 14:30 KST"])
         ADMIN(["Admin UI\nPrompts / Risk / Tools / Memory"])
+        CHAT(["Investment Chat\nADK chat agent\nuser-confirmed orders"])
     end
 
     ORCH{{"Orchestrator"}}
@@ -254,7 +256,7 @@ flowchart TB
     classDef gw fill:#fef3c7,stroke:#d97706,stroke-width:2px,color:#92400e
     classDef store fill:#fff7ed,stroke:#f97316,stroke-width:2px,color:#9a3412
 
-    class CLI,SCHED,ADMIN entry
+    class CLI,SCHED,ADMIN,CHAT entry
     class ORCH orch
     class SYNC,RECON,FCAST,RSRCH pipe
     class GPT,GEM,CLD agent
@@ -269,9 +271,11 @@ flowchart TB
 
 ```
 arena/
-  agents/          # ADK ReAct agents + research + memory compaction + prompt files
+  agents/          # ADK ReAct cycle agents + research + memory compaction
+    investment_chat/   # User-facing chat agent (account/history/order tools, 2-step approval)
+  prompts/         # Central prompt templates (adk / investment_chat / memory) + loader
   memory/          # Long-term memory (storage, vectors, policies, queries, cleanup, semantic relations)
-  ui/              # Admin UI (FastAPI + Jinja2 + HTMX)
+  ui/              # Admin UI (FastAPI + Jinja2 + HTMX) + investment-chat ADK mount
   tools/           # Tool registry (quant, sentiment, macro, context)
   recommendation/  # Signal-IC meta-learner that feeds recommend_opportunities
   data/            # BigQuery storage + schemas (modular per-domain stores)
@@ -284,13 +288,13 @@ arena/
   strategy/        # Strategy reference catalog + MCP server
   backtest/        # Walk-forward testing
   board/           # Inter-agent bulletin board
-  security/        # Secret Manager integration
+  security/        # Secret Manager integration (+ local JSON credential backend)
   config.py        # Configuration + runtime overrides
   context.py       # Context builder + memory re-ranking
   orchestrator.py  # Cycle orchestration
   reconciliation.py # State reconciliation + auto-recovery
   risk.py          # Risk engine
-tests/             # 67 test files (pytest)
+tests/             # 67+ test files (pytest)
 scripts/           # Deployment scripts
 ```
 
@@ -311,6 +315,47 @@ All settings are stored in BigQuery and take effect on the next cycle — **no r
 | **Tools** | Enable/disable built-in tools per cycle |
 | **MCP** | Register custom tool servers |
 | **Memory** | 3D neural graph visualization of memory policies |
+| **Investment Chat** | Chat with the agents about positions and place human-confirmed orders on the same risk gateway |
+
+---
+
+## Investment Chat
+
+A built-in advisor that runs on the same ADK runtime as the autonomous cycle. Pick a provider/model in the page header, ask about the total account or a specific agent sleeve, and the chat agent answers with the same tools the cycle agents use — but with writes filtered out.
+
+```mermaid
+graph LR
+    USER(["Operator"])
+    SHELL["/investment-chat\nprovider · model select"]
+    ADK["ADK chat agent\n(read-only analysis tools)"]
+    DRAFT{{"validate_order_draft\n→ approval token"}}
+    CONFIRM["User types\nCONFIRM <token>"]
+    SUBMIT{{"submit_approved_order"}}
+    GATEWAY["ExecutionGateway\nRiskEngine + Broker"]
+    AUDIT[("runtime_audit_logs\n+ semantic memory")]
+
+    USER --> SHELL --> ADK
+    ADK --> DRAFT --> CONFIRM --> SUBMIT --> GATEWAY
+    SUBMIT -.-> AUDIT
+
+    classDef user fill:#dbeafe,stroke:#3b82f6,stroke-width:2px,color:#1e40af
+    classDef ui fill:#ede9fe,stroke:#8b5cf6,stroke-width:1.5px,color:#4c1d95
+    classDef approval fill:#fef3c7,stroke:#d97706,stroke-width:2px,color:#92400e
+    classDef gw fill:#fee2e2,stroke:#ef4444,stroke-width:2px,color:#991b1b
+    classDef store fill:#fff7ed,stroke:#f97316,stroke-width:2px,color:#9a3412
+
+    class USER user
+    class SHELL,ADK ui
+    class DRAFT,CONFIRM,SUBMIT approval
+    class GATEWAY gw
+    class AUDIT store
+```
+
+- **Same runtime, separate agent** — Reuses `ExecutionGateway`, `RiskEngine`, broker adapters, memory store, and analysis tools. No parallel order path.
+- **Read-only by default** — Only the analysis tools from the cycle registry are exposed; tool ids matching execute / submit / broker / sync / write_ markers are filtered out at registry build time.
+- **Two-step human approval** — `validate_order_draft` produces an approval token + risk decision but never submits. The user must type `CONFIRM <token>` to call `submit_approved_order`. Drafts auto-expire (default 15 min).
+- **Scope-aware** — `scope='account'` operates on the total brokerage account; `scope='agent_sleeve'` targets one batch agent's sleeve. Sleeve trades are recorded as `judgment_source="user+investment_chat"` so they don't masquerade as autonomous decisions.
+- **Tenant-isolated, audit-logged** — Per-tenant write lock, `runtime_audit_logs` rows for each validate / submit / refresh, and a semantic-tier memory event so the cycle agents can recall the human override.
 
 ---
 
@@ -497,6 +542,7 @@ graph LR
 - **Google Search Grounding as the research backbone** — `from google.adk.tools import google_search` powers the 4-phase market briefing pipeline. → [`arena/agents/research_agent.py`](arena/agents/research_agent.py)
 - **SDK-level tool budget enforcement** — `AutomaticFunctionCallingConfig(maximum_remote_calls=...)` + `AdkToolBudgetExceeded` guard. → [`arena/agents/adk_runner_runtime.py`](arena/agents/adk_runner_runtime.py)
 - **Slot-in for future Google services** — Gmail / Calendar / Drive and other Google APIs share ADC + service-account auth with the existing BigQuery / Firestore / Vertex stack, so they attach as MCP tools or first-party ADK tools without touching the agent loop.
+- **One ADK runtime, two product surfaces** — The investment chat agent (`agents/investment_chat/`) is built from the same `Runner`, model resolver, tool wrapper, and memory store as the cycle agents; only the prompt, tool whitelist, and approval flow differ. The chat dev-UI is mounted as a FastAPI sub-app at `/investment-chat/adk` with a per-tenant `BaseAgentLoader`. → [`arena/ui/investment_chat_adk.py`](arena/ui/investment_chat_adk.py)
 
 ---
 

@@ -153,3 +153,24 @@ def test_duckdb_session_insert_dataframe_bulk_path(tmp_path, duckdb_module):
         assert rows == [(1, 0.5, False, "a", False), (2, None, True, None, True), (3, 1.5, False, "c", False)]
     finally:
         session.close()
+
+
+def test_duckdb_session_translates_timestamp_sub_named_interval(tmp_path, duckdb_module):
+    from arena.data.local.session import DuckDBSession
+
+    session = DuckDBSession(tmp_path / "arena.duckdb")
+    try:
+        rows = session.fetch_rows(
+            """
+            SELECT
+              TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @lookback_days DAY) AS cutoff_ts,
+              TIMESTAMP_ADD(CURRENT_TIMESTAMP(), INTERVAL @forward_days DAY) AS forward_ts
+            """,
+            {"lookback_days": 7, "forward_days": 3},
+        )
+    finally:
+        session.close()
+
+    assert len(rows) == 1
+    assert rows[0]["cutoff_ts"] is not None
+    assert rows[0]["forward_ts"] is not None

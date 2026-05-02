@@ -15,6 +15,7 @@ import requests
 from arena.config import Settings
 from arena.logging_utils import event_extra, failure_extra
 from arena.open_trading.exchange_codes import normalize_us_order_exchange, target_market_default_us_order_exchange
+from arena.security.credential_store_env import load_local_secret_payload
 
 logger = logging.getLogger(__name__)
 
@@ -148,13 +149,41 @@ class OpenTradingClient:
         return accounts[0]
 
     def _load_secret_payload(self) -> None:
-        """Loads KIS credentials from Secret Manager once per runtime."""
+        """Loads KIS credentials from the configured secret backend once per runtime."""
         if self._secret_loaded:
             return
 
         self._secret_loaded = True
         secret_name = self.settings.kis_secret_name.strip()
         if not secret_name:
+            return
+
+        if secret_name.startswith("local-"):
+            data = load_local_secret_payload(secret_id=secret_name)
+            if isinstance(data, dict) and data:
+                payload = dict(data)
+                raw_accounts = payload.get("ACCOUNTS") or payload.get("accounts")
+                if isinstance(raw_accounts, list):
+                    accounts = [item for item in raw_accounts if isinstance(item, dict)]
+                    if accounts:
+                        payload.update(self._select_secret_account(accounts))
+                self._secret_payload = payload
+                suffix = str(payload.get("key_suffix", "")).strip() or "-"
+                logger.info(
+                    "[cyan]KIS secret loaded[/cyan] source=local-file name=%s key_suffix=%s",
+                    secret_name,
+                    suffix,
+                )
+            else:
+                logger.warning(
+                    "[yellow]KIS local secret missing[/yellow] name=%s",
+                    secret_name,
+                    extra=event_extra(
+                        "kis_local_secret_missing",
+                        stage="load_secret_payload",
+                        secret_name=secret_name,
+                    ),
+                )
             return
 
         project = self.settings.google_cloud_project.strip()

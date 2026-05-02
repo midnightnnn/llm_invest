@@ -11,7 +11,7 @@ from arena.agents.adk_prompting import (
     _tool_mix_note,
     _user_prompt,
 )
-from arena.agents.prompts.prompt_pack import PromptPack
+from arena.prompts.prompt_pack import PromptPack
 from arena.tools.registry import ToolRegistry
 
 

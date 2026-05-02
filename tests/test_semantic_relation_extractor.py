@@ -8,6 +8,11 @@ import arena.memory.semantic_extractor as semantic_module
 from arena.config import Settings
 from arena.memory.relation_validation import RelationSource, validate_extracted_relations
 from arena.memory.semantic_extractor import SemanticRelationExtractor
+from arena.prompts.memory import (
+    COMPACTION_SYSTEM_INSTRUCTION,
+    RELATION_EXTRACTOR_SYSTEM_INSTRUCTION,
+    build_relation_extraction_prompt,
+)
 
 
 class _FakeRepo:
@@ -73,6 +78,20 @@ def _source(text: str = "AI demand supports NVDA margin recovery.") -> RelationS
         source_text=text,
         source_hash="hash_1",
     )
+
+
+def test_memory_prompts_are_loaded_from_central_text_templates() -> None:
+    prompt = build_relation_extraction_prompt(
+        _source(),
+        max_triples=3,
+        ontology_block="ontology_version: test",
+    )
+
+    assert "장기기억 정리 담당" in COMPACTION_SYSTEM_INSTRUCTION
+    assert "source-grounded semantic relation triples" in RELATION_EXTRACTOR_SYSTEM_INSTRUCTION
+    assert "Extract up to 3 high-signal semantic relation triples." in prompt
+    assert "ontology_version: test" in prompt
+    assert '"source_id": "evt_1"' in prompt
 
 
 def test_validate_extracted_relations_accepts_grounded_triple() -> None:

@@ -447,10 +447,20 @@ def _partition_tenants_for_task(tenants: list[str]) -> list[str]:
 
 def _load_secret_json(*, project: str, secret_name: str, version: str = "latest") -> dict:
     """Loads one JSON secret payload from Secret Manager."""
+    clean_secret = str(secret_name or "").strip()
+    if clean_secret.startswith("local-"):
+        from arena.security.credential_store_env import load_local_secret_payload
+
+        return load_local_secret_payload(secret_id=clean_secret)
+
+    clean_project = str(project or "").strip()
+    if not clean_project or not clean_secret:
+        return {}
+
     from google.cloud import secretmanager
 
     client = secretmanager.SecretManagerServiceClient()
-    name = f"projects/{project}/secrets/{secret_name}/versions/{version}"
+    name = f"projects/{clean_project}/secrets/{clean_secret}/versions/{version}"
     response = client.access_secret_version(request={"name": name})
     payload = response.payload.data.decode("utf-8")
     data = json.loads(payload)
@@ -487,6 +497,14 @@ def _apply_tenant_runtime_credentials(
     kis_secret_name = str(row.get("kis_secret_name") or "").strip()
     model_secret_name = str(row.get("model_secret_name") or "").strip()
     kis_env = str(row.get("kis_env") or "").strip().lower()
+
+    settings.kis_secret_name = ""
+    settings.kis_api_key = ""
+    settings.kis_api_secret = ""
+    settings.kis_paper_api_key = ""
+    settings.kis_paper_api_secret = ""
+    settings.kis_account_no = ""
+    settings.kis_account_key_suffix = ""
 
     if kis_secret_name:
         settings.kis_secret_name = kis_secret_name
@@ -624,6 +642,7 @@ def _build_runtime(
         settings.kis_paper_api_key = ""
         settings.kis_paper_api_secret = ""
         settings.kis_account_no = ""
+        settings.kis_account_key_suffix = ""
         settings.openai_api_key = ""
         settings.gemini_api_key = ""
         settings.anthropic_api_key = ""

@@ -54,7 +54,7 @@ from arena.agents.adk_decision_flow import (
     prepare_decision_prompt,
     tag_phase_tool_events,
 )
-from arena.agents.prompts.prompt_pack import PromptPack
+from arena.prompts.prompt_pack import PromptPack
 from arena.agents.adk_runner_runtime import (
     AdkToolBudgetExceeded,
     collect_response_text,

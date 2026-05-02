@@ -55,6 +55,7 @@ from arena.ui.app_support import (
 from arena.ui.run_status import build_run_status_helpers
 from arena.ui.routes.auth import AuthRouteDeps, register_auth_routes
 from arena.ui.routes.board import register_board_routes
+from arena.ui.routes.investment_chat import register_investment_chat_routes
 from arena.ui.routes.nav import register_nav_routes
 from arena.ui.routes.ops import OpsRouteDeps, register_ops_routes
 from arena.ui.routes.settings_page import (
@@ -76,6 +77,7 @@ from arena.ui.viewer_analytics import (
     metric_card,
     total_return,
 )
+from arena.ui.investment_chat_adk import build_investment_chat_adk_app
 from arena.ui.viewer_data import build_viewer_data_helpers
 from arena.ui.runtime import (
     UIRuntime,
@@ -358,6 +360,14 @@ def _build_app(*, repo: BigQueryRepository, settings: Settings) -> FastAPI:
     def _get_default_registry(tenant: str):
         return runtime.get_default_registry(tenant)
 
+    def _default_investment_chat_tenant() -> str:
+        return (
+            str(os.getenv("ARENA_CHAT_TENANT_ID") or "").strip().lower()
+            or str(getattr(repo, "tenant_id", "") or "").strip().lower()
+            or str(os.getenv("ARENA_TENANT_ID") or "").strip().lower()
+            or "local"
+        )
+
     def _current_admin_view_model(tenant: str, *, _latest_creds: dict[str, Any] | None = None) -> dict[str, Any]:
         return runtime.current_admin_view_model(tenant, latest_creds=_latest_creds)
 
@@ -493,6 +503,20 @@ def _build_app(*, repo: BigQueryRepository, settings: Settings) -> FastAPI:
     register_board_routes(app, deps=viewer_route_deps)
     register_nav_routes(app, deps=viewer_route_deps)
     register_trades_routes(app, deps=viewer_route_deps)
+    register_investment_chat_routes(app, deps=viewer_route_deps)
+
+    app.mount(
+        "/investment-chat/adk",
+        build_investment_chat_adk_app(
+            repo=repo,
+            settings_for_tenant=_settings_for_tenant,
+            get_default_registry=_get_default_registry,
+            default_tenant=_default_investment_chat_tenant(),
+            url_prefix="/investment-chat/adk",
+            auth_enabled=auth_enabled,
+            current_user=_current_user,
+        ),
+    )
 
     register_settings_page_routes(
         app,

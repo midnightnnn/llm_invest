@@ -22,20 +22,14 @@ from arena.memory.policy import get_memory_policy_value, memory_event_enabled, r
 from arena.memory.store import MemoryStore
 from arena.memory.thesis import THESIS_EVENT_TYPES
 from arena.models import utc_now
+from arena.prompts.memory import COMPACTION_SYSTEM_INSTRUCTION
 
 logger = logging.getLogger(__name__)
 
 _GLOBAL_PROMPT_TENANT = "global"
 
 
-_COMPACTION_INSTRUCTION = (
-    "당신은 투자 에이전트의 장기기억 정리 담당입니다. "
-    "입력된 사이클 산출물에서 다음 사이클에도 재사용 가치가 있는 교훈만 추려야 합니다. "
-    "주문 로그를 반복하지 말고, 반복 가능한 lesson만 남기세요. "
-    "닫힌 thesis chain이 주어지면 thesis 단위 post-mortem을 우선하고, 같은 thesis에 대한 reflection은 최대 1개만 만드세요. "
-    "사실을 꾸며내지 말고 입력에 있는 정보만 사용하세요. "
-    "반드시 JSON만 반환하세요."
-)
+_COMPACTION_INSTRUCTION = COMPACTION_SYSTEM_INSTRUCTION
 
 
 def _is_retryable_compaction_error(exc: Exception) -> bool:

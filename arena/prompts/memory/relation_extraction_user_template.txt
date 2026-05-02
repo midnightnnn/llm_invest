@@ -1,0 +1,12 @@
+Extract up to {max_triples} high-signal semantic relation triples.
+Prefer causal, risk, support, contradiction, invalidation, and outcome relations. Use mentions only when no stronger predicate is justified.
+Every evidence_text must be copied verbatim from the source text. Do not use outside knowledge.
+Use ticker type only for actual ticker symbols or exchange codes, such as NVDA or 005930. Use company for company names.
+Use uppercase labels for ticker entities when the ticker has letters.
+{ontology_block}
+
+Return JSON matching this schema:
+{schema_json}
+
+Source:
+{source_json}

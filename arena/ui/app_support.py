@@ -149,7 +149,9 @@ RUN_STAGE_LABELS: dict[str, str] = {
 
 
 def default_prompt_template(filename: str) -> str:
-    prompt_path = Path(__file__).resolve().parents[1] / "agents" / "prompts" / filename
+    from arena.prompts.loader import prompt_path as _prompt_path
+
+    prompt_path = _prompt_path("adk", filename)
     try:
         return prompt_path.read_text(encoding="utf-8").strip()
     except Exception:

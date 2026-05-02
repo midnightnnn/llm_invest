@@ -6,7 +6,7 @@ from typing import Any
 
 from arena.config import AgentConfig
 from arena.data.bq import BigQueryRepository
-from arena.agents.prompts.prompt_pack import (
+from arena.prompts.prompt_pack import (
     EXECUTION_FORMAT,
     EXPLORE_SHARED_FORMAT,
     EXPLORE_SOLO_FORMAT,
