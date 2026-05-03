@@ -179,6 +179,37 @@ def is_kospi_holiday(trading_date: date) -> bool:
     return trading_date in _krx_holidays(trading_date.year)
 
 
+def _market_token(market: str) -> str:
+    token = str(market or "").strip().lower()
+    if token in {"kr", "krx", "kosdaq", "kospi"}:
+        return "kospi"
+    if token in {"nasdaq", "nyse", "amex", "usa", "us"}:
+        return "us"
+    return token or "us"
+
+
+def is_equity_trading_day(market: str, trading_date: date) -> bool:
+    """Returns True when the market has a regular equity session that day."""
+    token = _market_token(market)
+    if token == "kospi":
+        return not is_kospi_holiday(trading_date)
+    if trading_date.weekday() >= 5:
+        return False
+    if token == "us":
+        return not is_nasdaq_holiday(trading_date)
+    return True
+
+
+def previous_trading_day(market: str, start_date: date) -> date:
+    """Returns the nearest trading day on or before ``start_date``."""
+    day = start_date
+    for _ in range(370):
+        if is_equity_trading_day(market, day):
+            return day
+        day -= timedelta(days=1)
+    raise ValueError(f"could not find previous trading day for market={market!r} start={start_date}")
+
+
 def kospi_window(now_utc: datetime | None = None) -> MarketWindow:
     """Computes KOSPI/KOSDAQ regular-hours window using Asia/Seoul timezone.
 
@@ -248,6 +279,14 @@ def nasdaq_window(now_utc: datetime | None = None) -> MarketWindow:
         close_utc=close_utc,
         phase=phase,
     )
+
+
+def equity_market_window(market: str, now_utc: datetime | None = None) -> MarketWindow:
+    """Returns the regular-session window for the configured equity market."""
+    token = _market_token(market)
+    if token == "kospi":
+        return kospi_window(now_utc)
+    return nasdaq_window(now_utc)
 
 
 def is_report_window(window: MarketWindow, *, delay_minutes: int = 10, cutoff_hours: int = 8) -> bool:

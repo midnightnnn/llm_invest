@@ -82,7 +82,13 @@ def _confirmation_hint(draft: dict[str, Any]) -> str:
     )
 
 
-def build_order_tool_entries(*, repo: Any, settings: Settings, tenant_id: str) -> list[ToolEntry]:
+def _build_order_tool_entries(
+    *,
+    repo: Any,
+    settings: Settings,
+    tenant_id: str,
+    include_internal_bridge: bool,
+) -> list[ToolEntry]:
     tenant = normalize_tenant(tenant_id)
 
     def _approval_status_row(token: str, draft: dict[str, Any]) -> dict[str, Any]:
@@ -642,7 +648,7 @@ def build_order_tool_entries(*, repo: Any, settings: Settings, tenant_id: str) -
             "message": "ADK tool confirmation is required before this order can be submitted.",
         }
 
-    return [
+    entries = [
         ToolEntry(
             tool_id="submit_order_with_confirmation",
             name="submit_order_with_confirmation",
@@ -673,14 +679,36 @@ def build_order_tool_entries(*, repo: Any, settings: Settings, tenant_id: str) -
             label_ko="승인 결과 조회",
             sort_order=5,
         ),
-        ToolEntry(
-            tool_id="submit_approved_order",
-            name="submit_approved_order",
-            description="Internal backend/UI approval bridge for submitting a stored order draft. Do not ask the user to type CONFIRM in chat; the web approval card supplies confirmation.",
-            category="execution",
-            callable=submit_approved_order,
-            tier="core",
-            label_ko="승인 주문 제출",
-            sort_order=6,
-        ),
     ]
+    if include_internal_bridge:
+        entries.append(
+            ToolEntry(
+                tool_id="submit_approved_order",
+                name="submit_approved_order",
+                description="Internal backend/UI approval bridge for submitting a stored order draft. Not exposed to the LLM tool registry.",
+                category="execution",
+                callable=submit_approved_order,
+                tier="internal",
+                label_ko="승인 주문 제출",
+                sort_order=6,
+            )
+        )
+    return entries
+
+
+def build_order_tool_entries(*, repo: Any, settings: Settings, tenant_id: str) -> list[ToolEntry]:
+    return _build_order_tool_entries(
+        repo=repo,
+        settings=settings,
+        tenant_id=tenant_id,
+        include_internal_bridge=False,
+    )
+
+
+def build_order_bridge_tool_entries(*, repo: Any, settings: Settings, tenant_id: str) -> list[ToolEntry]:
+    return _build_order_tool_entries(
+        repo=repo,
+        settings=settings,
+        tenant_id=tenant_id,
+        include_internal_bridge=True,
+    )[-1:]

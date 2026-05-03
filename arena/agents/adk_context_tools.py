@@ -4,7 +4,7 @@ import inspect
 import json
 import logging
 import os
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Any
 
 from arena.config import Settings, research_generation_status
@@ -96,14 +96,19 @@ class _ContextTools:
     @staticmethod
     def _coerce_datetime(value: object) -> datetime | None:
         if isinstance(value, datetime):
-            return value
+            if value.tzinfo is None or value.utcoffset() is None:
+                return value.replace(tzinfo=timezone.utc)
+            return value.astimezone(timezone.utc)
         text = str(value or "").strip()
         if not text:
             return None
         try:
-            return datetime.fromisoformat(text.replace("Z", "+00:00"))
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
         except ValueError:
             return None
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
 
     @staticmethod
     def _float_or_none(value: object) -> float | None:
@@ -967,7 +972,7 @@ class _ContextTools:
             side = str(r.get("side") or "").strip().upper()
             qty = float(r.get("filled_qty") or 0)
             price = float(r.get("avg_price_krw") or 0)
-            ts = r.get("created_at")
+            ts = self._coerce_datetime(r.get("created_at"))
             if not tk or qty <= 0 or price <= 0:
                 continue
 
@@ -1035,7 +1040,8 @@ class _ContextTools:
                 behavioral["small_position_win_rate"] = round(len([t for t in small if t["return_pct"] > 0]) / len(small), 2)
 
         # ── Recent streak ──
-        recent = sorted(closed, key=lambda t: t["closed_at"] or datetime.min, reverse=True)[:5]
+        min_dt = datetime.min.replace(tzinfo=timezone.utc)
+        recent = sorted(closed, key=lambda t: t["closed_at"] or min_dt, reverse=True)[:5]
         now = utc_now()
         recent_streak = {
             "last_5": [

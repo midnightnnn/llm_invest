@@ -122,14 +122,16 @@ def _base_entries(
                 "value/tactical profile context, with action, model confidence, risk notes, "
                 "and per-signal contributions explaining why each ticker surfaced. "
                 "Useful when looking for new positions, portfolio rotation candidates, "
-                "or replacements for weaker holdings. Stale data returns status='unusable' "
-                "instead of silently falling back."
+                "or replacements for weaker holdings. Freshness is market-calendar aware: "
+                "weekend/holiday previous-session data is allowed with freshness metadata, "
+                "current-session prep gaps return status='degraded', and truly stale data "
+                "returns status='unusable' instead of silently falling back."
             ),
             category="quant",
             tier="optional",
             callable=qt.recommend_opportunities,
             label_ko="통합 기회 추천",
-            description_ko="런타임 유니버스에서 신규 매수 후보, 포트폴리오 교체 후보, 약한 보유종목의 대체 아이디어를 찾는 고수준 discovery 도구입니다. shared prep에서 계산한 signal-IC meta-learner 점수를 사용해 모멘텀·눌림목·평균회귀·저변동성·센티먼트·forecast·RSI/MA/볼린저·EP/BP/SP/ROE/성장/부채 signal을 조합합니다. 전체 top_n 추천과 공격형/균형형/방어형/가치형/전술형 profile 문맥을 함께 반환하며, action·model confidence·risk note·signal별 기여도로 왜 해당 종목이 올라왔는지 설명합니다. 데이터가 오래되면 조용히 fallback하지 않고 status='unusable'로 명시합니다.",
+            description_ko="런타임 유니버스에서 신규 매수 후보, 포트폴리오 교체 후보, 약한 보유종목의 대체 아이디어를 찾는 고수준 discovery 도구입니다. shared prep에서 계산한 signal-IC meta-learner 점수를 사용해 모멘텀·눌림목·평균회귀·저변동성·센티먼트·forecast·RSI/MA/볼린저·EP/BP/SP/ROE/성장/부채 signal을 조합합니다. 전체 top_n 추천과 공격형/균형형/방어형/가치형/전술형 profile 문맥을 함께 반환하며, action·model confidence·risk note·signal별 기여도로 왜 해당 종목이 올라왔는지 설명합니다. freshness는 시장 캘린더 기준으로 판단합니다. 주말/휴일의 직전 거래일 데이터는 freshness metadata와 함께 허용하고, 장중인데 해당 세션 prep이 아직 없으면 status='degraded', 정말 오래된 데이터는 status='unusable'로 명시합니다.",
             sort_order=105,
         ),
         _tool(

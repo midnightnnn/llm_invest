@@ -158,7 +158,7 @@ def test_timeout_for_falls_back_when_role_override_unset(monkeypatch) -> None:
     assert settings.llm_timeout_trading_seconds is None
     assert settings.timeout_for("trading") == 120
     assert settings.timeout_for("research") == 120
-    assert settings.timeout_for("compaction") == 120
+    assert settings.timeout_for("compaction") == 300
     assert settings.timeout_for("unknown-role") == 120
 
 

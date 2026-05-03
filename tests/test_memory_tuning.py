@@ -5,7 +5,7 @@ from datetime import timedelta
 from types import SimpleNamespace
 
 from arena.memory.policy import MEMORY_FORGETTING_TUNING_STATE_CONFIG_KEY, normalize_memory_policy
-from arena.memory.tuning import run_memory_forgetting_tuner
+from arena.memory.tuning import _parse_state_datetime, run_memory_forgetting_tuner
 from arena.models import utc_now
 
 
@@ -42,6 +42,14 @@ def _settings(policy: dict) -> SimpleNamespace:
         memory_compaction_max_reflections=3,
         memory_policy=policy,
     )
+
+
+def test_parse_state_datetime_normalizes_naive_state_to_utc() -> None:
+    parsed = _parse_state_datetime("2026-05-01T12:00:00")
+
+    assert parsed is not None
+    assert parsed.tzinfo is not None
+    assert parsed.isoformat() == "2026-05-01T12:00:00+00:00"
 
 
 def _sample_rows() -> list[dict]:

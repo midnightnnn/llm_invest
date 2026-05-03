@@ -4,7 +4,7 @@ import logging
 import os
 import threading
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Literal
 
 import numpy as np
@@ -16,6 +16,7 @@ _forecast_built_dates: set[str] = set()
 from arena.config import Settings
 from arena.data.bq import BigQueryRepository
 from arena.market_sources import live_market_sources_for_markets
+from arena.market_hours import equity_market_window, previous_trading_day
 from arena.tools._market_scope import MarketScope, MarketScopeError
 from arena.market_feature_normalization import (
     daily_history_sources,
@@ -45,6 +46,8 @@ from .sector_map import SECTOR_BY_TICKER
 logger = logging.getLogger(__name__)
 
 _RECOMMEND_OPPORTUNITY_MAX_POOL = 500
+_OPPORTUNITY_DEFAULT_MAX_SCORE_AGE_HOURS = 96
+_OPPORTUNITY_CALENDAR_LOOKUP_HOURS = 24 * 14
 OpportunityBucket = Literal["momentum", "pullback", "recovery"]
 OpportunityProfile = Literal[
     "aggressive",
@@ -73,6 +76,10 @@ _OPPORTUNITY_PROFILE_ALIASES: dict[str, tuple[str, ...]] = {
     "tactical_inverse": ("tactical_inverse",),
     "tactical_hedge": ("tactical_hedge",),
 }
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 def _dedupe_tokens(tokens: list[str]) -> list[str]:
@@ -154,6 +161,139 @@ def _opportunity_selection_limits(
         return max(top, min(max(1, requested), _RECOMMEND_OPPORTUNITY_MAX_POOL)), top, "explicit"
 
     return top, top, "ranked_union"
+
+
+def _bounded_hours(value: Any, *, default: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = int(default)
+    return max(1, min(parsed, 24 * 14))
+
+
+def _calendar_lookup_min_hours() -> int:
+    return _bounded_hours(
+        os.getenv("ARENA_OPPORTUNITY_CALENDAR_LOOKUP_HOURS"),
+        default=_OPPORTUNITY_CALENDAR_LOOKUP_HOURS,
+    )
+
+
+def _parse_date_value(value: Any) -> date | None:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).date()
+    except ValueError:
+        pass
+    try:
+        return date.fromisoformat(text[:10])
+    except ValueError:
+        return None
+
+
+def _row_market(row: dict[str, Any], market_filter: list[str]) -> str:
+    market = str(row.get("market") or "").strip().lower()
+    if market:
+        return market
+    if len(market_filter) == 1:
+        return market_filter[0]
+    return "unknown"
+
+
+def _opportunity_ranker_freshness(
+    rows: list[dict[str, Any]],
+    *,
+    market_filter: list[str],
+    now_utc: datetime,
+) -> dict[str, Any]:
+    """Classifies ranker rows using market-calendar freshness, not wall time."""
+    scoped_markets = list(
+        dict.fromkeys(
+            str(m or "").strip().lower()
+            for m in market_filter
+            if str(m or "").strip()
+        )
+    )
+    row_markets = list(
+        dict.fromkeys(
+            _row_market(row, [])
+            for row in rows
+            if isinstance(row, dict) and _row_market(row, []) != "unknown"
+        )
+    )
+    markets = row_markets or scoped_markets
+    by_market: dict[str, dict[str, Any]] = {}
+    latest_rows: dict[str, dict[str, Any]] = {}
+    latest_dates: dict[str, date] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        market = _row_market(row, markets)
+        as_of = _parse_date_value(row.get("as_of_date"))
+        if as_of is None:
+            continue
+        if market not in latest_dates or as_of > latest_dates[market]:
+            latest_dates[market] = as_of
+            latest_rows[market] = row
+
+    severity = {"ok": 0, "degraded": 1, "unusable": 2}
+    overall = "ok"
+    valid_markets: list[str] = []
+    for market in markets:
+        window = equity_market_window(market, now_utc)
+        prior_session = previous_trading_day(market, window.trading_date - timedelta(days=1))
+        as_of = latest_dates.get(market)
+        row = latest_rows.get(market) or {}
+        computed_at = row.get("computed_at")
+        status = "ok"
+        reason_code = "latest_completed_session"
+        trading_use = "research_and_candidate_generation"
+
+        if as_of is None:
+            status = "unusable"
+            reason_code = "missing_market_ranker_rows"
+            trading_use = "do_not_use_for_trading"
+        elif as_of < prior_session:
+            status = "unusable"
+            reason_code = "older_than_latest_reference_session"
+            trading_use = "do_not_use_for_trading"
+        elif window.phase in {"PRE_OPEN", "OPEN", "POST_CLOSE"} and as_of < window.trading_date:
+            status = "degraded"
+            reason_code = "current_session_prep_missing"
+            trading_use = "research_only_until_current_session_prep"
+        elif window.phase == "CLOSED":
+            reason_code = "market_closed_latest_reference_session"
+            trading_use = "research_only_market_closed"
+
+        if status != "unusable":
+            valid_markets.append(market)
+        if severity[status] > severity[overall]:
+            overall = status
+        by_market[market] = {
+            "status": status,
+            "reason_code": reason_code,
+            "trading_use": trading_use,
+            "market_phase": window.phase,
+            "market_trading_date": window.trading_date.isoformat(),
+            "latest_reference_trading_date": prior_session.isoformat(),
+            "ranker_as_of_date": as_of.isoformat() if as_of else None,
+            "ranker_computed_at": (
+                computed_at.isoformat() if isinstance(computed_at, datetime) else computed_at
+            ),
+            "previous_session_data": bool(as_of and as_of < window.trading_date),
+            "market_closed": window.phase == "CLOSED",
+        }
+
+    return {
+        "status": overall,
+        "by_market": by_market,
+        "valid_markets": valid_markets,
+    }
 
 
 def _to_float(value: Any, default: float | None = 0.0) -> float | None:
@@ -1175,22 +1315,31 @@ class QuantTools:
         profiles: list[OpportunityProfile] | None = None,
         max_candidates: int | None = None,
         include_watchlist: bool = True,
-        max_score_age_hours: int = 30,
+        max_score_age_hours: int = _OPPORTUNITY_DEFAULT_MAX_SCORE_AGE_HOURS,
     ) -> dict[str, Any]:
         """Returns precomputed signal-IC-weighted opportunities from BigQuery.
 
-        Reads ``opportunity_ranker_scores_latest``; when rows are missing or
-        stale, surfaces an explicit ``status='unusable'`` so the agent knows
-        shared prep must be rerun. There is no heuristic fallback by design —
+        Reads ``opportunity_ranker_scores_latest`` and classifies freshness by
+        market calendar. Latest previous-session rows are usable on weekends
+        and holidays; current-session gaps are surfaced as ``status='degraded'``.
+        Rows older than the latest reference trading session still return
+        ``status='unusable'``. There is no heuristic fallback by design —
         silently substituting a different algorithm would hide failures.
         ``profiles`` filters style buckets (aggressive/balanced/defensive/
         value/tactical). ``buckets`` filters ranker-native buckets such as
         momentum, pullback, and recovery; legacy profile tokens passed through
         ``buckets`` are normalized to profiles.
         """
+        requested_max_age_hours = _bounded_hours(
+            max_score_age_hours,
+            default=_OPPORTUNITY_DEFAULT_MAX_SCORE_AGE_HOURS,
+        )
+        lookup_max_age_hours = max(requested_max_age_hours, _calendar_lookup_min_hours())
         diagnostics: dict[str, Any] = {
             "pipeline": ["signal_ic_meta_learner", "opportunity_ranker_scores_latest"],
             "max_score_age_hours": max_score_age_hours,
+            "requested_max_score_age_hours": requested_max_age_hours,
+            "effective_lookup_max_age_hours": lookup_max_age_hours,
             "warnings": [],
         }
         scope = self._scope()
@@ -1217,7 +1366,7 @@ class QuantTools:
             try:
                 learned_rows = loader(
                     limit=global_limit,
-                    max_age_hours=max(1, min(int(max_score_age_hours), 24 * 14)),
+                    max_age_hours=lookup_max_age_hours,
                     buckets=bucket_tokens or None,
                     profiles=profile_tokens or None,
                     markets=market_filter or None,
@@ -1230,7 +1379,7 @@ class QuantTools:
                 try:
                     learned_rows = loader(
                         limit=global_limit,
-                        max_age_hours=max(1, min(int(max_score_age_hours), 24 * 14)),
+                        max_age_hours=lookup_max_age_hours,
                         buckets=None,
                         profiles=None,
                         markets=market_filter or None,
@@ -1248,6 +1397,34 @@ class QuantTools:
         diagnostics["selection_scope"]["loaded_rows"] = len(learned_rows)
 
         if learned_rows:
+            freshness = _opportunity_ranker_freshness(
+                learned_rows,
+                market_filter=market_filter,
+                now_utc=_utc_now(),
+            )
+            diagnostics["freshness"] = freshness
+            valid_markets = set(freshness.get("valid_markets") or [])
+            if freshness.get("by_market"):
+                learned_rows = [
+                    row
+                    for row in learned_rows
+                    if _row_market(row, market_filter) in valid_markets
+                ]
+            diagnostics["selection_scope"]["loaded_rows_after_freshness_filter"] = len(learned_rows)
+            if not learned_rows:
+                return {
+                    "status": "unusable",
+                    "error": (
+                        "learned opportunity ranker scores are older than the latest "
+                        "market-calendar reference session; run build-opportunity-ranker in shared prep"
+                    ),
+                    "recommendations": [],
+                    "rows": [],
+                    "by_profile": {},
+                    "optimizer": {},
+                    "ranker": {"score_source": "missing"},
+                    "diagnostics": diagnostics,
+                }
             out = self._recommend_opportunities_from_learned_rows(
                 learned_rows,
                 top_n=top_n,
@@ -1255,6 +1432,8 @@ class QuantTools:
                 include_watchlist=include_watchlist,
                 diagnostics=diagnostics,
             )
+            if freshness.get("status") == "degraded" and out.get("status") == "ok":
+                out["status"] = "degraded"
             self._log_tool_result("recommend_opportunities", out.get("rows") or [], key_fields=["ticker", "profile", "recommendation_score", "confidence", "action"])
             return out
 

@@ -34,7 +34,7 @@ _COMPACTION_INSTRUCTION = COMPACTION_SYSTEM_INSTRUCTION
 
 def _is_retryable_compaction_error(exc: Exception) -> bool:
     """Returns True when helper-model failures look transient."""
-    text = f"{type(exc).__name__}: {exc}".strip().lower()
+    text = _format_compaction_error(exc).lower()
     if not text:
         return False
     markers = [
@@ -59,6 +59,17 @@ def _is_retryable_compaction_error(exc: Exception) -> bool:
         "empty response",
     ]
     return any(marker in text for marker in markers)
+
+
+def _format_compaction_error(exc: Exception) -> str:
+    name = type(exc).__name__
+    message = str(exc).strip()
+    if message:
+        return f"{name}: {message}"
+    rendered = repr(exc).strip()
+    if rendered and rendered not in {name, f"{name}()"}:
+        return f"{name}: {rendered}"
+    return name
 
 
 def _model_accepts_temperature(model: str) -> bool:
@@ -629,7 +640,7 @@ class MemoryCompactionAgent:
                         request_model,
                         attempt + 1,
                         sleep_s,
-                        str(exc),
+                        _format_compaction_error(exc),
                     )
                     await asyncio.sleep(sleep_s)
                     continue
@@ -826,7 +837,7 @@ class MemoryCompactionAgent:
                 try:
                     reflections = await self._compact_one(agent_id=agent_id, cycle_id=cycle_id, inputs=inputs)
                 except Exception as exc:
-                    error = str(exc)
+                    error = _format_compaction_error(exc)
                     logger.warning(
                         "[yellow]Memory compaction preview failed[/yellow] agent=%s cycle_id=%s err=%s",
                         agent_id,
@@ -887,7 +898,7 @@ class MemoryCompactionAgent:
                     "[yellow]Memory compaction failed[/yellow] agent=%s cycle_id=%s err=%s",
                     agent_id,
                     cycle_id,
-                    str(exc),
+                    _format_compaction_error(exc),
                 )
                 continue
             for reflection in reflections:

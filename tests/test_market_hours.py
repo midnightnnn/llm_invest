@@ -3,7 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 
-from arena.market_hours import is_kospi_holiday, is_nasdaq_holiday, kospi_window, nasdaq_window
+from arena.market_hours import (
+    is_kospi_holiday,
+    is_nasdaq_holiday,
+    kospi_window,
+    nasdaq_window,
+    previous_trading_day,
+)
 
 
 def test_nasdaq_window_is_closed_on_presidents_day_2026() -> None:
@@ -83,6 +89,10 @@ def test_kospi_window_closed_on_holiday() -> None:
 def test_kospi_workers_day_is_holiday() -> None:
     # 근로자의 날 (May 1) — KRX is closed
     assert is_kospi_holiday(date(2026, 5, 1)) is True  # Friday
+
+
+def test_previous_trading_day_skips_kospi_workers_day_weekend() -> None:
+    assert previous_trading_day("kospi", date(2026, 5, 3)) == date(2026, 4, 30)
 
 
 def test_kospi_lunar_holidays_computed_for_any_year() -> None:

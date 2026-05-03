@@ -1150,6 +1150,44 @@ def test_portfolio_diagnosis_returns_derived_fields_not_raw_portfolio_echo() -> 
     assert "hrp_allocation" not in out
 
 
+def test_trade_performance_handles_mixed_naive_and_aware_execution_times() -> None:
+    class _Repo:
+        def filled_execution_reports_since(self, **kwargs):
+            _ = kwargs
+            return [
+                {
+                    "agent_id": "gemini",
+                    "ticker": "AAPL",
+                    "side": "BUY",
+                    "filled_qty": 1,
+                    "avg_price_krw": 100_000,
+                    "created_at": datetime(2026, 5, 1, 9, 0, 0),
+                },
+                {
+                    "agent_id": "gemini",
+                    "ticker": "AAPL",
+                    "side": "SELL",
+                    "filled_qty": 1,
+                    "avg_price_krw": 110_000,
+                    "created_at": datetime(2026, 5, 3, 10, 0, 0, tzinfo=timezone.utc),
+                },
+            ]
+
+    tool = _ContextTools.__new__(_ContextTools)
+    tool.repo = _Repo()
+    tool.settings = load_settings()
+    tool.agent_id = "gemini"
+    tool.tenant_id = "local"
+    tool._context = {}
+
+    out = tool.trade_performance(lookback_days=30)
+
+    assert out["round_trips"]["closed"] == 1
+    assert out["round_trips"]["avg_return_pct"] == 10.0
+    assert out["round_trips"]["avg_holding_days"] == 2
+    assert out["recent_streak"]["last_5"][0]["ticker"] == "AAPL"
+
+
 def test_portfolio_diagnosis_aligns_benchmark_period_with_current_sleeve_return(monkeypatch) -> None:
     tool = _ContextTools.__new__(_ContextTools)
     repo = _RepoForPortfolioDiagnosisExact()

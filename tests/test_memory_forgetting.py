@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 from arena.memory.cleanup import cleanup_candidates
-from arena.memory.forgetting import access_boost, decay_multiplier, effective_memory_score
+from arena.memory.forgetting import access_boost, decay_multiplier, effective_memory_score, staleness_days
 from arena.models import utc_now
 
 
@@ -39,6 +39,33 @@ def test_effective_memory_score_rewards_recent_access_and_semantic_tier() -> Non
 
     assert warm_decay > cold_decay
     assert warm_effective > cold_effective
+
+
+def test_effective_memory_score_handles_naive_database_datetimes() -> None:
+    now = datetime(2026, 5, 3, 12, 0, 0, tzinfo=timezone.utc)
+    row = {
+        "created_at": datetime(2026, 4, 28, 12, 0, 0),
+        "last_accessed_at": datetime(2026, 5, 1, 12, 0, 0),
+        "access_count": 2,
+        "memory_tier": "episodic",
+        "importance_score": 0.8,
+    }
+
+    age_days = staleness_days(
+        created_at=row["created_at"],
+        last_accessed_at=row["last_accessed_at"],
+        now=now,
+    )
+    decay, effective = effective_memory_score(
+        row,
+        default_decay_factor=0.985,
+        min_decay_multiplier=0.15,
+        now=now,
+    )
+
+    assert age_days == 2
+    assert 0.0 < decay <= 1.0
+    assert 0.0 < effective <= 0.8
 
 
 def test_decay_multiplier_falls_faster_for_working_than_semantic() -> None:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from arena.models import utc_now
@@ -13,6 +13,14 @@ DEFAULT_EPISODIC_TIER_WEIGHT = 1.0
 DEFAULT_SEMANTIC_TIER_WEIGHT = 0.35
 DEFAULT_CAPPED_LINEAR_STEP = 0.25
 DEFAULT_CAPPED_LINEAR_CAP = 4.0
+
+
+def _aware_utc(value: datetime | None) -> datetime | None:
+    if not isinstance(value, datetime):
+        return None
+    if value.tzinfo is None or value.utcoffset() is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def base_memory_score(row: dict[str, Any]) -> float:
@@ -71,10 +79,10 @@ def staleness_days(
     last_accessed_at: datetime | None,
     now: datetime | None = None,
 ) -> int:
-    reference = last_accessed_at or created_at
+    reference = _aware_utc(last_accessed_at) or _aware_utc(created_at)
     if not isinstance(reference, datetime):
         return 0
-    current = now or utc_now()
+    current = _aware_utc(now) or utc_now()
     return max(0, int((current - reference).days))
 
 
@@ -117,8 +125,8 @@ def effective_memory_score(
     semantic_weight: float = DEFAULT_SEMANTIC_TIER_WEIGHT,
     now: datetime | None = None,
 ) -> tuple[float, float]:
-    created_at = row.get("created_at") if isinstance(row.get("created_at"), datetime) else None
-    last_accessed_at = row.get("last_accessed_at") if isinstance(row.get("last_accessed_at"), datetime) else None
+    created_at = _aware_utc(row.get("created_at") if isinstance(row.get("created_at"), datetime) else None)
+    last_accessed_at = _aware_utc(row.get("last_accessed_at") if isinstance(row.get("last_accessed_at"), datetime) else None)
     age_days = staleness_days(created_at=created_at, last_accessed_at=last_accessed_at, now=now)
     try:
         access_count = int(row.get("access_count") or 0)

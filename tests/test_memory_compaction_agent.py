@@ -410,6 +410,10 @@ def test_memory_compaction_agent_treats_bad_gateway_as_retryable() -> None:
     ) is True
 
 
+def test_memory_compaction_error_formatter_keeps_blank_exception_type() -> None:
+    assert memory_compaction_module._format_compaction_error(TimeoutError()) == "TimeoutError"
+
+
 def test_memory_compaction_agent_retries_empty_response(monkeypatch) -> None:
     repo = _FakeRepo()
     memory_store = _FakeMemoryStore()

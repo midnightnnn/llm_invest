@@ -3,7 +3,7 @@ from __future__ import annotations
 import copy
 import json
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from statistics import mean
 from typing import Any
 
@@ -109,9 +109,12 @@ def _parse_state_datetime(raw: Any) -> datetime | None:
     if not text:
         return None
     try:
-        return datetime.fromisoformat(text)
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
     except Exception:
         return None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def _policy_with_tuning_mode(policy: dict[str, Any], mode: str) -> dict[str, Any]:

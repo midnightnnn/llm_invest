@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 
 from arena.agents.investment_chat.context import REQUEST_USER_EMAIL
 from arena.agents.investment_chat.drafts import load_draft
-from arena.agents.investment_chat.registry import build_chat_registry
+from arena.agents.investment_chat.order_tools import build_order_bridge_tool_entries
 from arena.providers.registry import canonical_provider, default_model_for_provider, list_adk_provider_specs
 from arena.ui.investment_chat_providers import tenant_available_provider_specs
 from arena.ui.routes.viewer import ViewerRouteDeps
@@ -284,10 +284,10 @@ def register_investment_chat_routes(app: FastAPI, *, deps: ViewerRouteDeps) -> N
         if redirect is not None:
             return JSONResponse({"status": "blocked", "error": "authentication required"}, status_code=401)
         settings = deps.settings_for_tenant(tenant)
-        registry = build_chat_registry(repo=deps.repo, settings=settings, tenant_id=tenant, registry=None)
-        entry = registry.get("submit_approved_order")
+        bridge_entries = build_order_bridge_tool_entries(repo=deps.repo, settings=settings, tenant_id=tenant)
+        entry = next((item for item in bridge_entries if item.name == "submit_approved_order"), None)
         if entry is None or not callable(entry.callable):
-            return JSONResponse({"status": "error", "error": "submit_approved_order tool unavailable"}, status_code=500)
+            return JSONResponse({"status": "error", "error": "order approval bridge unavailable"}, status_code=500)
         user_email = str((user or {}).get("email") or "").strip().lower()
         token = str(approval_token or "").strip()
         email_token = REQUEST_USER_EMAIL.set(user_email)

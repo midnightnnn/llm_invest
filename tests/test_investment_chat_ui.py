@@ -6,6 +6,8 @@ from types import SimpleNamespace
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 from arena.config import load_settings
 from arena.models import AccountSnapshot, ExecutionReport, ExecutionStatus, Position
@@ -102,7 +104,7 @@ def test_build_investment_chat_agent_filters_write_tools(monkeypatch) -> None:
     assert "submit_order_with_confirmation" in tool_names
     assert "validate_order_draft" in tool_names
     assert "refresh_account_snapshot" in tool_names
-    assert "submit_approved_order" in tool_names
+    assert "submit_approved_order" not in tool_names
     assert "execute_order" not in tool_names
     assert "submit_order" not in tool_names
     assert "scratch_run_python" not in tool_names
@@ -407,8 +409,9 @@ def test_investment_chat_wrapped_adk_confirmation_tool_builds_declaration(monkey
     assert "tool_context" not in json.dumps(declaration.model_dump(), default=str)
 
 
-def _build_raw_chat_tools(monkeypatch, repo: _ChatOrderRepo, *, settings=None):
+def _build_raw_chat_tools(monkeypatch, repo: _ChatOrderRepo, *, settings=None, include_internal_bridge: bool = False):
     from arena.agents.investment_chat import memory as chat_memory
+    from arena.agents.investment_chat.order_tools import build_order_bridge_tool_entries
     from arena.agents.investment_chat.registry import build_chat_registry
 
     tool_settings = settings or load_settings()
@@ -419,7 +422,12 @@ def _build_raw_chat_tools(monkeypatch, repo: _ChatOrderRepo, *, settings=None):
     _FakeExecutionMemory.instances.clear()
     monkeypatch.setattr(chat_memory, "MemoryStore", _FakeExecutionMemory, raising=False)
     registry = build_chat_registry(repo=repo, settings=tool_settings, tenant_id="local", registry=ToolRegistry([]))
-    return {entry.name: entry.callable for entry in registry.list_entries(require_callable=True)}
+    entries = list(registry.list_entries(require_callable=True))
+    if include_internal_bridge:
+        entries.extend(
+            build_order_bridge_tool_entries(repo=repo, settings=tool_settings, tenant_id="local")
+        )
+    return {entry.name: entry.callable for entry in entries}
 
 
 def test_chat_order_tools_require_confirmation_and_are_idempotent(monkeypatch) -> None:
@@ -427,7 +435,7 @@ def test_chat_order_tools_require_confirmation_and_are_idempotent(monkeypatch) -
     from arena.agents.investment_chat.drafts import draft_key
 
     repo = _ChatOrderRepo()
-    tools = _build_raw_chat_tools(monkeypatch, repo)
+    tools = _build_raw_chat_tools(monkeypatch, repo, include_internal_bridge=True)
 
     user_token = REQUEST_USER_EMAIL.set("trader@example.com")
     try:
@@ -698,7 +706,7 @@ def test_chat_sleeve_order_uses_sleeve_snapshot_and_syncs_target_agent_memory(mo
             },
         ),
     )
-    tools = _build_raw_chat_tools(monkeypatch, repo)
+    tools = _build_raw_chat_tools(monkeypatch, repo, include_internal_bridge=True)
 
     user_token = REQUEST_USER_EMAIL.set("trader@example.com")
     try:
@@ -755,7 +763,7 @@ def test_chat_order_submit_blocks_live_mode_without_explicit_permission(monkeypa
     settings.allow_live_trading = False
     settings.kis_target_market = "us"
 
-    tools = _build_raw_chat_tools(monkeypatch, repo, settings=settings)
+    tools = _build_raw_chat_tools(monkeypatch, repo, settings=settings, include_internal_bridge=True)
 
     draft = tools["validate_order_draft"](
         ticker="AAPL",
@@ -1028,6 +1036,36 @@ def test_investment_chat_loader_request_selection_overrides_stale_adk_app_name(m
     assert calls["tenant_id"] == "czxnms"
     assert calls["provider"] == "gemini"
     assert calls["model_override"] == "gemini-3-flash-preview"
+
+
+def test_investment_chat_loader_rebuilds_after_settings_fingerprint_changes(monkeypatch) -> None:
+    from arena.ui import investment_chat_adk
+
+    builds: list[dict[str, object]] = []
+    settings = load_settings()
+    settings.openai_api_key = "old-key"
+
+    def fake_build_agent(**kwargs):
+        builds.append(dict(kwargs))
+        return SimpleNamespace(name=f"agent-{len(builds)}")
+
+    monkeypatch.setattr(investment_chat_adk, "build_investment_chat_agent", fake_build_agent)
+    loader = investment_chat_adk.InvestmentChatAgentLoader(
+        repo=_DummyRepo(),
+        settings_for_tenant=lambda tenant: settings,
+        get_default_registry=lambda tenant: ToolRegistry([]),
+        default_tenant="local",
+    )
+    app_name = "investment_chat__local__gpt__m_Z3B0LTUuNQ"
+
+    first = loader.load_agent(app_name)
+    second = loader.load_agent(app_name)
+    settings.openai_api_key = "new-key"
+    third = loader.load_agent(app_name)
+
+    assert first is second
+    assert third is not first
+    assert [item["model_override"] for item in builds] == ["gpt-5.5", "gpt-5.5"]
 
 
 def test_investment_chat_loader_uses_encoded_claude_selection_without_request_context(monkeypatch) -> None:
@@ -1447,6 +1485,7 @@ def test_get_order_approval_status_reads_latest_button_result(monkeypatch) -> No
 
 def test_get_order_approval_status_reads_latest_button_result_from_detail_json(monkeypatch) -> None:
     from arena.agents.investment_chat import order_tools
+    from arena.agents.investment_chat.order_tools import build_order_bridge_tool_entries
     from arena.agents.investment_chat.registry import build_chat_registry
 
     monkeypatch.setattr(order_tools, "build_execution_memory", lambda repo, settings: _FakeExecutionMemory())
@@ -1469,7 +1508,9 @@ def test_get_order_approval_status_reads_latest_button_result_from_detail_json(m
     repo.recent_runtime_audit_logs = lambda limit=50: list(reversed(repo.audit_logs[-limit:]))  # type: ignore[method-assign]
     registry = build_chat_registry(repo=repo, settings=settings, tenant_id="local", registry=None)
     validate = registry.get("validate_order_draft").callable
-    submit = registry.get("submit_approved_order").callable
+    assert registry.get("submit_approved_order") is None
+    bridge_entries = build_order_bridge_tool_entries(repo=repo, settings=settings, tenant_id="local")
+    submit = {entry.name: entry.callable for entry in bridge_entries}["submit_approved_order"]
     status_tool = registry.get("get_order_approval_status").callable
 
     draft = validate(ticker="AAPL", side="BUY", quantity=1, price_krw=100_000, rationale="button approval test")
@@ -1490,6 +1531,8 @@ def test_get_order_approval_status_reads_latest_button_result_from_detail_json(m
 
 
 def test_investment_chat_adk_api_requires_ui_auth(monkeypatch) -> None:
+    import asyncio
+
     from arena.ui import investment_chat_adk
 
     def fake_get_fast_api_app(**kwargs):
@@ -1522,8 +1565,64 @@ def test_investment_chat_adk_api_requires_ui_auth(monkeypatch) -> None:
         current_user=lambda request: {"email": "user@example.com"},
     )
 
-    assert TestClient(blocked_app).get("/list-apps", headers={"accept": "application/json"}).status_code == 401
-    assert TestClient(allowed_app).get("/list-apps").status_code == 200
+    def make_request(headers: dict[str, str] | None = None) -> Request:
+        raw_headers = [
+            (str(key).lower().encode("latin-1"), str(value).encode("latin-1"))
+            for key, value in (headers or {}).items()
+        ]
+        return Request(
+            {
+                "type": "http",
+                "http_version": "1.1",
+                "method": "GET",
+                "scheme": "http",
+                "path": "/list-apps",
+                "raw_path": b"/list-apps",
+                "query_string": b"",
+                "headers": raw_headers,
+                "client": ("testclient", 50000),
+                "server": ("testserver", 80),
+                "session": {},
+            },
+            receive=lambda: {"type": "http.request", "body": b"", "more_body": False},
+        )
+
+    async def passthrough(_request: Request):
+        return JSONResponse(["investment_chat"])
+
+    blocked_dispatch = blocked_app.user_middleware[0].kwargs["dispatch"]
+    allowed_dispatch = allowed_app.user_middleware[0].kwargs["dispatch"]
+    blocked_response = asyncio.run(blocked_dispatch(make_request({"accept": "application/json"}), passthrough))
+    allowed_response = asyncio.run(allowed_dispatch(make_request(), passthrough))
+
+    assert blocked_response.status_code == 401
+    assert allowed_response.status_code == 200
+    assert json.loads(allowed_response.body) == ["investment_chat"]
+
+
+def test_investment_chat_adk_rejects_stale_path_app_name_tenant() -> None:
+    import asyncio
+
+    from arena.ui import investment_chat_adk
+
+    stale_app_name = investment_chat_adk._chat_app_name("midnightnnn", "gpt", "gpt-5.5")
+    request = SimpleNamespace(url=SimpleNamespace(path=f"/apps/{stale_app_name}/app-info"))
+
+    response = asyncio.run(
+        investment_chat_adk._stale_app_name_response(
+            request,
+            tenant="czxnms",
+            provider="gemini",
+            model="gemini-3-flash-preview",
+        )
+    )
+
+    assert response is not None
+    assert response.status_code == 409
+    payload = json.loads(response.body)
+    assert payload["error"] == "stale adk app_name tenant"
+    assert payload["tenant_id"] == "czxnms"
+    assert payload["app_name_tenant"] == "midnightnnn"
 
 
 def test_investment_chat_adk_defaults_to_data_sqlite_sessions(monkeypatch) -> None:

@@ -548,6 +548,10 @@ def load_settings() -> Settings:
     memory_embed_cache_max = _to_int(os.getenv("ARENA_MEMORY_EMBED_CACHE_MAX"), 128)
     raw_arena_mode = (os.getenv("ARENA_MODE") or "").strip().lower()
     arena_mode = raw_arena_mode if raw_arena_mode in {"local", "gcp"} else "gcp"
+    compaction_timeout_seconds = _to_optional_int(os.getenv("ARENA_LLM_TIMEOUT_COMPACTION_SECONDS"))
+    if compaction_timeout_seconds is None:
+        compaction_timeout_seconds = 300
+
     settings = Settings(
         google_cloud_project=os.getenv("GOOGLE_CLOUD_PROJECT", ""),
         bq_dataset=os.getenv("BQ_DATASET", "llm_arena"),
@@ -621,7 +625,7 @@ def load_settings() -> Settings:
         llm_timeout_seconds=_to_int(os.getenv("ARENA_LLM_TIMEOUT_SECONDS"), 90),
         llm_timeout_trading_seconds=_to_optional_int(os.getenv("ARENA_LLM_TIMEOUT_TRADING_SECONDS")),
         llm_timeout_research_seconds=_to_optional_int(os.getenv("ARENA_LLM_TIMEOUT_RESEARCH_SECONDS")),
-        llm_timeout_compaction_seconds=_to_optional_int(os.getenv("ARENA_LLM_TIMEOUT_COMPACTION_SECONDS")),
+        llm_timeout_compaction_seconds=compaction_timeout_seconds,
         default_universe=[],
         allow_live_trading=_to_bool(os.getenv("ARENA_ALLOW_LIVE_TRADING"), False),
         live_slippage_bps_base=_to_float(os.getenv("ARENA_LIVE_SLIPPAGE_BPS_BASE"), 8.0),

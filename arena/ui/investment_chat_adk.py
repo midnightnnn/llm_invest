@@ -8,8 +8,11 @@ import re
 import shutil
 from base64 import urlsafe_b64decode, urlsafe_b64encode
 from collections import OrderedDict
+from collections.abc import Mapping
+from dataclasses import fields, is_dataclass
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import unquote
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -26,7 +29,13 @@ from arena.agents.investment_chat.context import (
     normalize_tenant,
 )
 from arena.config import Settings
-from arena.providers.registry import canonical_provider, default_model_for_provider
+from arena.providers.registry import (
+    canonical_provider,
+    default_model_for_provider,
+    provider_api_key_from_settings,
+    provider_base_url_from_settings,
+    provider_has_credentials,
+)
 from arena.ui.investment_chat_providers import tenant_available_provider_ids
 from arena.tools.registry import ToolRegistry
 
@@ -34,6 +43,72 @@ logger = logging.getLogger(__name__)
 CurrentUserFn = Callable[[Request], dict[str, Any] | None]
 
 _LOADER_CACHE_MAX_ENTRIES = 64
+
+
+def _secretish(name: str) -> bool:
+    token = str(name or "").strip().lower()
+    return any(marker in token for marker in ("key", "secret", "token", "password"))
+
+
+def _secret_digest(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    return hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
+
+
+def _fingerprint_value(name: str, value: Any) -> Any:
+    if _secretish(name):
+        return _secret_digest(value)
+    if isinstance(value, Mapping):
+        return {
+            str(key): _fingerprint_value(str(key), item)
+            for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
+        }
+    if isinstance(value, (list, tuple, set)):
+        return [_fingerprint_value(name, item) for item in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)
+
+
+def _repo_config_value(repo: Any, tenant_id: str, key: str) -> str:
+    loader = getattr(repo, "get_config", None)
+    if not callable(loader):
+        return ""
+    try:
+        value = loader(tenant_id, key)
+    except TypeError:
+        try:
+            value = loader(tenant_id=tenant_id, key=key)
+        except Exception:
+            return ""
+    except Exception:
+        return ""
+    return str(value or "")
+
+
+def _runtime_credentials_fingerprint(repo: Any, tenant_id: str) -> dict[str, Any]:
+    loader = getattr(repo, "latest_runtime_credentials", None)
+    if not callable(loader):
+        return {}
+    try:
+        row = loader(tenant_id=tenant_id) or {}
+    except Exception:
+        return {}
+    if not isinstance(row, Mapping):
+        return {}
+    fields = (
+        "updated_at",
+        "model_secret_name",
+        "kis_secret_name",
+        "kis_account_no_masked",
+        "kis_env",
+        "has_openai",
+        "has_gemini",
+        "has_anthropic",
+    )
+    return {field: _fingerprint_value(field, row.get(field)) for field in fields if field in row}
 
 
 def _encode_model_id(model_id: str) -> str:
@@ -79,6 +154,47 @@ def _spec_from_app_name(agent_name: str) -> tuple[str, str, str]:
 def _tenant_from_app_name(agent_name: str) -> str:
     tenant, _provider, _model = _spec_from_app_name(agent_name)
     return tenant
+
+
+def _agent_cache_fingerprint(
+    *,
+    repo: Any,
+    settings: Settings,
+    tenant_id: str,
+    provider: str,
+    model_id: str,
+) -> str:
+    if is_dataclass(settings):
+        settings_items = ((field.name, getattr(settings, field.name)) for field in fields(settings))
+    else:
+        settings_items = vars(settings).items()
+    settings_payload = {
+        key: _fingerprint_value(key, value)
+        for key, value in sorted(settings_items, key=lambda pair: str(pair[0]))
+    }
+    payload = {
+        "settings": settings_payload,
+        "tenant_id": tenant_id,
+        "provider": provider,
+        "model_id": model_id,
+        "selected_provider_api_key": _secret_digest(provider_api_key_from_settings(settings, provider)),
+        "selected_provider_base_url": provider_base_url_from_settings(settings, provider),
+        "selected_provider_has_credentials": provider_has_credentials(settings, provider),
+        "runtime_credentials": _runtime_credentials_fingerprint(repo, tenant_id),
+        "disabled_tools": _repo_config_value(repo, tenant_id, "disabled_tools"),
+        "investment_chat_account_markets": _repo_config_value(
+            repo,
+            tenant_id,
+            "investment_chat_account_markets",
+        ),
+        "vertex_env": {
+            "GOOGLE_GENAI_USE_VERTEXAI": os.getenv("GOOGLE_GENAI_USE_VERTEXAI", ""),
+            "GOOGLE_CLOUD_PROJECT": os.getenv("GOOGLE_CLOUD_PROJECT", ""),
+            "GOOGLE_CLOUD_LOCATION": os.getenv("GOOGLE_CLOUD_LOCATION", ""),
+        },
+    }
+    encoded = json.dumps(payload, sort_keys=True, ensure_ascii=True, default=str)
+    return hashlib.sha1(encoded.encode("utf-8")).hexdigest()[:16]
 
 
 def _adk_agents_dir() -> str:
@@ -137,12 +253,19 @@ class InvestmentChatAgentLoader(BaseAgentLoader):
         provider, model_id = self._selection(tenant, agent_name)
         if not provider or not model_id:
             raise ValueError(f"no registered investment chat model provider for tenant: {tenant}")
-        cache_key = f"{agent_name}:{tenant}:{provider}:{model_id}"
+        settings = self.settings_for_tenant(tenant)
+        fingerprint = _agent_cache_fingerprint(
+            repo=self.repo,
+            settings=settings,
+            tenant_id=tenant,
+            provider=provider,
+            model_id=model_id,
+        )
+        cache_key = f"{agent_name}:{tenant}:{provider}:{model_id}:{fingerprint}"
         cached = self._cache.get(cache_key)
         if cached is not None:
             self._cache.move_to_end(cache_key)
             return cached
-        settings = self.settings_for_tenant(tenant)
         logger.info(
             "Investment chat agent selected tenant=%s provider=%s model=%s app=%s",
             tenant,
@@ -250,7 +373,71 @@ def _default_session_service_uri() -> str:
         return explicit
     session_db_path = Path(__file__).resolve().parents[2] / "data" / "arena-investment-chat-adk-sessions.sqlite"
     session_db_path.parent.mkdir(parents=True, exist_ok=True)
+    if os.getenv("K_SERVICE"):
+        logger.warning(
+            "ARENA_CHAT_SESSION_SERVICE_URI is not set on Cloud Run; "
+            "investment chat ADK sessions will use an ephemeral sqlite database at %s",
+            session_db_path,
+        )
     return f"sqlite:///{session_db_path}"
+
+
+def _app_name_from_path(path: str) -> str:
+    match = re.search(r"/apps/([^/]+)", str(path or ""))
+    return unquote(match.group(1)) if match else ""
+
+
+async def _app_name_from_request(request: Request) -> str:
+    return _app_name_from_path(str(request.url.path or ""))
+
+
+async def _stale_app_name_response(
+    request: Request,
+    *,
+    tenant: str,
+    provider: str,
+    model: str,
+) -> JSONResponse | None:
+    app_name = await _app_name_from_request(request)
+    if not app_name:
+        return None
+    app_tenant, app_provider, app_model = _spec_from_app_name(app_name)
+    if app_tenant and app_tenant != tenant:
+        return JSONResponse(
+            {
+                "error": "stale adk app_name tenant",
+                "tenant_id": tenant,
+                "app_name": app_name,
+                "app_name_tenant": app_tenant,
+            },
+            status_code=409,
+        )
+    provider_token = canonical_provider(provider) or str(provider or "").strip().lower()
+    app_provider_token = canonical_provider(app_provider) or app_provider
+    if app_provider_token and provider_token and app_provider_token != provider_token:
+        return JSONResponse(
+            {
+                "error": "stale adk app_name provider",
+                "tenant_id": tenant,
+                "provider": provider_token,
+                "app_name": app_name,
+                "app_name_provider": app_provider_token,
+            },
+            status_code=409,
+        )
+    model_token = str(model or "").strip()
+    if app_model and model_token and app_model != model_token:
+        return JSONResponse(
+            {
+                "error": "stale adk app_name model",
+                "tenant_id": tenant,
+                "model": model_token,
+                "app_name": app_name,
+                "app_name_model": app_model,
+            },
+            status_code=409,
+        )
+    return None
 
 
 def _install_auth_gate(
@@ -317,17 +504,22 @@ def _install_auth_gate(
         provider_token = REQUEST_PROVIDER.set(provider)
         model_token = REQUEST_MODEL.set(model)
         try:
-            if not auth_enabled:
-                return await call_next(request)
+            if auth_enabled and not user:
+                accept = str(request.headers.get("accept") or "").lower()
+                path = str(request.url.path or "")
+                if "text/html" in accept or "/dev-ui" in path:
+                    return RedirectResponse("/auth/google/login", status_code=302)
+                return JSONResponse({"error": "auth required"}, status_code=401)
 
-            if user:
-                return await call_next(request)
-
-            accept = str(request.headers.get("accept") or "").lower()
-            path = str(request.url.path or "")
-            if "text/html" in accept or "/dev-ui" in path:
-                return RedirectResponse("/auth/google/login", status_code=302)
-            return JSONResponse({"error": "auth required"}, status_code=401)
+            stale_response = await _stale_app_name_response(
+                request,
+                tenant=tenant,
+                provider=provider,
+                model=model,
+            )
+            if stale_response is not None:
+                return stale_response
+            return await call_next(request)
         finally:
             REQUEST_MODEL.reset(model_token)
             REQUEST_PROVIDER.reset(provider_token)
