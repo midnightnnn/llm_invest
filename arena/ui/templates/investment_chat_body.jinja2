@@ -1,6 +1,24 @@
-<section class="flex h-screen min-h-[560px] flex-col overflow-hidden bg-white">
+<style>
+  .investment-chat-shell {
+    height: calc(100dvh - var(--mobile-topbar-h));
+    min-height: 0;
+  }
+  .investment-chat-frame {
+    display: block;
+    width: 100%;
+    min-width: 0;
+    min-height: 0;
+  }
+  @media (min-width: 768px) {
+    .investment-chat-shell {
+      height: 100vh;
+      min-height: 560px;
+    }
+  }
+</style>
+<section class="investment-chat-shell flex flex-col overflow-hidden bg-white">
   {% if provider_options %}
-  <form method="get" action="/investment-chat" class="flex min-h-[54px] flex-wrap items-center gap-2 border-b border-ink-200/70 bg-white/90 px-3 py-2 backdrop-blur" data-chat-selector-form>
+  <form method="get" action="/investment-chat" class="investment-chat-selector flex min-h-[54px] shrink-0 flex-wrap items-center gap-2 border-b border-ink-200/70 bg-white/90 px-3 py-2 backdrop-blur" data-chat-selector-form>
     <input type="hidden" name="tenant_id" value="{{ tenant }}" />
     <select
       name="provider"
@@ -14,7 +32,7 @@
     </select>
     <select
       name="model"
-      class="h-9 min-w-[240px] flex-1 rounded-md border border-ink-200 bg-white px-2 font-mono text-xs text-ink-700 outline-none focus:border-brand-500 sm:max-w-[460px]"
+      class="h-9 min-w-0 flex-1 rounded-md border border-ink-200 bg-white px-2 font-mono text-xs text-ink-700 outline-none focus:border-brand-500 sm:max-w-[460px]"
       aria-label="Model"
       data-chat-model
     >
@@ -30,7 +48,7 @@
   <iframe
     src="{{ iframe_src }}"
     title="투자챗봇"
-    class="min-h-0 flex-1 border-0"
+    class="investment-chat-frame min-h-0 flex-1 border-0"
     loading="eager"
     referrerpolicy="same-origin"
     data-adk-chat-frame

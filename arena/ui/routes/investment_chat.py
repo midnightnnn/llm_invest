@@ -172,6 +172,8 @@ def _recent_order_drafts(repo, *, tenant_id: str, limit: int = 5) -> list[dict]:
         draft = load_draft(repo, tenant_id=tenant, token=token)
         if not isinstance(draft, dict):
             continue
+        if str(draft.get("approval_channel") or "").strip().lower() == "adk_tool_confirmation":
+            continue
         status = str(draft.get("status") or "").strip().lower()
         risk = draft.get("risk") if isinstance(draft.get("risk"), dict) else {}
         intent = draft.get("intent") if isinstance(draft.get("intent"), dict) else {}

@@ -103,7 +103,7 @@ def build_tool_wrapper(
         dt_ms = int((time.perf_counter() - t0) * 1000)
 
         try:
-            args_preview = _safe_json(kwargs)
+            args_preview = _safe_json({key: value for key, value in kwargs.items() if key != "tool_context"})
         except Exception:
             args_preview = {}
 

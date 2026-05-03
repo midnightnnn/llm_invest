@@ -102,6 +102,7 @@ def test_prompt_pack_renders_investment_chat_instruction() -> None:
     )
 
     assert "tenant 'midnightnnn'" in prompt
+    assert "submit_order_with_confirmation" in prompt
     assert "validate_order_draft" in prompt
     assert "get_order_approval_status" in prompt
     assert "get_trade_history" in prompt
@@ -109,5 +110,6 @@ def test_prompt_pack_renders_investment_chat_instruction() -> None:
     assert "user+investment_chat judgment" in prompt
     assert "Default to Korean" in prompt
     assert "approval card" in prompt
+    assert "Confirmed 체크박스" in prompt
     assert "Do not ask the user to type CONFIRM" in prompt
     assert "exact confirmation phrase" not in prompt

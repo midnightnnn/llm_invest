@@ -99,6 +99,7 @@ def test_build_investment_chat_agent_filters_write_tools(monkeypatch) -> None:
     assert "get_agent_sleeve_snapshot" in tool_names
     assert "get_trade_history" in tool_names
     assert "get_order_approval_status" in tool_names
+    assert "submit_order_with_confirmation" in tool_names
     assert "validate_order_draft" in tool_names
     assert "refresh_account_snapshot" in tool_names
     assert "submit_approved_order" in tool_names
@@ -360,6 +361,18 @@ class _FakeExecutionMemory:
         )
 
 
+class _FakeToolContext:
+    def __init__(self, *, function_call_id: str = "fc-order-1", state: dict | None = None, tool_confirmation=None):
+        self.function_call_id = function_call_id
+        self.state = state if state is not None else {}
+        self.tool_confirmation = tool_confirmation
+        self.actions = SimpleNamespace(skip_summarization=False)
+        self.confirmation_request: dict[str, object] | None = None
+
+    def request_confirmation(self, *, hint=None, payload=None) -> None:
+        self.confirmation_request = {"hint": hint, "payload": payload}
+
+
 def _build_fake_chat_agent(monkeypatch, repo: _ChatOrderRepo):
     from arena.agents.investment_chat import factory
     from arena.agents.investment_chat import memory as chat_memory
@@ -378,6 +391,20 @@ def _build_fake_chat_agent(monkeypatch, repo: _ChatOrderRepo):
         tenant_id="local",
         registry=ToolRegistry([]),
     )
+
+
+def test_investment_chat_wrapped_adk_confirmation_tool_builds_declaration(monkeypatch) -> None:
+    from google.adk.tools.function_tool import FunctionTool
+
+    repo = _ChatOrderRepo()
+    agent = _build_fake_chat_agent(monkeypatch, repo)
+    tool = next(candidate for candidate in agent.tools if candidate.__name__ == "submit_order_with_confirmation")
+
+    declaration = FunctionTool(tool)._get_declaration()
+
+    assert declaration is not None
+    assert declaration.name == "submit_order_with_confirmation"
+    assert "tool_context" not in json.dumps(declaration.model_dump(), default=str)
 
 
 def _build_raw_chat_tools(monkeypatch, repo: _ChatOrderRepo, *, settings=None):
@@ -455,6 +482,142 @@ def test_chat_order_tools_require_confirmation_and_are_idempotent(monkeypatch) -
 
     assert second_draft["approval_token"] != token
     assert tools["submit_approved_order"](token, f"CONFIRM {token}")["status"] == "already_submitted"
+
+
+def test_chat_order_tool_uses_adk_confirmation_before_execution(monkeypatch) -> None:
+    repo = _ChatOrderRepo()
+    tools = _build_raw_chat_tools(monkeypatch, repo)
+    submit_with_confirmation = tools["submit_order_with_confirmation"]
+
+    first_context = _FakeToolContext()
+    waiting = submit_with_confirmation(
+        ticker="AAPL",
+        side="BUY",
+        quantity=1,
+        price_krw=100_000,
+        rationale="test buy through ADK confirmation",
+        exchange_code="NASD",
+        instrument_id="NASD:AAPL",
+        tool_context=first_context,
+    )
+
+    assert waiting["status"] == "waiting_for_confirmation"
+    assert waiting["submission_status"] == "not_submitted"
+    assert first_context.actions.skip_summarization is True
+    assert first_context.confirmation_request is not None
+    payload = first_context.confirmation_request["payload"]
+    assert isinstance(payload, dict)
+    assert payload["ticker"] == "AAPL"
+    assert "approval_token" not in payload
+    assert "ADK Web 확인창" in str(first_context.confirmation_request["hint"])
+    assert "Confirmed 체크박스" in str(first_context.confirmation_request["hint"])
+    assert repo.execution_reports == []
+
+    confirmed_context = _FakeToolContext(
+        function_call_id=first_context.function_call_id,
+        state=first_context.state,
+        tool_confirmation=SimpleNamespace(confirmed=True, payload={}),
+    )
+    submitted = submit_with_confirmation(
+        ticker="AAPL",
+        side="BUY",
+        quantity=1,
+        price_krw=100_000,
+        rationale="test buy through ADK confirmation",
+        exchange_code="NASD",
+        instrument_id="NASD:AAPL",
+        tool_context=confirmed_context,
+    )
+
+    assert submitted["status"] == "submitted"
+    assert submitted["execution_report"]["status"] == ExecutionStatus.SIMULATED.value
+    assert len(repo.execution_reports) == 1
+
+
+def test_chat_order_tool_rejects_adk_confirmation_without_execution(monkeypatch) -> None:
+    repo = _ChatOrderRepo()
+    tools = _build_raw_chat_tools(monkeypatch, repo)
+    submit_with_confirmation = tools["submit_order_with_confirmation"]
+
+    first_context = _FakeToolContext()
+    waiting = submit_with_confirmation(
+        ticker="AAPL",
+        side="BUY",
+        quantity=1,
+        price_krw=100_000,
+        rationale="test rejected ADK confirmation",
+        exchange_code="NASD",
+        instrument_id="NASD:AAPL",
+        tool_context=first_context,
+    )
+    assert waiting["status"] == "waiting_for_confirmation"
+
+    rejected_context = _FakeToolContext(
+        function_call_id=first_context.function_call_id,
+        state=first_context.state,
+        tool_confirmation=SimpleNamespace(confirmed=False, payload={}),
+    )
+    rejected = submit_with_confirmation(
+        ticker="AAPL",
+        side="BUY",
+        quantity=1,
+        price_krw=100_000,
+        rationale="test rejected ADK confirmation",
+        exchange_code="NASD",
+        instrument_id="NASD:AAPL",
+        tool_context=rejected_context,
+    )
+
+    assert rejected["status"] == "rejected"
+    assert repo.execution_reports == []
+
+
+def test_chat_order_tool_explains_unchecked_adk_confirmation(monkeypatch) -> None:
+    repo = _ChatOrderRepo()
+    tools = _build_raw_chat_tools(monkeypatch, repo)
+    submit_with_confirmation = tools["submit_order_with_confirmation"]
+
+    first_context = _FakeToolContext()
+    waiting = submit_with_confirmation(
+        ticker="AAPL",
+        side="BUY",
+        quantity=1,
+        price_krw=100_000,
+        rationale="test unchecked ADK confirmation",
+        exchange_code="NASD",
+        instrument_id="NASD:AAPL",
+        tool_context=first_context,
+    )
+    assert waiting["status"] == "waiting_for_confirmation"
+
+    unchecked_context = _FakeToolContext(
+        function_call_id=first_context.function_call_id,
+        state=first_context.state,
+        tool_confirmation=SimpleNamespace(
+            confirmed=False,
+            payload={
+                "ticker": "AAPL",
+                "side": "BUY",
+                "quantity": 1,
+                "price_krw": 100_000,
+            },
+        ),
+    )
+    rejected = submit_with_confirmation(
+        ticker="AAPL",
+        side="BUY",
+        quantity=1,
+        price_krw=100_000,
+        rationale="test unchecked ADK confirmation",
+        exchange_code="NASD",
+        instrument_id="NASD:AAPL",
+        tool_context=unchecked_context,
+    )
+
+    assert rejected["status"] == "rejected"
+    assert rejected["reason"] == "confirmed_checkbox_unchecked"
+    assert "Confirmed 체크박스" in rejected["message"]
+    assert repo.execution_reports == []
 
 
 def test_get_trade_history_tool_reads_tenant_scoped_execution_history(monkeypatch) -> None:
@@ -940,7 +1103,11 @@ def test_ui_registers_investment_chat_page_and_adk_mount(monkeypatch) -> None:
     assert "gpt-5.5" in response.text
     assert "gemini-3.1-flash-preview" in response.text
     assert "gemini-3.1-pro-preview" in response.text
-    assert 'h-screen' in response.text
+    assert 'data-active="investment_chat"' in response.text
+    assert "investment-chat-shell" in response.text
+    assert "calc(100dvh - var(--mobile-topbar-h))" in response.text
+    assert "investment-chat-frame" in response.text
+    assert 'body[data-active="investment_chat"] .sidebar-backdrop.open' in response.text
     assert any(getattr(route, "path", "") == "/investment-chat/adk" for route in app.routes)
 
 
@@ -1139,6 +1306,43 @@ def test_investment_chat_order_draft_api_lists_and_submits_pending_draft(monkeyp
     result = submitted.json()
     assert result["status"] == "submitted"
     assert len(repo.execution_reports) == 1
+
+
+def test_investment_chat_order_draft_api_hides_adk_confirmation_drafts(monkeypatch) -> None:
+    import arena.ui.app as ui_app
+    from arena.agents.investment_chat import order_tools
+    from arena.agents.investment_chat.registry import build_chat_registry
+
+    monkeypatch.setenv("ARENA_UI_AUTH_ENABLED", "false")
+    monkeypatch.setattr(
+        ui_app,
+        "build_investment_chat_adk_app",
+        lambda **kwargs: FastAPI(title="stub-adk"),
+    )
+    monkeypatch.setattr(order_tools, "build_execution_memory", lambda repo, settings: _FakeExecutionMemory())
+    settings = load_settings()
+    settings.trading_mode = "paper"
+    repo = _ChatOrderRepo()
+    repo.recent_runtime_audit_logs = lambda limit=50: list(reversed(repo.audit_logs[-limit:]))  # type: ignore[method-assign]
+    registry = build_chat_registry(repo=repo, settings=settings, tenant_id="local", registry=None)
+    submit_with_confirmation = registry.get("submit_order_with_confirmation").callable
+
+    waiting = submit_with_confirmation(
+        ticker="AAPL",
+        side="BUY",
+        quantity=1,
+        price_krw=100_000,
+        rationale="ADK confirmation should not create host approval card",
+        tool_context=_FakeToolContext(),
+    )
+    app = _build_app(repo=repo, settings=settings)
+    client = DirectRouteClient(app)
+
+    listed = client.get("/investment-chat/order-drafts", params={"tenant_id": "local"})
+
+    assert waiting["status"] == "waiting_for_confirmation"
+    assert listed.status_code == 200
+    assert listed.json()["drafts"] == []
 
 
 def test_investment_chat_order_draft_api_surfaces_broker_error_message(monkeypatch) -> None:

@@ -6,6 +6,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
+from google.adk.tools.tool_context import ToolContext
+
 from arena.agents.investment_chat.audit import append_chat_audit
 from arena.agents.investment_chat.constants import AGENT_ID
 from arena.agents.investment_chat.context import normalize_tenant
@@ -40,6 +42,44 @@ def _parse_audit_detail(row: dict[str, Any]) -> dict[str, Any]:
             return {}
         return parsed if isinstance(parsed, dict) else {}
     return {}
+
+
+def _confirmation_state_key(tool_context: ToolContext) -> str:
+    function_call_id = str(getattr(tool_context, "function_call_id", "") or "").strip()
+    return f"investment_chat.order_confirmation.{function_call_id or 'unknown'}"
+
+
+def _confirmation_payload(draft: dict[str, Any]) -> dict[str, Any]:
+    intent = draft.get("intent") if isinstance(draft.get("intent"), dict) else {}
+    risk = draft.get("risk") if isinstance(draft.get("risk"), dict) else {}
+    return {
+        "action": "submit_order",
+        "ticker": intent.get("ticker") or "",
+        "side": intent.get("side") or "",
+        "quantity": intent.get("quantity") or 0,
+        "notional_krw": draft.get("notional_krw") or 0,
+        "scope": draft.get("scope") or "account",
+        "target_agent_id": draft.get("target_agent_id") or "",
+        "risk_allowed": risk.get("allowed"),
+        "policy_hits": risk.get("policy_hits") or [],
+        "judgment_source": draft.get("judgment_source") or "user+investment_chat",
+    }
+
+
+def _confirmation_hint(draft: dict[str, Any]) -> str:
+    payload = _confirmation_payload(draft)
+    ticker = str(payload.get("ticker") or "").strip().upper()
+    side = str(payload.get("side") or "").strip().upper()
+    side_label = "매수" if side == "BUY" else "매도" if side == "SELL" else side
+    quantity = payload.get("quantity") or 0
+    notional = payload.get("notional_krw") or 0
+    scope = str(payload.get("scope") or "account")
+    scope_label = "전체 계좌" if scope == "account" else "에이전트 sleeve"
+    return (
+        f"{scope_label} 주문을 제출할까요? {ticker} {side_label} {float(quantity):g}주, "
+        f"예상 금액 {float(notional):,.0f}원. "
+        "ADK Web 확인창에서 Confirmed 체크박스를 체크한 뒤 Submit을 눌러야 승인됩니다."
+    )
 
 
 def build_order_tool_entries(*, repo: Any, settings: Settings, tenant_id: str) -> list[ToolEntry]:
@@ -486,7 +526,133 @@ def build_order_tool_entries(*, repo: Any, settings: Settings, tenant_id: str) -
             **({"error": str(report.message or "")} if response_status != "submitted" else {}),
         }
 
+    def submit_order_with_confirmation(
+        ticker: str,
+        side: str,
+        quantity: float,
+        price_krw: float,
+        rationale: str,
+        tool_context: ToolContext,
+        agent_id: str = AGENT_ID,
+        scope: str = "account",
+        exchange_code: str = "",
+        instrument_id: str = "",
+        price_native: float | None = None,
+        quote_currency: str = "",
+        fx_rate: float = 0.0,
+    ) -> dict[str, Any]:
+        """Validates an order and uses ADK tool confirmation before submitting it."""
+        state_key = _confirmation_state_key(tool_context)
+        confirmation = getattr(tool_context, "tool_confirmation", None)
+        state = getattr(tool_context, "state", None)
+        if confirmation is not None:
+            token = ""
+            if state is not None:
+                token = str(state.get(state_key) or "").strip()
+            if not bool(getattr(confirmation, "confirmed", False)):
+                confirmation_payload = getattr(confirmation, "payload", None)
+                reason = "confirmed_checkbox_unchecked" if confirmation_payload is not None else "not_confirmed"
+                if token:
+                    draft = load_draft(repo, tenant_id=tenant, token=token)
+                    if isinstance(draft, dict) and str(draft.get("status") or "").strip().lower() == "draft":
+                        draft["status"] = "rejected"
+                        draft["rejected_at"] = utc_iso()
+                        draft["rejection_reason"] = reason
+                        save_draft(repo, tenant_id=tenant, token=token, draft=draft)
+                    append_chat_audit(
+                        repo,
+                        tenant_id=tenant,
+                        action="chat_order_submit",
+                        status="blocked",
+                        detail={
+                            "approval_token": token,
+                            "stage": "adk_tool_confirmation",
+                            "reason": reason,
+                        },
+                        user_email=chat_actor_email(),
+                    )
+                return {
+                    "status": "rejected",
+                    "tenant_id": tenant,
+                    "reason": reason,
+                    "submission_status": "not_submitted",
+                    "message": (
+                        "ADK Web에서 confirmed=false가 반환되어 주문을 제출하지 않았습니다. "
+                        "승인하려면 ADK Web 확인창에서 Confirmed 체크박스를 체크한 뒤 Submit을 눌러야 합니다."
+                        if reason == "confirmed_checkbox_unchecked"
+                        else "ADK Web에서 주문이 확인되지 않아 제출하지 않았습니다."
+                    ),
+                }
+            if not token:
+                return {
+                    "status": "blocked",
+                    "tenant_id": tenant,
+                    "error": "ADK tool confirmation state was missing; order was not submitted.",
+                }
+            return submit_approved_order(approval_token=token, confirmation_text=f"CONFIRM {token}")
+
+        draft_result = validate_order_draft(
+            ticker=ticker,
+            side=side,
+            quantity=quantity,
+            price_krw=price_krw,
+            rationale=rationale,
+            agent_id=agent_id,
+            scope=scope,
+            exchange_code=exchange_code,
+            instrument_id=instrument_id,
+            price_native=price_native,
+            quote_currency=quote_currency,
+            fx_rate=fx_rate,
+        )
+        if str(draft_result.get("status") or "").strip().lower() != "ok":
+            return draft_result
+        risk = draft_result.get("risk") if isinstance(draft_result.get("risk"), dict) else {}
+        if not bool(risk.get("allowed")):
+            return draft_result
+        token = str(draft_result.get("approval_token") or "").strip()
+        draft = load_draft(repo, tenant_id=tenant, token=token)
+        if not isinstance(draft, dict):
+            return {
+                "status": "blocked",
+                "tenant_id": tenant,
+                "error": "validated order draft could not be loaded; order was not submitted.",
+            }
+        draft["approval_channel"] = "adk_tool_confirmation"
+        save_draft(repo, tenant_id=tenant, token=token, draft=draft)
+        if state is not None:
+            state[state_key] = token
+        tool_context.request_confirmation(
+            hint=_confirmation_hint(draft),
+            payload=_confirmation_payload(draft),
+        )
+        tool_context.actions.skip_summarization = True
+        return {
+            "status": "waiting_for_confirmation",
+            "tenant_id": tenant,
+            "scope": draft.get("scope") or "account",
+            "target_agent_id": draft.get("target_agent_id") or "",
+            "judgment_source": draft.get("judgment_source") or "user+investment_chat",
+            "intent": draft.get("intent") or {},
+            "risk": draft.get("risk") or {},
+            "notional_krw": draft.get("notional_krw") or 0,
+            "submission_status": "not_submitted",
+            "approval_required": True,
+            "approval_ui": "adk_tool_confirmation",
+            "message": "ADK tool confirmation is required before this order can be submitted.",
+        }
+
     return [
+        ToolEntry(
+            tool_id="submit_order_with_confirmation",
+            name="submit_order_with_confirmation",
+            description="Preferred order submission tool for investment chat. Validates the proposed order, asks for ADK tool confirmation, and submits only after the user approves in the ADK confirmation dialog.",
+            category="execution",
+            callable=submit_order_with_confirmation,
+            tier="core",
+            label_ko="ADK 승인 주문 제출",
+            sort_order=3,
+        ),
         ToolEntry(
             tool_id="validate_order_draft",
             name="validate_order_draft",

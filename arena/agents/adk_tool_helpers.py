@@ -6,6 +6,27 @@ from typing import Any
 from arena.tools.registry import ToolEntry
 
 
+def _schema_safe_signature(sig: inspect.Signature) -> inspect.Signature:
+    parameters: list[inspect.Parameter] = []
+    changed = False
+    for param in sig.parameters.values():
+        if param.name == "tool_context" and param.annotation is not inspect.Parameter.empty:
+            parameters.append(param.replace(annotation=inspect.Parameter.empty))
+            changed = True
+        else:
+            parameters.append(param)
+    return sig.replace(parameters=parameters) if changed else sig
+
+
+def _schema_safe_annotations(fn: Any) -> dict[str, Any] | None:
+    annotations = getattr(fn, "__annotations__", None)
+    if not isinstance(annotations, dict) or "tool_context" not in annotations:
+        return None
+    safe = dict(annotations)
+    safe.pop("tool_context", None)
+    return safe
+
+
 def apply_tool_schema_metadata(fn: Any, *, entry: ToolEntry, sig: inspect.Signature) -> Any:
     name = str(entry.name or entry.tool_id or getattr(fn, "__name__", "tool")).strip() or "tool"
     description = str(entry.description or "").strip()
@@ -13,7 +34,10 @@ def apply_tool_schema_metadata(fn: Any, *, entry: ToolEntry, sig: inspect.Signat
     fn.__qualname__ = name
     if description:
         fn.__doc__ = description
-    fn.__signature__ = sig
+    safe_annotations = _schema_safe_annotations(fn)
+    if safe_annotations is not None:
+        fn.__annotations__ = safe_annotations
+    fn.__signature__ = _schema_safe_signature(sig)
     return fn
 
 

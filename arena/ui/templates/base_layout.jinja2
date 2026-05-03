@@ -46,6 +46,7 @@
       --bg-c: #ede9fe;
       --sidebar-w: 200px;
       --sidebar-collapsed-w: 52px;
+      --mobile-topbar-h: 56px;
     }
     body {
       font-family: 'Space Grotesk', ui-sans-serif, system-ui, sans-serif;
@@ -294,13 +295,23 @@
     .sidebar-backdrop.open {
       opacity: 1; pointer-events: auto;
     }
+    @media (max-width: 767px) {
+      body[data-active="investment_chat"] .arena-sidebar {
+        width: min(72vw, 240px);
+        min-width: min(72vw, 240px);
+      }
+      body[data-active="investment_chat"] .sidebar-backdrop.open {
+        background: rgba(15, 23, 42, 0.08);
+        backdrop-filter: none;
+      }
+    }
   </style>
 </head>
-<body class="text-ink-900 antialiased selection:bg-brand-300 selection:text-ink-900">
+<body class="text-ink-900 antialiased selection:bg-brand-300 selection:text-ink-900" data-active="{{ active }}">
   <div id="nav-loader"></div>
 
   {# ── Mobile top bar ── #}
-  <header class="sticky top-0 z-40 flex items-center justify-between border-b border-white/40 bg-white/70 px-4 py-3 backdrop-blur-xl md:hidden">
+  <header class="sticky top-0 z-40 flex h-14 items-center justify-between border-b border-white/40 bg-white/70 px-4 backdrop-blur-xl md:hidden">
     <h1 class="font-display text-lg font-bold tracking-tight text-ink-900">LLM INVEST</h1>
     <button id="sidebar-toggle" type="button" class="rounded-lg border border-ink-200/50 bg-white/80 p-1.5 text-ink-600">
       <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" d="M4 6h16M4 12h16M4 18h16"/></svg>
