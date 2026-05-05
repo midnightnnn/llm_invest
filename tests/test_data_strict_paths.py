@@ -234,7 +234,8 @@ def test_rebuild_universe_candidates_skips_rows_without_daily_history_features()
                     "volatility_20d": 0.12,
                     "sentiment_score": 0.2,
                 },
-            ]
+            ],
+            [],
         ],
         client=_InsertClient(),
     )
@@ -245,6 +246,37 @@ def test_rebuild_universe_candidates_skips_rows_without_daily_history_features()
     assert out["count"] == 2
     written = {row["ticker"] for row in session.client.payloads}
     assert written == {"ZERO", "GOOD"}
+
+
+def test_rebuild_universe_candidates_supplements_allowed_tickers_from_latest_market_features() -> None:
+    def row(ticker: str, ret_20d: float) -> dict[str, object]:
+        return {
+            "as_of_ts": "2026-01-01T00:00:00+00:00",
+            "ticker": ticker,
+            "exchange_code": "NASD",
+            "instrument_id": f"NASD:{ticker}",
+            "ret_20d": ret_20d,
+            "ret_5d": ret_20d / 2,
+            "volatility_20d": 0.12,
+            "sentiment_score": 0.0,
+        }
+
+    session = _FakeSession(
+        responses=[
+            [row("ALLOW", 0.03)],
+            [row("EXTRA1", 0.08), row("EXTRA2", 0.06)],
+        ],
+        client=_InsertClient(),
+    )
+    store = MarketStore(session)
+
+    out = store.rebuild_universe_candidates(top_n=3, per_exchange_cap=3, allowed_tickers=["ALLOW"])
+
+    assert out["count"] == 3
+    written = {row["ticker"] for row in session.client.payloads}
+    assert written == {"ALLOW", "EXTRA1", "EXTRA2"}
+    assert session.call_pairs[0][1]["tickers"] == ["ALLOW"]
+    assert "tickers" not in session.call_pairs[1][1]
 
 
 def test_latest_universe_candidate_tickers_scopes_latest_run_by_market() -> None:

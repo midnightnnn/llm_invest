@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from fastapi import FastAPI, HTTPException
-from fastapi.testclient import TestClient
+import httpx
 
 from arena.config import load_settings
 from arena.ui.app import _build_app
@@ -11,20 +12,27 @@ from arena.ui.api_errors import register_api_error_middleware
 from tests.ui.helpers import _DummyRepo
 
 
+async def _asgi_get(app: FastAPI, path: str, *, headers: dict[str, str] | None = None) -> httpx.Response:
+    transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        return await client.get(path, headers=headers)
+
+
 def test_api_error_boundary_logs_traceback_and_returns_request_id(caplog) -> None:
     app = FastAPI()
     register_api_error_middleware(app)
 
     @app.get("/api/boom")
-    def boom():
+    async def boom():
         raise RuntimeError("db boom")
 
-    client = TestClient(app, raise_server_exceptions=False)
-
     with caplog.at_level(logging.ERROR):
-        response = client.get(
-            "/api/boom?tenant_id=tenant-a",
-            headers={"X-Request-ID": "req-test-1"},
+        response = asyncio.run(
+            _asgi_get(
+                app,
+                "/api/boom?tenant_id=tenant-a",
+                headers={"X-Request-ID": "req-test-1"},
+            )
         )
 
     assert response.status_code == 500
@@ -51,12 +59,10 @@ def test_api_error_boundary_preserves_http_errors() -> None:
     register_api_error_middleware(app)
 
     @app.get("/api/blocked")
-    def blocked():
+    async def blocked():
         raise HTTPException(status_code=403, detail="blocked")
 
-    client = TestClient(app, raise_server_exceptions=False)
-
-    response = client.get("/api/blocked", headers={"X-Request-ID": "req-403"})
+    response = asyncio.run(_asgi_get(app, "/api/blocked", headers={"X-Request-ID": "req-403"}))
 
     assert response.status_code == 403
     assert response.headers["X-Request-ID"] == "req-403"
@@ -68,13 +74,11 @@ def test_api_error_boundary_does_not_catch_html_routes(caplog) -> None:
     register_api_error_middleware(app)
 
     @app.get("/page")
-    def page():
+    async def page():
         raise RuntimeError("html boom")
 
-    client = TestClient(app, raise_server_exceptions=False)
-
     with caplog.at_level(logging.ERROR):
-        response = client.get("/page", headers={"X-Request-ID": "req-html"})
+        response = asyncio.run(_asgi_get(app, "/page", headers={"X-Request-ID": "req-html"}))
 
     assert response.status_code == 500
     assert not any(getattr(record, "event", "") == "ui_api_request_failed" for record in caplog.records)
@@ -84,15 +88,16 @@ def test_built_ui_app_applies_api_error_boundary_to_late_api_routes(caplog) -> N
     app = _build_app(repo=_DummyRepo(), settings=load_settings())
 
     @app.get("/api/late-boom")
-    def late_boom():
+    async def late_boom():
         raise RuntimeError("late api boom")
 
-    client = TestClient(app, raise_server_exceptions=False)
-
     with caplog.at_level(logging.ERROR):
-        response = client.get(
-            "/api/late-boom?tenant_id=tenant-b",
-            headers={"X-Request-ID": "req-integrated"},
+        response = asyncio.run(
+            _asgi_get(
+                app,
+                "/api/late-boom?tenant_id=tenant-b",
+                headers={"X-Request-ID": "req-integrated"},
+            )
         )
 
     assert response.status_code == 500

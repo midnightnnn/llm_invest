@@ -6,6 +6,8 @@ from secrets import token_hex
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from starlette.datastructures import MutableHeaders
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from arena.logging_utils import failure_extra
 
@@ -44,23 +46,40 @@ def _request_tenant(request: Request) -> str:
     return tenant or "-"
 
 
-def register_api_error_middleware(app: FastAPI) -> None:
-    """Adds JSON 500 logging for API routes while leaving HTML routes alone."""
+class ApiErrorBoundaryMiddleware:
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
 
-    @app.middleware("http")
-    async def api_error_boundary(request: Request, call_next):
-        path = str(request.url.path or "")
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        path = str(scope.get("path") or "")
         if not _is_api_error_boundary_path(path):
-            return await call_next(request)
+            await self.app(scope, receive, send)
+            return
 
+        request = Request(scope, receive=receive)
         request_id = _request_id(request)
+        state = scope.setdefault("state", {})
+        if isinstance(state, dict):
+            state["request_id"] = request_id
+
+        response_started = False
+
+        async def send_with_request_id(message: Message) -> None:
+            nonlocal response_started
+            if message["type"] == "http.response.start":
+                response_started = True
+                MutableHeaders(scope=message).setdefault("X-Request-ID", request_id)
+            await send(message)
+
         try:
-            request.state.request_id = request_id
-        except Exception:
-            pass
-        try:
-            response = await call_next(request)
+            await self.app(scope, receive, send_with_request_id)
         except Exception as exc:
+            if response_started:
+                raise
             tenant = _request_tenant(request)
             logger.exception(
                 "[red]UI API request failed[/red] request_id=%s method=%s path=%s tenant=%s err=%s",
@@ -79,7 +98,7 @@ def register_api_error_middleware(app: FastAPI) -> None:
                     status_code=500,
                 ),
             )
-            return JSONResponse(
+            response = JSONResponse(
                 {
                     "status": "error",
                     "error": "internal_server_error",
@@ -91,6 +110,9 @@ def register_api_error_middleware(app: FastAPI) -> None:
                     "X-Request-ID": request_id,
                 },
             )
+            await response(scope, receive, send)
 
-        response.headers.setdefault("X-Request-ID", request_id)
-        return response
+
+def register_api_error_middleware(app: FastAPI) -> None:
+    """Adds JSON 500 logging for API routes while leaving HTML routes alone."""
+    app.add_middleware(ApiErrorBoundaryMiddleware)

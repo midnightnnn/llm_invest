@@ -183,11 +183,12 @@ class Settings:
     research_mover_top_n: int = 3
     research_earnings_lookahead_days: int = 7
     adk_max_tool_events: int = 120
-    universe_run_top_n: int = 400
-    universe_per_exchange_cap: int = 200
+    universe_run_top_n: int = 1000
+    universe_per_exchange_cap: int = 500
     us_quote_exchanges: list[str] = field(default_factory=lambda: ["NAS", "NYS"])
     reddit_sentiment_enabled: bool = False
     forecast_mode: str = "all"
+    opportunity_ranker_max_scoring_rows: int = 1000
     forecast_table: str = ""
     fred_api_key: str = ""
     ecos_api_key: str = ""
@@ -636,8 +637,8 @@ def load_settings() -> Settings:
         research_mover_top_n=_to_int(os.getenv("ARENA_RESEARCH_MOVER_TOP_N"), 3),
         research_earnings_lookahead_days=_to_int(os.getenv("ARENA_RESEARCH_EARNINGS_LOOKAHEAD_DAYS"), 7),
         adk_max_tool_events=_to_int(os.getenv("ARENA_ADK_MAX_TOOL_EVENTS"), 60),
-        universe_run_top_n=_to_int(os.getenv("ARENA_UNIVERSE_RUN_TOP_N"), 400),
-        universe_per_exchange_cap=_to_int(os.getenv("ARENA_UNIVERSE_PER_EXCHANGE_CAP"), 200),
+        universe_run_top_n=_to_int(os.getenv("ARENA_UNIVERSE_RUN_TOP_N"), 1000),
+        universe_per_exchange_cap=_to_int(os.getenv("ARENA_UNIVERSE_PER_EXCHANGE_CAP"), 500),
         us_quote_exchanges=[
             str(x).strip().upper()
             for x in _csv(os.getenv("ARENA_US_QUOTE_EXCHANGES"), ["NAS", "NYS"])
@@ -645,6 +646,10 @@ def load_settings() -> Settings:
         ],
         reddit_sentiment_enabled=_to_bool(os.getenv("ARENA_REDDIT_SENTIMENT_ENABLED"), True),
         forecast_mode=(os.getenv("ARENA_FORECAST_MODE", "all").strip().lower() or "all"),
+        opportunity_ranker_max_scoring_rows=_to_int(
+            os.getenv("ARENA_OPPORTUNITY_RANKER_MAX_SCORING_ROWS"),
+            1000,
+        ),
         forecast_table=os.getenv("ARENA_FORECAST_TABLE", "").strip(),
         fred_api_key=os.getenv("FRED_API_KEY", "").strip(),
         ecos_api_key=os.getenv("ECOS_API_KEY", "").strip(),
@@ -744,6 +749,7 @@ def apply_runtime_overrides(settings: Settings, repo: Any, tenant_id: str) -> Se
         "reconcile_excluded_tickers",
         "universe_run_top_n",
         "universe_per_exchange_cap",
+        "opportunity_ranker_max_scoring_rows",
         "forecast_mode",
         "reddit_sentiment_enabled",
         "research_max_tickers",
@@ -889,6 +895,19 @@ def apply_runtime_overrides(settings: Settings, repo: Any, tenant_id: str) -> Se
                 "[yellow]Runtime universe override skipped[/yellow] tenant=%s key=universe_per_exchange_cap value=%s",
                 tenant,
                 universe_per_exchange_cap_raw,
+            )
+
+    ranker_scoring_rows_raw = str(values.get("opportunity_ranker_max_scoring_rows") or "").strip()
+    if ranker_scoring_rows_raw:
+        try:
+            parsed = int(float(ranker_scoring_rows_raw))
+            if parsed > 0:
+                settings.opportunity_ranker_max_scoring_rows = parsed
+        except ValueError:
+            logger.warning(
+                "[yellow]Runtime opportunity ranker override skipped[/yellow] tenant=%s key=opportunity_ranker_max_scoring_rows value=%s",
+                tenant,
+                ranker_scoring_rows_raw,
             )
 
     forecast_mode_raw = str(values.get("forecast_mode") or "").strip().lower()
@@ -1186,6 +1205,8 @@ def validate_settings(
             errors.append("ARENA_UNIVERSE_RUN_TOP_N must be >= 1")
         if int(settings.universe_per_exchange_cap) <= 0:
             errors.append("ARENA_UNIVERSE_PER_EXCHANGE_CAP must be >= 1")
+        if int(settings.opportunity_ranker_max_scoring_rows) <= 0:
+            errors.append("ARENA_OPPORTUNITY_RANKER_MAX_SCORING_ROWS must be >= 1")
         if any(token in {"nasdaq", "nyse", "amex", "us"} for token in market_tokens) and not settings.us_quote_exchanges:
             errors.append("ARENA_US_QUOTE_EXCHANGES must not be empty for US markets")
 

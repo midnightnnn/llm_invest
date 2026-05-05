@@ -364,6 +364,7 @@ def test_market_sync_nasdaq_fails_without_live_fx() -> None:
 def test_market_sync_kospi_builds_rows() -> None:
     repo = FakeRepo()
     settings = _settings("kospi", ["005930"])
+    settings.universe_per_exchange_cap = 5
     client = FakeClient()
     service = MarketDataSyncService(settings=settings, repo=repo, client=client)
     result = service.sync_market_features()
@@ -396,9 +397,24 @@ def test_discover_kospi_symbols_backfills_name_for_already_seen_ticker() -> None
     assert service._kospi_ticker_names["005930"] == "삼성전자"
 
 
+def test_discover_kospi_symbols_uses_static_sector_map_to_reach_cap() -> None:
+    repo = FakeRepo()
+    settings = _settings("kospi", ["005930"])
+    settings.universe_per_exchange_cap = 8
+    service = MarketDataSyncService(settings=settings, repo=repo, client=FakeClient())
+
+    symbols = service._discover_kospi_symbols()
+
+    tickers = [symbol["ticker"] for symbol in symbols]
+    assert len(tickers) == 8
+    assert {"005930", "000660", "003280", "069500", "373220"} <= set(tickers)
+    assert all(ticker.isdigit() and len(ticker) == 6 for ticker in tickers)
+
+
 def test_market_sync_kospi_requests_long_history_for_forecast_bootstrap() -> None:
     repo = FakeRepo()
     settings = _settings("kospi", ["005930"])
+    settings.universe_per_exchange_cap = 5
     client = FakeClient()
     service = MarketDataSyncService(settings=settings, repo=repo, client=client)
 
@@ -422,6 +438,7 @@ def test_market_sync_kospi_forces_backfill_when_existing_history_is_too_shallow(
         }
     }
     settings = _settings("kospi", ["005930"])
+    settings.universe_per_exchange_cap = 5
     client = FakeClient()
     service = MarketDataSyncService(settings=settings, repo=repo, client=client)
 

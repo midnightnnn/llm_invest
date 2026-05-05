@@ -197,7 +197,7 @@ def build_parser() -> argparse.ArgumentParser:
     build_ranker = sub.add_parser("build-opportunity-ranker", help="Build learned opportunity ranker scores (signal-IC meta-learner)")
     build_ranker.add_argument("--lookback-days", type=int, default=540, help="Historical window for IC training")
     build_ranker.add_argument("--horizon", type=int, default=20, help="IC horizon in trading rows")
-    build_ranker.add_argument("--max-scoring-rows", type=int, default=500, help="Maximum latest candidates to score")
+    build_ranker.add_argument("--max-scoring-rows", type=int, default=1000, help="Maximum latest candidates to score")
     build_ranker.add_argument("--min-ic-dates", type=int, default=60, help="Minimum distinct IC dates required")
     build_ranker.add_argument("--min-valid-signals", type=int, default=3, help="Minimum signals with trained IC models")
     refresh_signals = sub.add_parser("refresh-signals", help="Recompute signal_daily_values only (debugging)")

@@ -431,6 +431,31 @@ class MarketDataSyncService:
             if len(seen) >= cap:
                 break
 
+        if len(seen) < cap:
+            before = len(seen)
+            try:
+                from arena.tools.sector_map import SECTOR_BY_TICKER
+            except Exception as exc:
+                logger.warning(
+                    "[yellow]KOSPI static universe fallback skipped[/yellow] err=%s",
+                    str(exc),
+                    extra=failure_extra(
+                        "kospi_static_universe_fallback_skipped",
+                        exc,
+                    ),
+                )
+            else:
+                for ticker in SECTOR_BY_TICKER:
+                    add_symbol(ticker)
+                    if len(seen) >= cap:
+                        break
+                logger.info(
+                    "[cyan]KOSPI static universe fallback[/cyan] unique_added=%d total=%d cap=%d",
+                    max(0, len(seen) - before),
+                    len(seen),
+                    cap,
+                )
+
         return all_rows
 
     def _target_symbols(self) -> list[dict[str, str]]:

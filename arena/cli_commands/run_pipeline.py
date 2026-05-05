@@ -934,7 +934,7 @@ def cmd_run_shared_prep(
                 {
                     "lookback_days": 540,
                     "horizon": 20,
-                    "max_scoring_rows": 500,
+                    "max_scoring_rows": int(getattr(bootstrap_settings, "opportunity_ranker_max_scoring_rows", 1000) or 1000),
                     "min_ic_dates": 60,
                     "min_valid_signals": 3,
                 },
@@ -1180,7 +1180,7 @@ def cmd_run_pipeline(live: bool, *, all_tenants: bool = False, market_override: 
             {
                 "lookback_days": 540,
                 "horizon": 20,
-                "max_scoring_rows": 500,
+                "max_scoring_rows": int(getattr(settings, "opportunity_ranker_max_scoring_rows", 1000) or 1000),
                 "min_ic_dates": 60,
                 "min_valid_signals": 3,
             },

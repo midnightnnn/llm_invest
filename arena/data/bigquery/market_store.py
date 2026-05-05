@@ -869,6 +869,44 @@ class MarketStore:
                     out[-1]["consensus"] = val
         return out
 
+    def _delete_market_refresh_window(
+        self,
+        *,
+        table_name: str,
+        date_column: str,
+        lookback_days: int,
+        market: str | None,
+        include_null_market: bool = False,
+    ) -> None:
+        """Deletes the refresh window before rematerializing append-heavy derived tables."""
+        table = str(table_name or "").strip()
+        date_col = str(date_column or "").strip()
+        if table not in {
+            "fundamentals_derived_daily",
+            "signal_daily_values",
+            "signal_daily_ic",
+            "regime_daily_features",
+        }:
+            raise ValueError(f"unsupported refresh table: {table!r}")
+        if date_col != "as_of_date":
+            raise ValueError(f"unsupported refresh date column: {date_col!r}")
+
+        market_filter = "(@market IS NULL OR market = @market)"
+        if include_null_market:
+            market_filter = "(@market IS NULL OR market = @market OR market IS NULL)"
+        sql = f"""
+        DELETE FROM `{self.session.dataset_fqn}.{table}`
+        WHERE {date_col} >= DATE_SUB(CURRENT_DATE(), INTERVAL @lookback_days DAY)
+          AND {market_filter}
+        """
+        self.session.execute(
+            sql,
+            {
+                "lookback_days": max(1, min(int(lookback_days), 1500)),
+                "market": str(market or "").strip().lower() or None,
+            },
+        )
+
     def refresh_signal_daily_values(
         self,
         *,
@@ -908,6 +946,12 @@ class MarketStore:
 
         where = "WHERE " + " AND ".join(filters)
         dataset = self.session.dataset_fqn
+        self._delete_market_refresh_window(
+            table_name="signal_daily_values",
+            date_column="as_of_date",
+            lookback_days=int(params["lookback_days"]),
+            market=params["market"],
+        )
         sql = f"""
         INSERT INTO `{dataset}.signal_daily_values`
         WITH raw AS (
@@ -1178,6 +1222,13 @@ class MarketStore:
             "horizon": max(5, min(int(horizon_days), 60)),
             "market": str(market or "").strip().lower() or None,
         }
+        self._delete_market_refresh_window(
+            table_name="signal_daily_ic",
+            date_column="as_of_date",
+            lookback_days=int(params["lookback_days"]),
+            market=params["market"],
+            include_null_market=True,
+        )
         unions: list[str] = []
         for col in signal_columns:
             signal_name = col.removeprefix("signal_")
@@ -1225,6 +1276,13 @@ class MarketStore:
             "lookback_days": max(40, min(int(lookback_days), 1500)),
             "market": str(market or "").strip().lower() or None,
         }
+        self._delete_market_refresh_window(
+            table_name="regime_daily_features",
+            date_column="as_of_date",
+            lookback_days=int(params["lookback_days"]),
+            market=params["market"],
+            include_null_market=True,
+        )
         sql = f"""
         INSERT INTO `{dataset}.regime_daily_features`
         SELECT
@@ -1467,6 +1525,12 @@ class MarketStore:
             "lookback_days": max(40, min(int(lookback_days), 1500)),
             "market": str(market or "").strip().lower() or None,
         }
+        self._delete_market_refresh_window(
+            table_name="fundamentals_derived_daily",
+            date_column="as_of_date",
+            lookback_days=int(params["lookback_days"]),
+            market=params["market"],
+        )
         sql = f"""
         INSERT INTO `{dataset}.fundamentals_derived_daily`
         WITH price_days AS (
@@ -2373,6 +2437,26 @@ class MarketStore:
             limit=lim,
             sources=sources,
         )
+        if allowed_tickers is not None:
+            seen = {
+                str(row.get("ticker") or "").strip().upper()
+                for row in rows
+                if str(row.get("ticker") or "").strip()
+            }
+            if len(rows) < lim:
+                supplemental = self.latest_market_features(
+                    tickers=[],
+                    limit=lim,
+                    sources=sources,
+                )
+                for row in supplemental:
+                    ticker = str(row.get("ticker") or "").strip().upper()
+                    if not ticker or ticker in seen:
+                        continue
+                    rows.append(row)
+                    seen.add(ticker)
+                    if len(rows) >= lim:
+                        break
         if not rows and allowed_tickers is None:
             rows = self.latest_market_features(
                 tickers=[],

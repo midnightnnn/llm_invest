@@ -37,14 +37,18 @@ SCHEDULER_SA_EMAIL="${SCHEDULER_SA_EMAIL:-${PROJECT}@appspot.gserviceaccount.com
 # US schedule (used when DUAL_MARKET=true)
 SCHEDULER_US_CRON="${SCHEDULER_US_CRON:-0 15 * * 1-5}"
 SCHEDULER_US_TIMEZONE="${SCHEDULER_US_TIMEZONE:-America/New_York}"
+SCHEDULER_US_SLOW_CRON="${SCHEDULER_US_SLOW_CRON:-0 14 * * 1-5}"
+SCHEDULER_US_SLOW_TIMEZONE="${SCHEDULER_US_SLOW_TIMEZONE:-${SCHEDULER_US_TIMEZONE}}"
 # KOSPI schedule (used when DUAL_MARKET=true)
 SCHEDULER_KR_CRON="${SCHEDULER_KR_CRON:-30 14 * * 1-5}"
 SCHEDULER_KR_TIMEZONE="${SCHEDULER_KR_TIMEZONE:-Asia/Seoul}"
+SCHEDULER_KR_SLOW_CRON="${SCHEDULER_KR_SLOW_CRON:-30 13 * * 1-5}"
+SCHEDULER_KR_SLOW_TIMEZONE="${SCHEDULER_KR_SLOW_TIMEZONE:-${SCHEDULER_KR_TIMEZONE}}"
 SCHEDULER_RUN_BODY='{"overrides":{"containerOverrides":[{"env":[{"name":"ARENA_EXECUTION_SOURCE","value":"scheduler"}]}]}}'
 
 RUN_SERVICE_ACCOUNT="${RUN_SERVICE_ACCOUNT:-${PROJECT}@appspot.gserviceaccount.com}"
 ENV_PAIR_DELIM="${ENV_PAIR_DELIM:-||}"
-RUN_ENV_VARS="${RUN_ENV_VARS:-GOOGLE_CLOUD_PROJECT=${PROJECT}||BQ_DATASET=llm_arena||BQ_LOCATION=${REGION}||ARENA_LOG_LEVEL=INFO||ARENA_TRADING_MODE=live||ARENA_ALLOW_LIVE_TRADING=true||ARENA_AGENT_MODE=adk||ARENA_AGENT_IDS=gemini,gpt,claude||OPENAI_MODEL=gpt-5.2||GOOGLE_GENAI_USE_VERTEXAI=true||GOOGLE_CLOUD_LOCATION=global||GEMINI_MODEL=gemini-3-flash-preview||ANTHROPIC_MODEL=claude-sonnet-4-6||ANTHROPIC_USE_VERTEXAI=false||ARENA_LLM_TIMEOUT_SECONDS=1500||ARENA_LLM_TIMEOUT_TRADING_SECONDS=3000||ARENA_ADK_RETRY_MAX=5||ARENA_ADK_RETRY_BACKOFF_SECONDS=10.0||ADK_ENABLE_JSON_SCHEMA_FOR_FUNC_DECL=true||ARENA_NASDAQ_CYCLE_TIMES_ET=15:00||ARENA_NASDAQ_CYCLE_TOLERANCE_MINUTES=30||ARENA_NASDAQ_DISABLE_SCHEDULE_GUARD=false||ARENA_KOSPI_CYCLE_TIMES_KST=${ARENA_KOSPI_CYCLE_TIMES_KST:-14:30}||ARENA_KOSPI_CYCLE_TOLERANCE_MINUTES=${ARENA_KOSPI_CYCLE_TOLERANCE_MINUTES:-20}||ARENA_KOSPI_DISABLE_SCHEDULE_GUARD=false||ARENA_SLEEVE_CAPITAL_KRW=2000000||ARENA_FORCE_SLEEVE_REINIT=false||ARENA_SLEEVE_BOOTSTRAP_FROM_ACCOUNT=false||ARENA_UNIVERSE_RUN_TOP_N=400||ARENA_UNIVERSE_PER_EXCHANGE_CAP=200||ARENA_US_QUOTE_EXCHANGES=NAS,NYS||ARENA_FORECAST_MODE=all||ARENA_FORECAST_BASE_MODELS=neural||ARENA_AUTONOMY_WORKING_SET_ENABLED=true||ARENA_AUTONOMY_TOOL_DEFAULT_CANDIDATES_ENABLED=true||ARENA_AUTONOMY_OPPORTUNITY_CONTEXT_ENABLED=true||KIS_TOKEN_CACHE_BACKEND=firestore||KIS_TOKEN_CACHE_COLLECTION=api_tokens||KIS_ENV=real||KIS_TARGET_MARKET=us||KIS_SECRET_NAME=KISAPI||KIS_SECRET_VERSION=latest||KIS_ACCOUNT_KEY_SUFFIX=CO||KIS_CONFIRM_FILLS=true||KIS_CONFIRM_TIMEOUT_SECONDS=25||KIS_CONFIRM_POLL_SECONDS=2.0||ARENA_USD_KRW_FX_MARKET_DIV_CODE=${ARENA_USD_KRW_FX_MARKET_DIV_CODE:-X}||ARENA_USD_KRW_FX_SYMBOL=${ARENA_USD_KRW_FX_SYMBOL:-USDKRW}||ARENA_PUBLIC_DEMO_TENANT=${ARENA_PUBLIC_DEMO_TENANT:-}||ARENA_SHARED_RESEARCH_GEMINI_SOURCE_TENANT=${ARENA_SHARED_RESEARCH_GEMINI_SOURCE_TENANT:-}}"
+RUN_ENV_VARS="${RUN_ENV_VARS:-GOOGLE_CLOUD_PROJECT=${PROJECT}||BQ_DATASET=llm_arena||BQ_LOCATION=${REGION}||ARENA_LOG_LEVEL=INFO||ARENA_TRADING_MODE=live||ARENA_ALLOW_LIVE_TRADING=true||ARENA_AGENT_MODE=adk||ARENA_AGENT_IDS=gemini,gpt,claude||OPENAI_MODEL=gpt-5.2||GOOGLE_GENAI_USE_VERTEXAI=true||GOOGLE_CLOUD_LOCATION=global||GEMINI_MODEL=gemini-3-flash-preview||ANTHROPIC_MODEL=claude-sonnet-4-6||ANTHROPIC_USE_VERTEXAI=false||ARENA_LLM_TIMEOUT_SECONDS=1500||ARENA_LLM_TIMEOUT_TRADING_SECONDS=3000||ARENA_ADK_RETRY_MAX=5||ARENA_ADK_RETRY_BACKOFF_SECONDS=10.0||ADK_ENABLE_JSON_SCHEMA_FOR_FUNC_DECL=true||ARENA_NASDAQ_CYCLE_TIMES_ET=15:00||ARENA_NASDAQ_CYCLE_TOLERANCE_MINUTES=30||ARENA_NASDAQ_DISABLE_SCHEDULE_GUARD=false||ARENA_KOSPI_CYCLE_TIMES_KST=${ARENA_KOSPI_CYCLE_TIMES_KST:-14:30}||ARENA_KOSPI_CYCLE_TOLERANCE_MINUTES=${ARENA_KOSPI_CYCLE_TOLERANCE_MINUTES:-20}||ARENA_KOSPI_DISABLE_SCHEDULE_GUARD=false||ARENA_SLEEVE_CAPITAL_KRW=2000000||ARENA_FORCE_SLEEVE_REINIT=false||ARENA_SLEEVE_BOOTSTRAP_FROM_ACCOUNT=false||ARENA_UNIVERSE_RUN_TOP_N=1000||ARENA_UNIVERSE_PER_EXCHANGE_CAP=500||ARENA_OPPORTUNITY_RANKER_MAX_SCORING_ROWS=1000||ARENA_US_QUOTE_EXCHANGES=NAS,NYS||ARENA_FORECAST_MODE=all||ARENA_FORECAST_BASE_MODELS=neural||ARENA_AUTONOMY_WORKING_SET_ENABLED=true||ARENA_AUTONOMY_TOOL_DEFAULT_CANDIDATES_ENABLED=true||ARENA_AUTONOMY_OPPORTUNITY_CONTEXT_ENABLED=true||KIS_TOKEN_CACHE_BACKEND=firestore||KIS_TOKEN_CACHE_COLLECTION=api_tokens||KIS_ENV=real||KIS_TARGET_MARKET=us||KIS_SECRET_NAME=KISAPI||KIS_SECRET_VERSION=latest||KIS_ACCOUNT_KEY_SUFFIX=CO||KIS_CONFIRM_FILLS=true||KIS_CONFIRM_TIMEOUT_SECONDS=25||KIS_CONFIRM_POLL_SECONDS=2.0||ARENA_USD_KRW_FX_MARKET_DIV_CODE=${ARENA_USD_KRW_FX_MARKET_DIV_CODE:-X}||ARENA_USD_KRW_FX_SYMBOL=${ARENA_USD_KRW_FX_SYMBOL:-USDKRW}||ARENA_PUBLIC_DEMO_TENANT=${ARENA_PUBLIC_DEMO_TENANT:-}||ARENA_SHARED_RESEARCH_GEMINI_SOURCE_TENANT=${ARENA_SHARED_RESEARCH_GEMINI_SOURCE_TENANT:-}}"
 if [[ -n "${FRED_API_KEY:-}" ]]; then
   RUN_ENV_VARS="${RUN_ENV_VARS}${ENV_PAIR_DELIM}FRED_API_KEY=${FRED_API_KEY}"
 fi
@@ -69,7 +73,7 @@ RUN_ARGS="${RUN_ARGS:--m,arena.cli,run-pipeline,--live,--all-tenants}"
 
 PREP_RUN_COMMAND="${PREP_RUN_COMMAND:-python}"
 PREP_RUN_ARGS="${PREP_RUN_ARGS:--m,arena.cli,run-shared-prep,--live}"
-PREP_TASK_TIMEOUT="${PREP_TASK_TIMEOUT:-${TASK_TIMEOUT}}"
+PREP_TASK_TIMEOUT="${PREP_TASK_TIMEOUT:-7200s}"
 PREP_CPU="${PREP_CPU:-${CPU}}"
 PREP_MEMORY="${PREP_MEMORY:-${MEMORY}}"
 PREP_TASKS="${PREP_TASKS:-1}"
@@ -252,10 +256,14 @@ _set_delimited_env_var() {
 _cleanup_dual_market_artifacts() {
   _delete_scheduler_if_exists "${SCHEDULER_JOB_NAME}-us"
   _delete_scheduler_if_exists "${SCHEDULER_JOB_NAME}-kospi"
+  _delete_scheduler_if_exists "${SCHEDULER_JOB_NAME}-slow-us"
+  _delete_scheduler_if_exists "${SCHEDULER_JOB_NAME}-slow-kospi"
   _delete_job_if_exists "${JOB_NAME}-us"
   _delete_job_if_exists "${JOB_NAME}-kospi"
   _delete_job_if_exists "${JOB_NAME}-prep-us"
   _delete_job_if_exists "${JOB_NAME}-prep-kospi"
+  _delete_job_if_exists "${JOB_NAME}-prep-slow-us"
+  _delete_job_if_exists "${JOB_NAME}-prep-slow-kospi"
   _delete_job_if_exists "${JOB_NAME}-agent-us"
   _delete_job_if_exists "${JOB_NAME}-agent-kospi"
 }
@@ -312,6 +320,8 @@ _deploy_job() {
 
 if [[ "${DUAL_MARKET,,}" == "true" ]]; then
   if [[ "${A_SPLIT_JOBS,,}" == "true" ]]; then
+    SLOW_PREP_US_JOB="${JOB_NAME}-prep-slow-us"
+    SLOW_PREP_KR_JOB="${JOB_NAME}-prep-slow-kospi"
     PREP_US_JOB="${JOB_NAME}-prep-us"
     PREP_KR_JOB="${JOB_NAME}-prep-kospi"
     AGENT_US_JOB="${JOB_NAME}-agent-us"
@@ -323,22 +333,30 @@ if [[ "${DUAL_MARKET,,}" == "true" ]]; then
     _delete_job_if_exists "${JOB_NAME}-us"
     _delete_job_if_exists "${JOB_NAME}-kospi"
 
-    _deploy_job "${PREP_US_JOB}" "${PREP_RUN_COMMAND}" "${PREP_RUN_ARGS},--market,us,--dispatch-job,${AGENT_US_JOB}" "${PREP_CPU}" "${PREP_MEMORY}" "${PREP_TASK_TIMEOUT}" "${PREP_TASKS}" "${PREP_PARALLELISM}" "$(_market_env_vars us)"
-    _deploy_job "${PREP_KR_JOB}" "${PREP_RUN_COMMAND}" "${PREP_RUN_ARGS},--market,kospi,--dispatch-job,${AGENT_KR_JOB}" "${PREP_CPU}" "${PREP_MEMORY}" "${PREP_TASK_TIMEOUT}" "${PREP_TASKS}" "${PREP_PARALLELISM}" "$(_market_env_vars kospi)"
+    SLOW_PREP_EXTRA_ENVS="ARENA_NASDAQ_DISABLE_SCHEDULE_GUARD=true${ENV_PAIR_DELIM}ARENA_KOSPI_DISABLE_SCHEDULE_GUARD=true"
+    _deploy_job "${SLOW_PREP_US_JOB}" "${PREP_RUN_COMMAND}" "${PREP_RUN_ARGS},--market,us,--stage,slow" "${PREP_CPU}" "${PREP_MEMORY}" "${PREP_TASK_TIMEOUT}" "${PREP_TASKS}" "${PREP_PARALLELISM}" "$(_market_env_vars us "${SLOW_PREP_EXTRA_ENVS}")"
+    _deploy_job "${SLOW_PREP_KR_JOB}" "${PREP_RUN_COMMAND}" "${PREP_RUN_ARGS},--market,kospi,--stage,slow" "${PREP_CPU}" "${PREP_MEMORY}" "${PREP_TASK_TIMEOUT}" "${PREP_TASKS}" "${PREP_PARALLELISM}" "$(_market_env_vars kospi "${SLOW_PREP_EXTRA_ENVS}")"
+    _deploy_job "${PREP_US_JOB}" "${PREP_RUN_COMMAND}" "${PREP_RUN_ARGS},--market,us,--stage,fast,--dispatch-job,${AGENT_US_JOB}" "${PREP_CPU}" "${PREP_MEMORY}" "${PREP_TASK_TIMEOUT}" "${PREP_TASKS}" "${PREP_PARALLELISM}" "$(_market_env_vars us)"
+    _deploy_job "${PREP_KR_JOB}" "${PREP_RUN_COMMAND}" "${PREP_RUN_ARGS},--market,kospi,--stage,fast,--dispatch-job,${AGENT_KR_JOB}" "${PREP_CPU}" "${PREP_MEMORY}" "${PREP_TASK_TIMEOUT}" "${PREP_TASKS}" "${PREP_PARALLELISM}" "$(_market_env_vars kospi)"
     _deploy_job "${AGENT_US_JOB}" "${AGENT_RUN_COMMAND}" "${AGENT_RUN_ARGS},--market,us" "${AGENT_CPU}" "${AGENT_MEMORY}" "${AGENT_TASK_TIMEOUT}" "${AGENT_TASKS}" "${AGENT_PARALLELISM}" "$(_market_env_vars us "ARENA_BATCH_PARALLEL=${AGENT_BATCH_PARALLEL}${ENV_PAIR_DELIM}ARENA_TENANT_LEASE_ENABLED=true")"
     _deploy_job "${AGENT_KR_JOB}" "${AGENT_RUN_COMMAND}" "${AGENT_RUN_ARGS},--market,kospi" "${AGENT_CPU}" "${AGENT_MEMORY}" "${AGENT_TASK_TIMEOUT}" "${AGENT_TASKS}" "${AGENT_PARALLELISM}" "$(_market_env_vars kospi "ARENA_BATCH_PARALLEL=${AGENT_BATCH_PARALLEL}${ENV_PAIR_DELIM}ARENA_TENANT_LEASE_ENABLED=true")"
 
+    SLOW_PREP_US_RUN_URL="https://${REGION}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${PROJECT}/jobs/${SLOW_PREP_US_JOB}:run"
+    SLOW_PREP_KR_RUN_URL="https://${REGION}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${PROJECT}/jobs/${SLOW_PREP_KR_JOB}:run"
     PREP_US_RUN_URL="https://${REGION}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${PROJECT}/jobs/${PREP_US_JOB}:run"
     PREP_KR_RUN_URL="https://${REGION}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${PROJECT}/jobs/${PREP_KR_JOB}:run"
 
+    _upsert_scheduler "${SCHEDULER_JOB_NAME}-slow-us" "${SCHEDULER_US_SLOW_CRON}" "${SCHEDULER_US_SLOW_TIMEZONE}" "${SLOW_PREP_US_RUN_URL}" "${SCHEDULER_RUN_BODY}"
+    _upsert_scheduler "${SCHEDULER_JOB_NAME}-slow-kospi" "${SCHEDULER_KR_SLOW_CRON}" "${SCHEDULER_KR_SLOW_TIMEZONE}" "${SLOW_PREP_KR_RUN_URL}" "${SCHEDULER_RUN_BODY}"
     _upsert_scheduler "${SCHEDULER_JOB_NAME}-us" "${SCHEDULER_US_CRON}" "${SCHEDULER_US_TIMEZONE}" "${PREP_US_RUN_URL}" "${SCHEDULER_RUN_BODY}"
     _upsert_scheduler "${SCHEDULER_JOB_NAME}-kospi" "${SCHEDULER_KR_CRON}" "${SCHEDULER_KR_TIMEZONE}" "${PREP_KR_RUN_URL}" "${SCHEDULER_RUN_BODY}"
 
     echo ""
-    echo "Done (split A-plan draft)"
+    echo "Done (split A-plan)"
+    echo "Slow prep jobs: ${SLOW_PREP_US_JOB}, ${SLOW_PREP_KR_JOB}"
     echo "Prep jobs:  ${PREP_US_JOB}, ${PREP_KR_JOB}"
     echo "Agent jobs:  ${AGENT_US_JOB}, ${AGENT_KR_JOB}"
-    echo "Schedulers:  ${SCHEDULER_JOB_NAME}-us, ${SCHEDULER_JOB_NAME}-kospi"
+    echo "Schedulers:  ${SCHEDULER_JOB_NAME}-slow-us, ${SCHEDULER_JOB_NAME}-slow-kospi, ${SCHEDULER_JOB_NAME}-us, ${SCHEDULER_JOB_NAME}-kospi"
     echo "Agent tasks: ${AGENT_TASKS} parallelism=${AGENT_PARALLELISM}"
   else
     # Legacy dual-market behavior: one job per market, each runs the full pipeline.
@@ -349,11 +367,15 @@ if [[ "${DUAL_MARKET,,}" == "true" ]]; then
 
     # Clean up legacy single-job scheduler if present.
     _delete_scheduler_if_exists "${SCHEDULER_JOB_NAME}"
+    _delete_scheduler_if_exists "${SCHEDULER_JOB_NAME}-slow-us"
+    _delete_scheduler_if_exists "${SCHEDULER_JOB_NAME}-slow-kospi"
 
     # Clean up legacy single Cloud Run Job if present so dual-market mode has only two jobs.
     _delete_job_if_exists "${JOB_NAME}"
     _delete_job_if_exists "${JOB_NAME}-prep-us"
     _delete_job_if_exists "${JOB_NAME}-prep-kospi"
+    _delete_job_if_exists "${JOB_NAME}-prep-slow-us"
+    _delete_job_if_exists "${JOB_NAME}-prep-slow-kospi"
     _delete_job_if_exists "${JOB_NAME}-agent-us"
     _delete_job_if_exists "${JOB_NAME}-agent-kospi"
 

@@ -324,7 +324,16 @@ def cmd_build_opportunity_ranker(args: object) -> Any:
         settings,
         lookback_days=max(120, int(getattr(args, "lookback_days", 540))),
         horizon_days=max(5, int(getattr(args, "horizon", 20))),
-        max_scoring_rows=max(50, int(getattr(args, "max_scoring_rows", 500))),
+        max_scoring_rows=max(
+            50,
+            int(
+                getattr(
+                    args,
+                    "max_scoring_rows",
+                    getattr(settings, "opportunity_ranker_max_scoring_rows", 1000),
+                )
+            ),
+        ),
         min_ic_dates=max(20, int(getattr(args, "min_ic_dates", 60))),
         min_valid_signals=max(1, int(getattr(args, "min_valid_signals", 3))),
     )

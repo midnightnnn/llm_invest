@@ -7,6 +7,7 @@ from datetime import date, timedelta
 import numpy as np
 
 from arena.config import load_settings
+from arena.data.bigquery.market_store import MarketStore
 from arena.data.schema import parse_ddl_columns, render_table_ddls
 from arena.recommendation import (
     ALL_SIGNALS,
@@ -322,3 +323,47 @@ def test_aaa_outranks_ccc_when_momentum_ic_is_positive() -> None:
     rank_by_ticker = {row["ticker"]: row["recommendation_rank"] for row in repo.score_rows}
     # AAA has strong momentum + positive momentum IC → must outrank CCC (all negative signals)
     assert rank_by_ticker["AAA"] < rank_by_ticker["CCC"]
+
+
+class _RecordingSession:
+    dataset_fqn = "proj.ds"
+
+    def __init__(self) -> None:
+        self.executed: list[tuple[str, dict]] = []
+
+    def execute(self, sql: str, params: dict) -> None:
+        self.executed.append((sql, params))
+
+
+def test_signal_refresh_replaces_market_window_before_insert() -> None:
+    session = _RecordingSession()
+    store = MarketStore(session)  # type: ignore[arg-type]
+
+    store.refresh_signal_daily_values(lookback_days=540, horizon_days=20, market="us")
+
+    assert len(session.executed) == 2
+    delete_sql, delete_params = session.executed[0]
+    insert_sql, insert_params = session.executed[1]
+    assert "DELETE FROM `proj.ds.signal_daily_values`" in delete_sql
+    assert "DATE_SUB(CURRENT_DATE(), INTERVAL @lookback_days DAY)" in delete_sql
+    assert "market = @market" in delete_sql
+    assert delete_params["market"] == "us"
+    assert insert_sql.lstrip().startswith("INSERT INTO `proj.ds.signal_daily_values`")
+    assert insert_params["market"] == "us"
+
+
+def test_fundamentals_derived_refresh_replaces_market_window_before_insert() -> None:
+    session = _RecordingSession()
+    store = MarketStore(session)  # type: ignore[arg-type]
+
+    store.refresh_fundamentals_derived_daily(lookback_days=600, market="kospi")
+
+    assert len(session.executed) == 2
+    delete_sql, delete_params = session.executed[0]
+    insert_sql, insert_params = session.executed[1]
+    assert "DELETE FROM `proj.ds.fundamentals_derived_daily`" in delete_sql
+    assert "DATE_SUB(CURRENT_DATE(), INTERVAL @lookback_days DAY)" in delete_sql
+    assert "market = @market" in delete_sql
+    assert delete_params["market"] == "kospi"
+    assert insert_sql.lstrip().startswith("INSERT INTO `proj.ds.fundamentals_derived_daily`")
+    assert insert_params["market"] == "kospi"
