@@ -4,37 +4,11 @@ from datetime import datetime, timezone
 
 from arena.data.bigquery.memory_bq_store import MemoryBQStore
 from arena.models import MemoryEvent
-
-
-class _FakeClient:
-    def __init__(self) -> None:
-        self.inserts: list[tuple[str, list[dict[str, object]]]] = []
-
-    def insert_rows_json(self, table_id: str, rows: list[dict[str, object]]):
-        self.inserts.append((table_id, list(rows)))
-        return []
-
-
-class _FakeSession:
-    def __init__(self) -> None:
-        self.dataset_fqn = "proj.ds"
-        self.client = _FakeClient()
-        self.executed: list[tuple[str, dict[str, object]]] = []
-        self.fetched: list[tuple[str, dict[str, object]]] = []
-
-    def resolve_tenant_id(self, tenant_id: str | None = None) -> str:
-        return str(tenant_id or "tenant-a")
-
-    def execute(self, sql: str, params: dict[str, object]) -> None:
-        self.executed.append((sql, dict(params)))
-
-    def fetch_rows(self, sql: str, params: dict[str, object]) -> list[dict[str, object]]:
-        self.fetched.append((sql, dict(params)))
-        return []
+from tests.helpers.bigquery import FakeBigQuerySession
 
 
 def test_insert_research_briefings_preserves_datetime_for_graph_upsert() -> None:
-    session = _FakeSession()
+    session = FakeBigQuerySession()
     store = MemoryBQStore(session)
     created_at = datetime(2026, 3, 29, 12, 30, tzinfo=timezone.utc)
 
@@ -65,7 +39,7 @@ def test_insert_research_briefings_preserves_datetime_for_graph_upsert() -> None
 
 
 def test_find_buy_memories_for_ticker_uses_structured_payload_before_summary_fallback() -> None:
-    session = _FakeSession()
+    session = FakeBigQuerySession()
     store = MemoryBQStore(session)
 
     rows = store.find_buy_memories_for_ticker(
@@ -86,7 +60,7 @@ def test_find_buy_memories_for_ticker_uses_structured_payload_before_summary_fal
 
 
 def test_write_memory_event_promotes_cycle_and_llm_call_columns() -> None:
-    session = _FakeSession()
+    session = FakeBigQuerySession()
     store = MemoryBQStore(session)
 
     store.write_memory_event(
@@ -108,7 +82,7 @@ def test_write_memory_event_promotes_cycle_and_llm_call_columns() -> None:
 
 
 def test_upsert_memory_relation_triples_merges_with_json_detail() -> None:
-    session = _FakeSession()
+    session = FakeBigQuerySession()
     store = MemoryBQStore(session)
     created_at = datetime(2026, 3, 29, 12, 30, tzinfo=timezone.utc)
 
@@ -152,7 +126,7 @@ def test_upsert_memory_relation_triples_merges_with_json_detail() -> None:
 
 
 def test_upsert_memory_relation_triples_with_graph_projects_only_accepted() -> None:
-    session = _FakeSession()
+    session = FakeBigQuerySession()
     store = MemoryBQStore(session)
     created_at = datetime(2026, 3, 29, 12, 30, tzinfo=timezone.utc)
 
@@ -191,7 +165,7 @@ def test_upsert_memory_relation_triples_with_graph_projects_only_accepted() -> N
 
 
 def test_append_memory_relation_extraction_runs_serializes_json() -> None:
-    session = _FakeSession()
+    session = FakeBigQuerySession()
     store = MemoryBQStore(session)
     started_at = datetime(2026, 3, 29, 12, 30, tzinfo=timezone.utc)
 
@@ -233,7 +207,7 @@ def test_append_memory_relation_extraction_runs_serializes_json() -> None:
 
 
 def test_append_memory_relation_tuning_runs_serializes_metrics() -> None:
-    session = _FakeSession()
+    session = FakeBigQuerySession()
     store = MemoryBQStore(session)
     evaluated_at = datetime(2026, 3, 29, 12, 30, tzinfo=timezone.utc)
 
@@ -278,7 +252,7 @@ def test_append_memory_relation_tuning_runs_serializes_metrics() -> None:
 
 
 def test_relation_extraction_pending_sources_filters_successful_runs() -> None:
-    session = _FakeSession()
+    session = FakeBigQuerySession()
     store = MemoryBQStore(session)
 
     rows = store.relation_extraction_pending_sources(
@@ -303,7 +277,7 @@ def test_relation_extraction_pending_sources_filters_successful_runs() -> None:
 
 
 def test_memory_graph_neighbors_keeps_relation_triples_shadowed() -> None:
-    session = _FakeSession()
+    session = FakeBigQuerySession()
     store = MemoryBQStore(session)
 
     rows = store.memory_graph_neighbors(
@@ -322,7 +296,7 @@ def test_memory_graph_neighbors_keeps_relation_triples_shadowed() -> None:
 
 
 def test_memory_relation_memory_candidates_joins_relation_triples_to_memory_events() -> None:
-    session = _FakeSession()
+    session = FakeBigQuerySession()
     store = MemoryBQStore(session)
 
     rows = store.memory_relation_memory_candidates(
