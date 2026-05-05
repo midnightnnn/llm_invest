@@ -160,7 +160,7 @@ ADK `FunctionTool`은 함수 signature, type hint, docstring, helper metadata를
 - `arena/data/bigquery/runtime_store.py`
 - `arena/data/local/config_store.py`
 - `tests/test_agents_config.py`
-- `tests/test_ui_admin_routes.py`
+- `tests/ui/test_*_routes.py`
 - `tests/test_runtime_config.py`
 
 ### Batch agent tools
@@ -202,7 +202,7 @@ ADK `FunctionTool`은 함수 signature, type hint, docstring, helper metadata를
 | --- | --- |
 | Investment Chat UI/approval | `tests/test_investment_chat_ui.py` |
 | ADK agent/tool schema | `tests/test_adk_agents.py`, `tests/test_new_tools.py`, `tests/test_tool_registry.py` |
-| Agent/admin config | `tests/test_agents_config.py`, `tests/test_ui_admin_routes.py`, `tests/test_runtime_config.py` |
+| Agent/admin config | `tests/test_agents_config.py`, `tests/ui/test_settings_routes.py`, `tests/ui/test_admin_agent_routes.py`, `tests/test_runtime_config.py` |
 | Local DuckDB | `tests/test_init_local_cli.py`, `tests/test_clone_bq_local.py`, `tests/test_duckdb_schema.py`, `tests/test_local_repository.py` |
 | Memory | `tests/test_memory_*.py`, `tests/test_semantic_relation_*.py` |
 | Execution/reconcile | `tests/test_execution_reconcile.py`, `tests/test_reconciliation.py`, `tests/test_risk.py` |

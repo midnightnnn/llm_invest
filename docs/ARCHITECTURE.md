@@ -1250,7 +1250,7 @@ Cloud Run Service
 | `test_new_tools.py` | 신규 도구 (`recommend_opportunities`, `trade_performance`) |
 | `test_investment_chat_ui.py` | Chat ADK shell, order/config approval bridges, tool schema quality |
 | `test_kis_fundamentals_ingestor.py` / `test_sec_fundamentals_ingestor.py` / `test_fmp_fundamentals_ingestor.py` | Fundamentals ingestors |
-| `test_ui_admin_routes.py` | Admin pages, config save |
+| `tests/ui/test_*_routes.py` | Settings/admin agent/memory/board/chart/auth UI routes |
 | `test_ui_helper_modules.py` | UI helper modules |
 | `test_tenant_leases.py` | Firestore execution lease |
 | `test_provider_registry.py` | Provider module |
