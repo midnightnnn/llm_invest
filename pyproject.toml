@@ -59,5 +59,8 @@ exclude = ["data*", "logs*", "tests*"]
 pythonpath = ["."]
 testpaths = ["tests"]
 markers = [
-    "integration: opt-in tests that require external services such as BigQuery or Vertex AI",
+    "unit: fast isolated tests with no external service dependency",
+    "integration: local integration tests or opt-in service-bound tests",
+    "live: tests requiring real external credentials or networked services",
+    "slow: deterministic tests that are too slow for default focused runs",
 ]
