@@ -1231,7 +1231,7 @@ Cloud Run Service
 | `test_adk_agents.py` | ADK normalization, model routing, tool loading, schema metadata preservation |
 | `test_agents_config.py` | Per-agent config CRUD, capital allocation |
 | `test_context.py` | Context builder, memory reranking, cash buffer |
-| `test_data_strict_paths.py` | BQ queries, dedup, checkpoint rebuild |
+| `tests/data/test_*_paths.py` | BQ queries, dedup, checkpoint rebuild |
 | `tests/memory/test_memory_store.py` | Scoring, dedup, tier assignment, tagging |
 | `tests/memory/test_memory_forgetting.py` | Decay math, effective_score, access curves |
 | `tests/memory/test_memory_graph.py` | Node/edge builders, causal chain inference |
