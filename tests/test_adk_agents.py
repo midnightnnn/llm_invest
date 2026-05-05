@@ -138,7 +138,7 @@ def test_batch_default_tool_schema_preserves_required_fields_and_enums() -> None
 
     screen_params = declaration("screen_market").parameters.model_dump(mode="json", exclude_none=True)
     assert screen_params["properties"]["bucket"]["enum"] == [
-        "",
+        "auto",
         "balanced",
         "momentum",
         "pullback",
@@ -147,7 +147,7 @@ def test_batch_default_tool_schema_preserves_required_fields_and_enums() -> None
         "value",
     ]
     assert screen_params["properties"]["sort_by"]["enum"] == [
-        "",
+        "none",
         "as_of_ts",
         "ret_20d",
         "ret_5d",
@@ -161,7 +161,7 @@ def test_batch_default_tool_schema_preserves_required_fields_and_enums() -> None
     assert "tickers" in optimize_params["required"]
     assert optimize_params["properties"]["strategy"]["enum"] == ["sharpe", "risk_parity", "forecast"]
     assert optimize_params["properties"]["forecast_mode"]["enum"] == [
-        "",
+        "default",
         "all",
         "stacked",
         "base",

@@ -28,6 +28,8 @@ from arena.agents.investment_chat.context import (
     REQUEST_USER_EMAIL,
     normalize_tenant,
 )
+from arena.agents.investment_chat.config_tools import load_chat_agent_config
+from arena.agents.investment_chat.selection import tenant_default_chat_selection
 from arena.config import Settings
 from arena.providers.registry import (
     canonical_provider,
@@ -232,18 +234,32 @@ class InvestmentChatAgentLoader(BaseAgentLoader):
         requested_provider = canonical_provider(os.getenv("ARENA_CHAT_PROVIDER") or REQUEST_PROVIDER.get()) or str(os.getenv("ARENA_CHAT_PROVIDER") or REQUEST_PROVIDER.get() or "").strip().lower()
         encoded_provider = canonical_provider(encoded_provider) or encoded_provider
         requested_model = str(os.getenv("ARENA_CHAT_MODEL") or REQUEST_MODEL.get() or "").strip()
-        preferred_provider = str(requested_provider or encoded_provider or "gemini").strip().lower() or "gemini"
         allowed_providers, credential_scoped = tenant_available_provider_ids(self.repo, tenant_id=tenant)
+        settings = self.settings_for_tenant(tenant)
+        chat_config = load_chat_agent_config(self.repo, tenant_id=tenant)
+        stored_provider = canonical_provider(chat_config.get("provider")) or str(chat_config.get("provider") or "").strip().lower()
+        tenant_provider, tenant_model = tenant_default_chat_selection(settings, allowed_providers=allowed_providers)
+        preferred_provider = str(
+            requested_provider
+            or encoded_provider
+            or stored_provider
+            or tenant_provider
+            or "gemini"
+        ).strip().lower() or "gemini"
         provider = preferred_provider
         if allowed_providers and provider not in allowed_providers:
-            provider = allowed_providers[0]
+            provider = tenant_provider if tenant_provider in allowed_providers else allowed_providers[0]
         elif credential_scoped and not allowed_providers:
             return "", ""
         preferred_model = requested_model or encoded_model
         preferred_model_provider = requested_provider or encoded_provider
         model = str(preferred_model if provider == preferred_model_provider else "").strip()
+        if not model and provider == stored_provider:
+            model = str(chat_config.get("model") or "").strip()
+        if not model and provider == tenant_provider:
+            model = tenant_model
         if not model:
-            model = default_model_for_provider(self.settings_for_tenant(tenant), provider)
+            model = default_model_for_provider(settings, provider)
         return provider, model
 
     def load_agent(self, agent_name: str):

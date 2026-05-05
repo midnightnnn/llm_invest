@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from arena.config import load_settings
+from arena.config import AgentConfig, load_settings
 from arena.models import AccountSnapshot, ExecutionReport, ExecutionStatus, Position
 from arena.tools.registry import ToolEntry, ToolRegistry
 from arena.ui.layout import tailwind_layout
@@ -541,7 +541,45 @@ def test_chat_config_tools_expose_structured_schema(monkeypatch) -> None:
     assert "change_json" not in props
     assert "agent_id" in params["required"]
     assert props["action"]["enum"] == ["update", "upsert", "add", "remove"]
-    assert props["capital_allocation_mode"]["enum"] == ["", "fixed_krw", "account_percent", "whole_account"]
+    assert props["capital_allocation_mode"]["enum"] == ["unchanged", "fixed_krw", "account_percent", "whole_account"]
+
+
+def test_chat_tool_schemas_do_not_emit_empty_enum_values_for_gemini(monkeypatch) -> None:
+    from google.adk.tools.function_tool import FunctionTool
+    from arena.agents.investment_chat import factory
+    from arena.agents.investment_chat import memory as chat_memory
+
+    def walk_schema(schema, path: str = ""):
+        if isinstance(schema, dict):
+            enum_values = schema.get("enum")
+            if enum_values:
+                assert "" not in enum_values, path
+            for key, value in schema.items():
+                walk_schema(value, f"{path}.{key}" if path else key)
+        elif isinstance(schema, list):
+            for index, value in enumerate(schema):
+                walk_schema(value, f"{path}[{index}]")
+
+    settings = load_settings()
+    settings.trading_mode = "paper"
+    settings.kis_target_market = "us"
+    repo = _ChatOrderRepo()
+
+    _FakeExecutionMemory.instances.clear()
+    monkeypatch.setattr(chat_memory, "MemoryStore", _FakeExecutionMemory, raising=False)
+    monkeypatch.setattr(factory, "_resolve_model", lambda *args, **kwargs: "fake-model")
+    monkeypatch.setattr(factory, "Agent", lambda **kwargs: SimpleNamespace(**kwargs))
+    agent = factory.build_investment_chat_agent(
+        repo=repo,
+        settings=settings,
+        tenant_id="local",
+        registry=None,
+    )
+
+    for tool in agent.tools:
+        declaration = FunctionTool(tool)._get_declaration()
+        payload = declaration.model_dump(mode="json", exclude_none=True)
+        walk_schema(payload, getattr(tool, "__name__", "tool"))
 
 
 def test_chat_analysis_tool_schema_keeps_required_fields_with_optional_params(monkeypatch) -> None:
@@ -573,7 +611,7 @@ def test_chat_analysis_tool_schema_keeps_required_fields_with_optional_params(mo
     assert "tickers" in params["required"]
     assert params["properties"]["tickers"]["items"]["type"] == "STRING"
     assert params["properties"]["strategy"]["enum"] == ["sharpe", "risk_parity", "forecast"]
-    assert params["properties"]["forecast_mode"]["enum"] == ["", "all", "stacked", "base", "balanced", "lgbm", "ridge", "avg"]
+    assert params["properties"]["forecast_mode"]["enum"] == ["default", "all", "stacked", "base", "balanced", "lgbm", "ridge", "avg"]
 
 
 def _build_raw_chat_tools(monkeypatch, repo: _ChatOrderRepo, *, settings=None, include_internal_bridge: bool = False):
@@ -1581,6 +1619,71 @@ def test_investment_chat_page_defaults_to_stored_chat_agent_config(monkeypatch) 
     assert client.session["investment_chat_model"] == "claude-opus-4-7"
 
 
+def test_investment_chat_page_defaults_to_tenant_agent_model(monkeypatch) -> None:
+    import arena.ui.app as ui_app
+
+    monkeypatch.setenv("ARENA_UI_AUTH_ENABLED", "false")
+    monkeypatch.setattr(
+        ui_app,
+        "build_investment_chat_adk_app",
+        lambda **kwargs: FastAPI(title="stub-adk"),
+    )
+    repo = _DummyRepo()
+    repo.set_config(
+        "cxznms",
+        "agents_config",
+        json.dumps([
+            {"id": "claude", "provider": "claude", "model": "claude-sonnet-4-6", "capital_krw": 1_000_000}
+        ]),
+        "seed",
+    )
+    app = _build_app(repo=repo, settings=load_settings())
+    client = DirectRouteClient(app)
+
+    response = client.get("/investment-chat", params={"tenant_id": "cxznms"})
+
+    assert response.status_code == 200
+    assert '<option value="claude" selected>Anthropic Claude</option>' in response.text
+    assert '<option value="claude-sonnet-4-6" selected>claude-sonnet-4-6</option>' in response.text
+    assert "/investment-chat/adk/dev-ui/?tenant_id=cxznms&amp;provider=claude&amp;model=claude-sonnet-4-6" in response.text
+    assert client.session["investment_chat_provider"] == "claude"
+    assert client.session["investment_chat_model"] == "claude-sonnet-4-6"
+
+
+def test_investment_chat_page_ignores_stale_session_provider_for_new_tenant(monkeypatch) -> None:
+    import arena.ui.app as ui_app
+
+    monkeypatch.setenv("ARENA_UI_AUTH_ENABLED", "false")
+    monkeypatch.setattr(
+        ui_app,
+        "build_investment_chat_adk_app",
+        lambda **kwargs: FastAPI(title="stub-adk"),
+    )
+    repo = _DummyRepo()
+    repo.set_config(
+        "cxznms",
+        "agents_config",
+        json.dumps([
+            {"id": "claude", "provider": "claude", "model": "claude-sonnet-4-6", "capital_krw": 1_000_000}
+        ]),
+        "seed",
+    )
+    app = _build_app(repo=repo, settings=load_settings())
+    client = DirectRouteClient(app)
+    client.session["investment_chat_tenant_id"] = "midnightnnn"
+    client.session["investment_chat_provider"] = "gemini"
+    client.session["investment_chat_model"] = "gemini-3-flash-preview"
+
+    response = client.get("/investment-chat", params={"tenant_id": "cxznms"})
+
+    assert response.status_code == 200
+    assert '<option value="claude" selected>Anthropic Claude</option>' in response.text
+    assert "/investment-chat/adk/dev-ui/?tenant_id=cxznms&amp;provider=claude&amp;model=claude-sonnet-4-6" in response.text
+    assert client.session["investment_chat_tenant_id"] == "cxznms"
+    assert client.session["investment_chat_provider"] == "claude"
+    assert client.session["investment_chat_model"] == "claude-sonnet-4-6"
+
+
 def test_investment_chat_provider_options_are_limited_to_tenant_model_keys(monkeypatch) -> None:
     import arena.ui.app as ui_app
 
@@ -1682,6 +1785,42 @@ def test_investment_chat_loader_restricts_selection_to_tenant_model_keys(monkeyp
     assert listed[0].startswith("investment_chat__czxnms__claude__m_")
     assert calls["provider"] == "claude"
     assert str(calls["model_override"]).startswith("claude-")
+
+
+def test_investment_chat_loader_defaults_to_tenant_agent_model(monkeypatch) -> None:
+    from arena.ui import investment_chat_adk
+
+    calls: dict[str, object] = {}
+    settings = load_settings()
+    settings.agent_ids = ["claude"]
+    settings.agent_configs = {
+        "claude": AgentConfig(
+            agent_id="claude",
+            provider="claude",
+            model="claude-sonnet-4-6",
+            capital_krw=1_000_000,
+        )
+    }
+    repo = _DummyRepo()
+
+    def fake_build_agent(**kwargs):
+        calls.update(kwargs)
+        return SimpleNamespace(name="investment_chat", description="chat")
+
+    monkeypatch.setattr(investment_chat_adk, "build_investment_chat_agent", fake_build_agent)
+    loader = investment_chat_adk.InvestmentChatAgentLoader(
+        repo=repo,
+        settings_for_tenant=lambda tenant: settings,
+        get_default_registry=lambda tenant: ToolRegistry([]),
+        default_tenant="cxznms",
+    )
+
+    listed = loader.list_agents()
+    loader.load_agent(listed[0])
+
+    assert listed[0] == "investment_chat__cxznms__claude__m_Y2xhdWRlLXNvbm5ldC00LTY"
+    assert calls["provider"] == "claude"
+    assert calls["model_override"] == "claude-sonnet-4-6"
 
 
 def test_investment_chat_order_draft_api_lists_and_submits_pending_draft(monkeypatch) -> None:

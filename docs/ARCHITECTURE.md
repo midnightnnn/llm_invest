@@ -36,35 +36,37 @@
 ```
 arena/                           Core business logic
 ├── agents/                       ADK ReAct agents (modular decomposition)
-│   ├── adk_agents.py            Main agent class + builder (1,702L)
+│   ├── adk_agents.py            Main agent class + builder (1,680L)
 │   ├── adk_agent_flow.py        Draft/execution phase orchestration (89L)
-│   ├── adk_context_tools.py     Per-cycle context tools for agents (1,029L)
-│   ├── adk_decision_flow.py     Decision prompting + board comm (191L)
+│   ├── adk_context_tools.py     Per-cycle context tools for agents (1,063L)
+│   ├── adk_decision_flow.py     Decision prompting + board comm (147L)
 │   ├── adk_models.py            ADK model wrapper/routing (238L)
 │   ├── adk_order_support.py     Order placement utilities (529L)
-│   ├── adk_prompting.py         Prompt building + JSON parsing (276L)
+│   ├── adk_prompting.py         Prompt building + JSON parsing (129L)
 │   ├── adk_runner_bootstrap.py  Runner initialization (354L)
-│   ├── adk_runner_runtime.py    Runtime execution logic (285L)
+│   ├── adk_runner_runtime.py    Runtime execution logic (298L)
 │   ├── adk_runner_state.py      Mutable execution state tracking (545L)
-│   ├── adk_tool_compaction.py   Tool result compaction (484L)
+│   ├── adk_tool_compaction.py   Tool result compaction (637L)
 │   ├── adk_tool_config.py       Tool configuration/selection (140L)
-│   ├── adk_tool_helpers.py      ADK tool schema/no-op shims shared by dev_ui + investment_chat (27L)
+│   ├── adk_tool_helpers.py      ADK tool schema/no-op shims shared by cycle/dev_ui/investment_chat (58L)
 │   ├── base.py                  TradingAgent protocol (24L)
 │   ├── llm_params.py            Per-provider sampling/token params (165L)
-│   ├── memory_compaction_agent.py  Post-cycle lesson synthesis (786L)
+│   ├── memory_compaction_agent.py  Post-cycle lesson synthesis (952L)
 │   ├── research_agent.py        Gemini + Google Search Grounding (323L)
-│   ├── support_model.py         Helper model builder (105L)
-│   ├── investment_chat/          User-facing chat advisor agent (15 files)
-│   │   ├── factory.py           ADK Agent builder + chat tool wrapping (118L)
-│   │   ├── registry.py          read-only chat tool registry (analysis whitelist + write marker filter) (48L)
-│   │   ├── tools.py             account/history/order entry aggregator (17L)
-│   │   ├── account_tools.py     stored snapshot + KIS account refresh + sleeve snapshot (201L)
-│   │   ├── history_tools.py     persisted trade history reader (188L)
-│   │   ├── order_tools.py       validate_order_draft + submit_approved_order (2-step approval) (420L)
-│   │   ├── drafts.py            approval_token + arena_config-backed draft store (41L)
+│   ├── support_model.py         Helper model builder (247L)
+│   ├── investment_chat/          User-facing chat advisor agent (17 files)
+│   │   ├── factory.py           ADK Agent builder + chat tool wrapping (125L)
+│   │   ├── registry.py          chat tool registry (analysis whitelist + approval-only write tools) (54L)
+│   │   ├── tools.py             account/history/order/config entry aggregator (19L)
+│   │   ├── account_tools.py     stored snapshot + KIS account refresh + sleeve snapshot (180L)
+│   │   ├── history_tools.py     persisted trade history reader (190L)
+│   │   ├── order_tools.py       validate_order_draft + submit_approved_order (button-approved bridge) (765L)
+│   │   ├── config_tools.py      propose/apply approval-gated runtime config changes (927L)
+│   │   ├── drafts.py            order/config approval_token + arena_config-backed draft store (67L)
 │   │   ├── audit.py             append_runtime_audit_log + tenant config wrapper (60L)
 │   │   ├── memory.py            chat-decision semantic reflection writer (56L)
 │   │   ├── scope.py             account vs agent_sleeve scope + strategy_refs (69L)
+│   │   ├── market_scope.py      chat account market allowlist parsing (52L)
 │   │   ├── locks.py             tenant-keyed write RLock (12L)
 │   │   ├── context.py           ContextVars (tenant/user/provider/model) + tenant normalizer (12L)
 │   │   ├── constants.py         APP_NAME/AGENT_ID + analysis whitelist + write markers (40L)
@@ -98,8 +100,8 @@ arena/                           Core business logic
 │   ├── semantic_extractor.py    LLM triple extractor + run audit (429L)
 │   └── semantic_tuning.py       Shadow↔inject auto-tuner with quality gates (638L)
 ├── ui/                           Admin dashboard (FastAPI, modular routes)
-│   ├── app.py                   Main FastAPI router + investment-chat ADK mount (637L)
-│   ├── investment_chat_adk.py   Mounts ADK FastAPI dev-ui at /investment-chat/adk (loader, sessions, static, auth gate) (348L)
+│   ├── app.py                   Main FastAPI router + investment-chat ADK mount (669L)
+│   ├── investment_chat_adk.py   Mounts ADK FastAPI dev-ui at /investment-chat/adk (loader, sessions, static, auth gate) (792L)
 │   ├── routes/                   Route modules
 │   │   ├── auth.py              Google OAuth (269L)
 │   │   ├── board.py             Board viewer (268L)
@@ -108,17 +110,17 @@ arena/                           Core business logic
 │   │   ├── sleeves.py           Sleeve management (859L)
 │   │   ├── ops.py               Operations page (224L)
 │   │   ├── showcase.py          Public showcase page (564L)
-│   │   ├── investment_chat.py   Chat page shell + provider/model selector (156L)
+│   │   ├── investment_chat.py   Chat page shell + provider/model selector + draft approval APIs (366L)
 │   │   ├── settings_page.py     Settings page render (456L)
-│   │   ├── settings_admin.py    Settings CRUD API (1,102L)
+│   │   ├── settings_admin.py    Settings CRUD API (751L)
 │   │   ├── settings_render.py   Render dispatcher (21L)
-│   │   ├── settings_render_agents.py    Agent config panel (175L)
+│   │   ├── settings_render_agents.py    Agent config panel (178L)
 │   │   ├── settings_render_capital.py   Capital management (51L)
 │   │   ├── settings_render_credentials.py  KIS/API credentials (638L)
 │   │   ├── settings_render_scripts.py   Script management (205L)
 │   │   ├── capital_data.py      Capital data API (294L)
-│   │   └── viewer.py            Data viewer (48L)
-│   ├── templates/               Jinja2 templates (24 files, includes investment_chat_body.jinja2)
+│   │   └── viewer.py            Data viewer (49L)
+│   ├── templates/               Jinja2 templates (24 files, includes investment_chat_body.jinja2 approval panels)
 │   ├── vendor/                   Bundled JS libs (three.min.js, 3d-force-graph.min.js)
 │   ├── memory.py                3D memory graph builder + routes (968L)
 │   ├── viewer_data.py           Viewer data assembly (1,024L)
@@ -133,9 +135,9 @@ arena/                           Core business logic
 │   ├── templating.py            Template engine setup (28L)
 │   └── server.py                Startup wrapper (5L)
 ├── tools/                        Agent tool registry (19 core + MCP)
-│   ├── default_registry.py      Build registry with all tools (427L)
-│   ├── quant_tools.py           Recommend, screen, optimize, forecast, technical, trade perf (2,117L)
-│   ├── sentiment_tools.py       Reddit, SEC EDGAR, earnings, VIX, news (628L)
+│   ├── default_registry.py      Build registry with all tools (429L)
+│   ├── quant_tools.py           Recommend, screen, optimize, forecast, technical, trade perf (2,408L)
+│   ├── sentiment_tools.py       Reddit, SEC EDGAR, earnings, VIX, news (771L)
 │   ├── macro_tools.py           FRED (US), ECOS (Korea) (240L)
 │   ├── allocation.py            Portfolio optimization — Sharpe, HRP, forecast (499L)
 │   ├── screening.py             Momentum + discovery ranking (517L)
@@ -152,22 +154,22 @@ arena/                           Core business logic
 │   ├── schema.py                Shared Table DDLs + auto-migration (1,106L)
 │   ├── bigquery/                BigQuery store implementations
 │   │   ├── session.py           BigQuerySession connection management (277L)
-│   │   ├── memory_bq_store.py   Memory events, board posts, graph, briefings, triples (1,809L)
+│   │   ├── memory_bq_store.py   Memory events, board posts, graph, briefings, triples (1,901L)
 │   │   ├── market_store.py      Price/feature/signals/IC queries (2,497L)
-│   │   ├── sleeve_store.py      Virtual account operations + NAV (2,576L)
-│   │   ├── execution_store.py   Order intent/execution repository (363L)
+│   │   ├── sleeve_store.py      Virtual account operations + NAV (2,680L)
+│   │   ├── execution_store.py   Order intent/execution repository (448L)
 │   │   ├── ledger_store.py      Append-only event ledger (381L)
 │   │   ├── llm_audit_store.py   LLM call/prompt/response audit log (209L)
 │   │   ├── runtime_store.py     Config/credential storage (604L)
 │   │   └── backtest_store.py    Backtest persistence (161L)
 │   └── local/                   DuckDB store implementations (ARENA_MODE=local)
-│       ├── repository.py        LocalRepository facade — store delegation (149L)
-│       ├── session.py           DuckDBSession + write file lock (197L)
+│       ├── repository.py        LocalRepository facade — store delegation (249L)
+│       ├── session.py           DuckDBSession + write file lock (257L)
 │       ├── schema.py            Shared table metadata → DuckDB DDL renderer (101L)
-│       ├── market_store.py      DuckDB market features + latest view (435L)
-│       ├── memory_store.py      DuckDB memory/board/graph (843L)
-│       ├── sleeve_store.py      DuckDB sleeves + NAV replay (495L)
-│       ├── execution_store.py   DuckDB intents/executions (314L)
+│       ├── market_store.py      DuckDB market features + latest view (1,721L)
+│       ├── memory_store.py      DuckDB memory/board/graph (1,021L)
+│       ├── sleeve_store.py      DuckDB sleeves + NAV replay (572L)
+│       ├── execution_store.py   DuckDB intents/executions (400L)
 │       └── config_store.py      DuckDB arena_config + credential meta (197L)
 ├── open_trading/                 Korea Investment API client + fundamentals ingest
 │   ├── client.py                REST wrapper — OAuth, account, market data (2,249L)
@@ -183,7 +185,7 @@ arena/                           Core business logic
 │   ├── open_trading.py          Live KIS trading — US + KOSPI (567L)
 │   └── paper.py                 Paper + HTTP broker (97L)
 ├── execution/                    Centralized order gateway
-│   └── gateway.py               Risk check → broker → memory recording (460L)
+│   └── gateway.py               Risk check → broker → memory recording (477L)
 ├── providers/                    LLM provider registry
 │   ├── registry.py              4 providers — GPT/Gemini/Claude/DeepSeek (209L)
 │   ├── anthropic_patches.py     Anthropic SDK compatibility patches (69L)
@@ -192,7 +194,7 @@ arena/                           Core business logic
 │   ├── credential_store.py      Secret Manager + BQ (377L)
 │   └── credential_store_env.py  Local JSON credential store (file-mode 0600) (196L)
 ├── cli_commands/                 Modular CLI command handlers
-│   ├── run.py                   Command dispatch routing (48L)
+│   ├── run.py                   Command dispatch routing (49L)
 │   ├── run_agent.py             Agent cycle execution (704L)
 │   ├── run_pipeline.py          Full sync→forecast→ranker→agent pipeline (1,496L)
 │   ├── run_shared.py            Shared sync/forecast/ranker operations (534L)
@@ -202,6 +204,7 @@ arena/                           Core business logic
 │   ├── admin.py                 Admin operations — tenant, memory (336L)
 │   ├── init_local.py            DuckDB bootstrap (`init-local`) (38L)
 │   ├── local_demo.py            Deterministic demo seed + local KIS backfill (121L)
+│   ├── local_clone.py           BigQuery → DuckDB table clone (`clone-bq-local`) (490L)
 │   └── memory_relations.py      Semantic triple extraction CLI (148L)
 ├── strategy/                     Strategy reference catalog
 │   ├── catalog.py               Strategy cards for agents (164L)
@@ -212,23 +215,23 @@ arena/                           Core business logic
 │   └── store.py                 Publish/retrieve shared board posts (20L)
 ├── universe/                     Ticker universe presets
 ├── forecasting/                  ML forecast pipeline
-│   └── stacked.py               7-model ensemble stacking (679L)
-├── config.py                     Settings + runtime overrides (1,137L)
-├── context.py                    Per-agent context builder (2,756L)
+│   └── stacked.py               7-model ensemble stacking (800L)
+├── config.py                     Settings + runtime overrides (1,196L)
+├── context.py                    Per-agent context builder (2,758L)
 ├── orchestrator.py               Multi-agent cycle orchestration (571L)
-├── risk.py                       Risk engine policy checks (119L)
+├── risk.py                       Risk engine policy checks (125L)
 ├── reconciliation.py             State reconciliation + recovery (1,423L)
-├── market_hours.py               Market windows + holidays (318L)
+├── market_hours.py               Market windows + holidays (357L)
 ├── market_sources.py             Market source resolution (52L)
 ├── market_feature_normalization.py  Market feature normalization helpers (150L)
 ├── runtime_universe.py           Runtime universe resolution (75L)
-├── cli.py                        CLI entry point (399L)
-├── cli_runtime.py                CLI runtime bootstrap (698L)
+├── cli.py                        CLI entry point (457L)
+├── cli_runtime.py                CLI runtime bootstrap (719L)
 ├── cloud_run_jobs.py             Cloud Run job dispatch (47L)
 ├── tenant_leases.py              Firestore execution lease (134L)
 ├── tenant_leases_local.py        File-locked JSON tenant lease for local mode (132L)
 ├── models.py                     Core data classes (156L)
-├── logging_utils.py              JSON logging for Cloud Run (170L)
+├── logging_utils.py              JSON logging for Cloud Run (208L)
 └── __main__.py
 
 scripts/                          Operational scripts
@@ -308,8 +311,8 @@ get_repository(settings, tenant_id) ──▶ ARENA_MODE
                                           │
               ┌───────────────────────────┴──────────────────────────┐
               ▼                                                       ▼
-BigQueryRepository (bq.py, 144L)                        LocalRepository (data/local/repository.py, 149L)
-  └── bigquery/ (8 stores + session)                      └── data/local/ (5 stores + session + schema)
+BigQueryRepository (bq.py, 144L)                        LocalRepository (data/local/repository.py, 249L)
+  └── bigquery/ (9 stores + session)                      └── data/local/ (5 stores + session + schema)
       ├── session.py                                          ├── session.py        DuckDB connection + filelock
       ├── memory_bq_store.py                                  ├── schema.py         Shared table metadata → DuckDB DDL renderer
       ├── market_store.py                                     ├── market_store.py
@@ -334,12 +337,14 @@ OSS quickstart / 로컬 평가용. GCP 결제·인증 없이 동일 코드 경�
 | Credentials | Secret Manager + `runtime_credentials` | `~/.llm-arena/credentials.json` (mode 0600) + `runtime_credentials` 메타. `EnvCredentialStore`가 동일 KIS/모델 secret 페이로드 형태 보존 |
 | KIS OAuth cache | Firestore-backed `token_cache.py` | Atomic JSON `token_cache_file.py` (`~/.llm-arena/tokens.json`) |
 | Tenant leases | `FirestoreTenantLeaseStore` | `LocalTenantLeaseStore` — `./data/tenant_leases.json` + filelock |
-| Bootstrap | `llm-arena init-bq` | `llm-arena init-local` (DDL idempotent) → `seed-local-demo` 또는 `backfill-local-market` |
+| Bootstrap | `llm-arena init-bq` | `llm-arena init-local` (DDL idempotent) → `seed-local-demo`, `backfill-local-market`, 또는 `clone-bq-local` |
 | Optional install | (default) | `pip install -e ".[local]"` (duckdb + filelock) · `pip install -e ".[local,local-vector]"` 추가 시 ChromaDB 활성화 |
 
 `LocalRepository.__getattr__` 는 5개 로컬 store에 위임하고, 미구현 surface(예: 일부 BQ-전용 dashboard 쿼리)는 `AttributeError`를 던져 `hasattr(repo, "...")` 기반 feature detection이 그대로 동작합니다.
 
 `DuckDBSession`은 BigQuery 방언 SQL을 그대로 받기 위해 실행 전 정규식 폴리필을 통과시킵니다 — `IN UNNEST(arr) → IN (SELECT unnest(arr))`, `TIMESTAMP_SUB/ADD → ± INTERVAL`, `CURRENT_TIMESTAMP() → CURRENT_TIMESTAMP`, `DATE(ts, "tz") → CAST(ts AS DATE)`, 그리고 bound 파라미터 형태의 `INTERVAL $days DAY → ($days * INTERVAL '1 day')`. memory store에는 사이클 단위 회상을 위한 `memory_events_for_cycle`(payload JSON에서 cycle_id를 fallback 추출)이 추가되어 chat agent와 batch agent가 같은 store를 통해 동일 cycle context를 조회할 수 있습니다.
+
+`clone-bq-local`은 BigQuery table metadata와 로컬 DuckDB schema spec을 맞춰 `arena_config`, runtime credential metadata, market/account/sleeve/memory/execution/audit 테이블을 로컬 파일로 복제합니다. `--dry-run`은 원본 row/byte 규모만 조회하고, 실제 복제는 `--continue-on-error`와 `--tables`/`--exclude-tables`로 좁혀 실행할 수 있습니다.
 
 ### 3.2 Schema & Tables (`schema.py`)
 
@@ -407,6 +412,7 @@ Expected State ←→ Broker Snapshot (비교)
 
 단일 실제 브로커 계좌를 N개 가상 계좌로 분리:
 - 각 에이전트에 독립 자본 할당 (`sleeve_capital_krw[agent_id]`)
+- allocation source는 UI/admin/chat 모두 최종적으로 `agents_config[].capital_krw`로 정규화. 입력 모드는 고정 KRW(`fixed_krw`), 최신 계좌 평가액의 비율(`account_percent`), 계좌 전체(`whole_account`)를 지원하고, 비율/전체 모드는 저장된 최신 `account_snapshots.total_equity_krw`가 필요
 - 독립 NAV, P&L, 포지션 추적
 - **Chained Returns**: 자본 이벤트 시 새 베이스라인 생성, 수익률 체인 연결
 
@@ -441,13 +447,15 @@ AdkTradingAgent.generate(context)
   │
   ├── adk_order_support.py      주문 지원 유틸리티 (시장 데이터, 거래소 코드)
   ├── adk_models.py             LLM 모델 래핑/라우팅
-  ├── adk_tool_helpers.py       schema metadata + no-op ledger/search shims (dev_ui + investment_chat 공유)
+  ├── adk_tool_helpers.py       schema metadata + no-op ledger/search shims (cycle/dev_ui/investment_chat 공유)
   ├── llm_params.py             프로바이더별 샘플링/토큰 파라미터
   │
-  └── adk_agents.py             최상위 클래스 + 빌더 (1,702L)
+  └── adk_agents.py             최상위 클래스 + 빌더 (1,680L)
 ```
 
 기본 프롬프트 텍스트는 `arena/prompts/adk/{core_prompt,system_prompt}.txt`(공통 패키지)로 통합되었고, tenant 오버라이드는 `arena_config.system_prompt`로 관리. `arena/agents/prompts/`는 이전 import 경로를 유지하기 위한 compat shim — 실제 로딩/렌더링은 `arena/prompts/{loader,prompt_pack,memory}.py`가 담당. 메모리 compaction과 semantic relation extractor도 동일 패키지의 `memory/*.txt`를 사용해 시스템 프롬프트를 코드에서 분리했습니다.
+
+ADK tool schema는 `FunctionTool`이 callable signature/docstring/type hint를 읽어 `FunctionDeclaration`을 만드는 경로에 맞춰 관리합니다. `adk_tool_helpers.apply_tool_schema_metadata`가 registry description/label과 원 callable의 signature를 wrapper에 이식하고, exposed signatures는 `Optional[...]`, `Literal[...]`, typed list를 사용해 required field, nullable, enum이 모델에 보이도록 유지합니다. 그래서 batch agent, dev UI, investment chat 모두 같은 schema hygiene을 공유하고, 느슨한 `"JSON string 하나"` 형태의 도구는 LLM-facing 표면에서 피합니다.
 
 ### 4.2 Model Mapping
 
@@ -498,7 +506,7 @@ build_investment_chat_agent(repo, settings, tenant_id, registry, provider, model
   │     ├── default_registry.clone() + chat용 _ContextTools 재바인딩
   │     ├── CHAT_ANALYSIS_TOOL_IDS 화이트리스트만 통과
   │     ├── WRITE_TOOL_MARKERS(execute/submit/place_order/broker/sync_account/write_/delete_/upsert_) 자동 차단
-  │     └── chat 전용 entry 추가 — account/history/order
+  │     └── chat 전용 entry 추가 — account/history/order/config
   │
   ├── adk_runner_bootstrap.build_tool_wrapper(...)
   │     └── adk_tool_helpers.{apply_tool_schema_metadata, noop_update_candidate_ledger}
@@ -506,19 +514,24 @@ build_investment_chat_agent(repo, settings, tenant_id, registry, provider, model
   └── adk_models._resolve_model(provider, settings, model_override)
 ```
 
+`investment_chat/system_prompt.txt`는 설정 변경 draft를 "적용됨"으로 말하지 말 것, token 복사를 사용자에게 요구하지 말 것 같은 safety policy만 담습니다. 어떤 값을 채워야 하는지는 tool name, description, typed signature/schema가 담당합니다.
+
 | Tool group | Tools | Purpose |
 |------------|-------|---------|
 | **Chat account** | `get_account_snapshot`, `refresh_account_snapshot`, `get_agent_sleeve_snapshot` | 저장된 총계좌/슬리브 스냅샷 조회 + KIS 계좌 즉시 새로고침 (테넌트 KIS secret 없으면 차단) |
 | **Chat history** | `get_trade_history` | 체결/주문 이력 — `judgment_source` 분리(`user+investment_chat` vs 자율 batch) |
-| **Chat order** | `validate_order_draft`, `submit_approved_order` | 2단 승인 주문. validate에서 `RiskEngine` 통과한 draft를 arena_config에 저장(`expires_at`, 기본 15분), 사용자가 정확히 `CONFIRM <approval_token>` 문구를 입력해야 submit 가능 |
+| **Chat order** | `validate_order_draft`, `submit_approved_order` | 2단 승인 주문. validate에서 `RiskEngine` 통과한 draft를 arena_config에 저장(`expires_at`, 기본 15분), UI 승인 버튼이 internal bridge로 `CONFIRM <approval_token>`을 전달해야 submit 가능 |
+| **Chat config** | `propose_agent_config_change`, `propose_chat_agent_config_change`, `propose_tenant_config_change`, `get_config_change_status` | 투자 에이전트/채팅 에이전트/tenant runtime 설정 변경 초안. LLM은 draft만 만들고, `/investment-chat/config-drafts/{token}/apply`가 승인 버튼 후 internal bridge를 호출 |
 | **Inherited analysis** | recommend_opportunities, optimize_portfolio, forecast_returns, technical_signals, sector_summary, get_fundamentals, index_snapshot, fear_greed_index, earnings_calendar, fetch_reddit_sentiment, fetch_sec_filings, macro_snapshot, search_past_experiences, search_peer_lessons, get_research_briefing, portfolio_diagnosis, trade_performance, screen_market | 사이클 도구를 공유 — 단, write/execute 마커는 위 필터로 제거 |
 
 핵심 안전 장치:
 
 - **Scope contract** — 모든 주문은 `scope ∈ {account, agent_sleeve}`로 명시. agent_sleeve는 `agent_id`로 대상 batch agent를 지정해야 하며, account는 `AGENT_ID="investment_chat"`로 강제 매핑. snapshot 미존재 시 `missing_account_snapshot` 반환.
 - **Approval token** — `OrderIntent` fingerprint + nonce를 SHA-256으로 압축한 24자 토큰. 동일 draft를 두 번 submit하면 `already_submitted` idempotent 응답.
+- **Config draft contract** — settings 변경 도구는 `scope ∈ {agent, chat_agent, tenant}`를 사용하고 `apply_approved_config_change`는 LLM registry에 노출하지 않습니다. agent scope는 `AdminAgentConfigStore`/`build_single_agent_entry`를 재사용해 provider/model/risk/tools/memory/capital을 기존 admin 검증과 같은 규칙으로 정규화합니다.
+- **Capital allocation modes** — chat이 sleeve 금액을 조정할 때 `fixed_krw`, `account_percent`, `whole_account` 중 하나를 제안할 수 있고, apply 전 단계에서 최신 account snapshot 기반 `capital_krw`로 resolve됩니다.
 - **Tenant write lock** — `locks.tenant_lock(tenant_id)`(threading RLock)로 같은 테넌트의 chat 주문이 직렬화. `repo_tenant_scope`로 store 단위 tenant 변수도 함께 바인딩.
-- **Audit + memory trail** — `chat_order_validate`/`chat_order_submit`/`chat_account_refresh`는 `runtime_audit_log`에 기록되고, 체결 성공 시 semantic-tier `MemoryEvent`(`source="investment_chat_order_decision"`, `judgment_source="user+investment_chat"`)가 남아 batch agent의 회상 대상에 포함됩니다.
+- **Audit + memory trail** — `chat_order_validate`/`chat_order_submit`/`chat_account_refresh`/`chat_config_change_*`는 `runtime_audit_log`에 기록되고, 체결 성공 시 semantic-tier `MemoryEvent`(`source="investment_chat_order_decision"`, `judgment_source="user+investment_chat"`)가 남아 batch agent의 회상 대상에 포함됩니다.
 
 UI 측 마운트는 §12.2 참조.
 
@@ -683,6 +696,8 @@ Causal graph 위에 얹힌 concept-level 의미 관계 레이어. 투자 LLM과 
 
 핵심 도구 등록. `tools_config`로 tenant별 enable/label/description 오버레이, `disabled_tools` 설정으로 개별 비활성화 가능.
 
+ToolEntry의 callable은 ADK wrapper를 통과하기 전에 schema metadata를 보강합니다. Registry description은 wrapper docstring으로, 원 callable의 `inspect.signature`와 type hints는 ADK `FunctionTool`이 읽을 수 있는 형태로 유지합니다. Optional scalar/list 파라미터는 `Optional[...]`, 선택지는 `Literal[...]` alias로 표현해 required/default/enum이 모델-visible schema에 남습니다.
+
 ### 6.2 Context Tools (5개) — `adk_context_tools.py`
 
 | Tool | Function |
@@ -746,7 +761,8 @@ Causal graph 위에 얹힌 concept-level 의미 관계 레이어. 투자 LLM과 
 |----------|------|---------|
 | Account | `get_account_snapshot` / `refresh_account_snapshot` / `get_agent_sleeve_snapshot` | 저장된 총계좌·슬리브 스냅샷 + 테넌트 KIS 자격증명이 있을 때만 동기화 |
 | History | `get_trade_history` | 정확한 체결/주문 이력. `judgment_source`가 `user+investment_chat`인지 자율 batch인지 분리 |
-| Order | `validate_order_draft` / `submit_approved_order` | 2단 승인 — validate에서 risk 통과한 draft를 arena_config에 TTL 저장, `CONFIRM <token>` 정확 일치 시 submit |
+| Order | `validate_order_draft` / `submit_approved_order` | 2단 승인 — validate에서 risk 통과한 draft를 arena_config에 TTL 저장, UI order panel이 internal bridge로 `CONFIRM <token>`을 전달할 때만 submit |
+| Config | `propose_agent_config_change` / `propose_chat_agent_config_change` / `propose_tenant_config_change` / `get_config_change_status` | 설정 변경 초안 — provider/model/tool/memory/risk/prompt/sleeve allocation을 draft로 저장. UI config panel 승인 전까지 `arena_config` 실제 값은 변경하지 않음 |
 
 도구 어댑팅은 batch agent와 동일하게 `adk_runner_bootstrap.build_tool_wrapper`를 통과하지만, candidate ledger와 ReAct memory injection은 `adk_tool_helpers.noop_*`로 비활성화 (사이클 메트릭에 영향 없도록).
 
@@ -754,7 +770,7 @@ Causal graph 위에 얹힌 concept-level 의미 관계 레이어. 투자 LLM과 
 
 ## 7. Context Builder
 
-`arena/context.py` (2,756L) — 에이전트별, 사이클별 컨텍스트 조립.
+`arena/context.py` (2,758L) — 에이전트별, 사이클별 컨텍스트 조립.
 
 ### Input → Output
 
@@ -822,10 +838,11 @@ validate_order_draft(scope, agent_id, ticker, side, qty, price_krw, ...)
   ├── arena_config[draft_key] = { intent, risk, expires_at, approved_by }
   └── return { approval_token, required_confirmation: "CONFIRM <token>" }
         │
-        ▼ user types "CONFIRM <token>"
+        ▼ UI order approval button
         │
 submit_approved_order(approval_token, confirmation_text)
   ├── load_draft + 만료/중복 submit 가드
+  ├── confirmation_text == "CONFIRM <token>" 확인 (UI bridge가 채움)
   ├── tenant_lock(tenant) + repo_tenant_scope(repo, tenant)
   ├── ExecutionGateway.process(intent, snapshot)         ← batch와 동일 경로
   ├── 성공 시 MemoryStore.record_reflection(semantic, judgment_source="user+investment_chat")
@@ -834,6 +851,34 @@ submit_approved_order(approval_token, confirmation_text)
 ```
 
 검증 단계에서 risk가 떨어지면 draft는 `risk_rejected`로 남고 submit은 거부됩니다. 사이클 batch agent와 chat이 같은 `ExecutionGateway`를 공유하므로 broker, ledger, sleeve replay, NAV 계산은 별도 코드 경로 없이 자동으로 일관 유지.
+
+### 8.4 Chat-Driven Config Flow
+
+투자챗봇의 설정 변경도 주문과 같은 draft/approval 패턴을 사용합니다. LLM은 직접 `INSERT`/`UPDATE` SQL을 만들지 않고, schema가 있는 관리 도구로 변경 의도를 구조화합니다.
+
+```
+chat agent
+  │
+  ├── propose_agent_config_change(agent_id, provider, model, capital_allocation_mode, ...)
+  ├── propose_chat_agent_config_change(provider, model, disabled_tools, llm_params_json, ...)
+  └── propose_tenant_config_change(system_prompt, risk_policy_json, memory_policy_json, ...)
+        │
+        ├── validate fields + 기존 admin normalizer 재사용
+        ├── account_percent/whole_account이면 latest_account_snapshot 필요
+        ├── approval_token + diffs + summary 생성
+        └── arena_config[chat_config_draft.<token>] = draft
+              │
+              ▼ UI config approval button
+              │
+apply_approved_config_change(approval_token, confirmation_text)
+  ├── confirmation_text == "CONFIRM <token>" 확인 (UI bridge가 채움)
+  ├── tenant_lock(tenant)
+  ├── agents_config 또는 tenant config key append
+  ├── runtime/admin cache invalidate
+  └── append_runtime_audit_log(action="chat_config_change_apply")
+```
+
+노출되는 LLM 도구는 propose/status 계열뿐이고, `apply_approved_config_change`는 `include_internal_bridge=True`로 만든 backend/UI bridge entry에서만 사용합니다. 이 설계 덕분에 설정 변경 권한은 채팅 UX 안에 들어오지만, 적용 권한은 UI의 명시적 사람 액션과 기존 admin validation 경로에 남습니다.
 
 ---
 
@@ -944,14 +989,16 @@ FastAPI Admin Dashboard — 모듈화된 라우트 구조.
 
 사이드바 nav는 `arena/ui/layout.py:tailwind_layout`이 조립합니다. `tenant`가 있으면 `?tenant_id=...`를 자동으로 붙이고, `hide_page_header`/`main_class` 옵션으로 챗봇처럼 헤더 없이 풀폭 iframe을 그릴 수 있습니다. `base_layout.jinja2`에는 데스크톱 전용 사이드바 collapse 토글이 추가되어 있어 `body.sidebar-collapsed` 토글만으로 너비를 `--sidebar-collapsed-w`로 줄입니다.
 
-### 12.2 Investment Chat Mount (`ui/investment_chat_adk.py`, 348L)
+### 12.2 Investment Chat Mount (`ui/investment_chat_adk.py`)
 
 `/investment-chat`(셸 페이지) + `/investment-chat/adk`(ADK FastAPI dev-ui sub-app)의 2단 구성. 기존 admin UI에 ADK가 제공하는 풀 챗 UX를 끼워 넣되, 인증·테넌트·모델 선택은 admin 측 컨벤션을 그대로 따릅니다.
 
 ```
 /investment-chat (HTML shell)
-  └── form: provider/model select → query string으로 sub-app 재로드
-       └── iframe → /investment-chat/adk/dev-ui/
+  ├── form: provider/model select → query string/세션/`investment_chat_config` 기준
+  ├── order approval panel  → /investment-chat/order-drafts/{token}/submit
+  ├── config approval panel → /investment-chat/config-drafts/{token}/apply
+  └── iframe → /investment-chat/adk/dev-ui/
                        └── google.adk.cli.fast_api.get_fast_api_app(
                               agent_loader=InvestmentChatAgentLoader,
                               session_service_uri=sqlite:///data/arena-investment-chat-adk-sessions.sqlite,
@@ -966,7 +1013,8 @@ FastAPI Admin Dashboard — 모듈화된 라우트 구조.
 | `_install_auth_gate` middleware | 세션/쿼리/env(`ARENA_CHAT_*`)에서 tenant·provider·model을 확정해 `REQUEST_*` ContextVar에 바인딩. `auth_enabled=true`면 미로그인 HTML 요청은 `/auth/google/login`으로 redirect, API 요청은 `401 auth required`. |
 | `_mount_adk_static` | ADK 패키지의 `browser/` 정적 자산을 임시 디렉터리로 복사하고, `assets/config/runtime-config.json`의 `backendUrl`을 마운트 prefix로 patch (ADK 버전 + prefix 해시로 캐시). |
 | Session/Artifact store | sqlite 파일은 `arena/data/arena-investment-chat-adk-sessions.sqlite`(env로 override 가능), artifact는 in-memory 기본. |
-| Provider/Model 선택 | `_CHAT_MODEL_PRESETS`에서 provider별 후보를 노출, default는 `default_model_for_provider(settings, provider)`. 사용자가 폼에서 바꾸면 query string과 세션에 저장. |
+| Provider/Model 선택 | `_CHAT_MODEL_PRESETS`에서 provider별 후보를 노출. 우선순위는 query string → `arena_config.investment_chat_config` → 세션 → `default_model_for_provider(settings, provider)`. |
+| Approval panels | `investment_chat_body.jinja2`가 order/config drafts를 2.5초 간격으로 polling. 버튼 클릭 후 backend bridge 결과를 iframe의 ADK chat input에 다시 전달해 모델이 사용자에게 결과를 설명하게 함. |
 
 ### 12.3 Memory 3D Graph (`memory.py`, 968L)
 
@@ -974,13 +1022,13 @@ FastAPI Admin Dashboard — 모듈화된 라우트 구조.
 
 ### 12.4 Templates
 
-24개 Jinja2 템플릿: base/board/nav/trades/sleeves/ops/settings + memory panel + 인증 알림 + 자격증명 카드 + `investment_chat_body.jinja2`(provider/model select 폼 + ADK iframe).
+24개 Jinja2 템플릿: base/board/nav/trades/sleeves/ops/settings + memory panel + 인증 알림 + 자격증명 카드 + `investment_chat_body.jinja2`(provider/model select 폼 + ADK iframe + order/config approval panels).
 
 ---
 
 ## 13. Market Hours & Scheduling
 
-`arena/market_hours.py` (318L)
+`arena/market_hours.py` (357L)
 
 | Market | Session | Timezone |
 |--------|---------|----------|
@@ -1001,7 +1049,7 @@ FastAPI Admin Dashboard — 모듈화된 라우트 구조.
 
 ```
 1. load_settings()        .env / 환경변수 → 기본 Settings
-2. _build_runtime()       tenant_id 결정 + BigQueryRepository
+2. _build_runtime()       tenant_id 결정 + active Repository(BigQuery/DuckDB)
 3. _apply_tenant_runtime_credentials()  Secret Manager 메타 + 자격증명
 4. apply_runtime_overrides()            arena_config tenant별 값 → Settings 오버레이
 5. apply_distribution_mode()            safety gate
@@ -1042,15 +1090,21 @@ FastAPI Admin Dashboard — 모듈화된 라우트 구조.
 | Key | Type | Description |
 |-----|------|-------------|
 | `system_prompt` | text | 에이전트 시스템 프롬프트 |
-| `agents_config` | JSON | 에이전트 CRUD (provider/model/capital/risk/tools) |
+| `agents_config` | JSON | 에이전트 CRUD (provider/model/capital/risk/tools/memory). chat 승인 flow도 최종적으로 이 key를 append |
+| `investment_chat_config` | JSON | 채팅 에이전트 provider/model/disabled_tools/llm_params/memory_compaction_model |
+| `investment_chat_account_markets` | scalar | 채팅 계좌/슬리브 조회 허용 market scope |
 | `risk_policy` | JSON | Risk 파라미터 |
 | `sleeve_capital_krw` | scalar | 기본 sleeve 자본 |
 | `disabled_tools` | JSON | 비활성화 도구 |
 | `mcp_servers` | JSON | MCP 서버 등록 |
 | `memory_policy` | JSON | 메모리 정책 (10 groups) |
+| `memory_compactor_prompt` | text | 메모리 compaction helper prompt override |
 | `forecast_mode` | scalar | 예측 사용 모드 |
 | `kis_target_market` | scalar | tenant별 타깃 시장 |
+| `research_enabled` / `research_*` | bool/scalar | 리서치 에이전트 enable 및 ticker/mover/earnings limits |
 | `real_trading_approved` | bool | 실거래 승인 스위치 |
+
+`chat_config_draft.<approval_token>`과 order draft keys도 같은 `arena_config` append-only KV에 저장됩니다. draft key는 TTL/status를 가진 임시 승인 객체이고, 승인 후 실제 runtime key(`agents_config`, `investment_chat_config`, `risk_policy`, ...)가 별도 row로 append됩니다.
 
 ### tenant / trading_mode Contract
 
@@ -1062,7 +1116,7 @@ FastAPI Admin Dashboard — 모듈화된 라우트 구조.
 
 ## 15. CLI Interface
 
-Entry point: `arena/cli.py` (399L) → `arena/cli_commands/` (9개 모듈)
+Entry point: `arena/cli.py` (457L) → `arena/cli_commands/` (12개 실행 모듈)
 
 ```bash
 # Setup
@@ -1168,13 +1222,13 @@ Cloud Run Service
 
 ## 17. Test Structure
 
-67개 테스트 파일, pytest. 100% pass 필수.
+87개 테스트 파일, pytest. 100% pass 필수.
 
 ### Key Test Files
 
 | Test File | Coverage |
 |-----------|----------|
-| `test_adk_agents.py` | ADK normalization, model routing, tool loading |
+| `test_adk_agents.py` | ADK normalization, model routing, tool loading, schema metadata preservation |
 | `test_agents_config.py` | Per-agent config CRUD, capital allocation |
 | `test_context.py` | Context builder, memory reranking, cash buffer |
 | `test_data_strict_paths.py` | BQ queries, dedup, checkpoint rebuild |
@@ -1188,11 +1242,13 @@ Cloud Run Service
 | `test_semantic_relation_tuning.py` | Shadow↔inject quality gates |
 | `test_cli_memory_relations.py` | Semantic triple CLI |
 | `test_cli_thesis_compaction_smoke.py` | Thesis chain compaction smoke |
+| `test_clone_bq_local.py` / `test_init_local_cli.py` / `test_duckdb_schema.py` | Local DuckDB bootstrap/clone/schema |
 | `test_execution_reconcile.py` | Order reconciliation vs. broker |
 | `test_forecasting_stacked.py` | 7-model stacking |
 | `test_opportunity_ranker.py` | Signal-IC meta-learner 학습/스코어링 |
 | `test_signals.py` | Layer 1 signal definitions |
 | `test_new_tools.py` | 신규 도구 (`recommend_opportunities`, `trade_performance`) |
+| `test_investment_chat_ui.py` | Chat ADK shell, order/config approval bridges, tool schema quality |
 | `test_kis_fundamentals_ingestor.py` / `test_sec_fundamentals_ingestor.py` / `test_fmp_fundamentals_ingestor.py` | Fundamentals ingestors |
 | `test_ui_admin_routes.py` | Admin pages, config save |
 | `test_ui_helper_modules.py` | UI helper modules |
@@ -1226,8 +1282,14 @@ class TradingAgent(Protocol):
 - chat 전용 빌더(`agents/investment_chat/`)는 동일 ADK 빌딩 블록(`adk_runner_bootstrap`, `adk_models`, `adk_tool_helpers`, `_ContextTools`)을 재사용해 batch 사이클과 코드 경로를 공유
 - 테스트 용이성 + 단일 책임 원칙
 
+### Approval Drafts
+- LLM-facing mutating tools는 주문/설정 모두 draft만 생성
+- 실제 submit/apply는 UI/backend bridge가 `CONFIRM <token>`을 내부 전달
+- draft와 audit은 `arena_config` + `runtime_audit_logs`에 append-only로 남기고, 적용은 기존 gateway/admin normalizer를 재사용
+
 ### Virtual Sleeving
 - 단일 브로커 계좌 → N개 가상 sleeve
+- 고정 금액, 계좌 비율, 계좌 전체 위임 입력을 `capital_krw`로 정규화
 - 리플레이 기반 독립 추적
 
 ---
@@ -1300,16 +1362,18 @@ class TradingAgent(Protocol):
 3. **Ledger replay** — 항상 checkpoint부터 리플레이로 상태 재계산.
 4. **Memory features mostly OFF by default** — hierarchy, tagging, forgetting, graph, cleanup 전부 기본 OFF. 실제 동작: 벡터검색 + thesis + compaction + REACT injection.
 5. **thesis_id ≠ graph_node_id** — thesis_id는 비즈니스 키(포지션 묶기), graph_node_id는 그래프 주소(인과관계).
-6. **Data layer split** — 기존 `bq.py`(1200L+) → `bq.py`(144L facade) + `bigquery/` 디렉토리(8개 store + session).
-7. **Agent decomposition** — 기존 `adk_agents.py`(~3000L) → 12개 `adk_*` 파일 + helper/research/compaction 3개.
-8. **CLI modularization** — 기존 `cli.py`(~2700L) → `cli.py`(399L) + `cli_commands/`(9개 모듈).
+6. **Data layer split** — 기존 `bq.py`(1200L+) → `bq.py`(144L facade) + `bigquery/` 디렉토리(9개 store + session).
+7. **Agent decomposition** — 기존 `adk_agents.py`(~3000L) → 13개 `adk_*` 파일 + helper/research/compaction 3개.
+8. **CLI modularization** — 기존 `cli.py`(~2700L) → `cli.py`(457L) + `cli_commands/`(12개 실행 모듈).
 9. **PnL backfeed** — SELL 시 과거 BUY 기억의 outcome_score를 실제 수익률로 역업데이트.
 10. **Risk per-agent** — `Settings.risk_policy` + `AgentConfig.risk_overrides` 병합.
 11. **ADK tools are async** — LLM 호출은 ReAct 루프에서 블로킹. 동시 에이전트는 ThreadPoolExecutor.
 12. **Tenant isolation** — 모든 쿼리 `tenant_id` 필터.
 13. **Market hours** — 스케줄링 전 holiday 체크 필수.
 14. **Investment chat scope** — chat의 모든 주문은 `judgment_source="user+investment_chat"`로 기록되며 `OrderIntent.agent_id`는 scope에 따라 `investment_chat`(account) 또는 대상 batch agent(`agent_sleeve`)로 강제. batch agent가 자율 판단한 것처럼 보이지 않게 하기 위해 strategy_refs에 `source:investment_chat` + `judgment:user+investment_chat`이 함께 박힙니다.
-15. **Prompt 패키지 위치** — `arena/agents/prompts/`는 compat shim. 신규 프롬프트는 `arena/prompts/{adk,investment_chat,memory}/*.txt`에 두고, `PromptPack`(또는 `arena.prompts.memory`의 헬퍼)를 통해 로드해야 lru_cache + tenant override 경로가 일관되게 적용됩니다.
+15. **Investment chat config approval** — 설정 변경 도구는 `propose_*`와 status 조회만 LLM에 노출합니다. `apply_approved_config_change`는 UI bridge 전용이며, 직접 SQL 대신 admin config normalizer와 runtime ops를 사용합니다.
+16. **ADK schema shape matters** — ADK는 callable signature/type hints를 schema로 바꿉니다. LLM-facing 도구에 자유형 JSON string을 하나만 주면 모델이 필드 의미를 못 보므로, enum/required가 필요한 인자는 `Literal`/`Optional`/typed list로 드러내야 합니다.
+17. **Prompt 패키지 위치** — `arena/agents/prompts/`는 compat shim. 신규 프롬프트는 `arena/prompts/{adk,investment_chat,memory}/*.txt`에 두고, `PromptPack`(또는 `arena.prompts.memory`의 헬퍼)를 통해 로드해야 lru_cache + tenant override 경로가 일관되게 적용됩니다.
 
 ---
 
@@ -1318,23 +1382,23 @@ class TradingAgent(Protocol):
 | Layer | Key Files | Lines |
 |-------|-----------|-------|
 | **Models** | `arena/models.py` | 156 |
-| **Config** | `arena/config.py` | 1,137 |
-| **Data** | `arena/data/bq.py` + `bigquery/` (8 stores + session) | 144 + 8,877 |
+| **Config** | `arena/config.py` | 1,196 |
+| **Data** | `arena/data/bq.py` + `bigquery/` (9 stores + session) | 144 + 9,158 |
 | **Schema** | `arena/data/schema.py` | 1,106 |
-| **Agents** | `arena/agents/` (13 adk_* + base + llm_params + support/research/compaction) | 5,889 + 1,403 |
-| **Investment Chat** | `arena/agents/investment_chat/` (15 files) + `arena/ui/investment_chat_adk.py` + route + template | 1,287 + 348 + 156 + 58 |
+| **Agents** | `arena/agents/` (13 adk_* + base + llm_params + support/research/compaction) | 7,619 |
+| **Investment Chat** | `arena/agents/investment_chat/` (17 files) + `arena/ui/investment_chat_adk.py` + route + template | 2,753 + 792 + 366 + 433 |
 | **Prompts** | `arena/prompts/` (loader/prompt_pack/memory + adk/investment_chat/memory text) | 413 + text |
-| **Memory** | `arena/memory/` (16 files) | 8,859 |
-| **Tools** | `arena/tools/` (9 files) | 5,358 |
+| **Memory** | `arena/memory/` (18 files) | 9,634 |
+| **Tools** | `arena/tools/` (11 files) | 6,213 |
 | **Recommendation** | `arena/recommendation/` (ranker + signals) | 918 |
-| **Context** | `arena/context.py` | 2,756 |
+| **Context** | `arena/context.py` | 2,758 |
 | **Orchestration** | `arena/orchestrator.py` | 571 |
-| **Execution** | `arena/execution/gateway.py` + `risk.py` | 460 + 119 |
+| **Execution** | `arena/execution/gateway.py` + `risk.py` | 477 + 125 |
 | **Broker** | `arena/broker/` (3 files) | 677 |
-| **Open Trading** | `arena/open_trading/` (7 files) | 6,964 |
+| **Open Trading** | `arena/open_trading/` (8 files) | 7,113 |
 | **Reconciliation** | `arena/reconciliation.py` | 1,423 |
-| **CLI** | `arena/cli.py` + `cli_commands/` (9 files) | 399 + 4,510 |
-| **UI** | `arena/ui/` (routes + core) | ~9,500 |
+| **CLI** | `arena/cli.py` + `cli_commands/` (12 execution modules) | 457 + 5,628 |
+| **UI** | `arena/ui/` (routes + core) | ~11,000 |
 | **Providers** | `arena/providers/` (3 files) | 408 |
-| **Forecasting** | `arena/forecasting/stacked.py` | 679 |
+| **Forecasting** | `arena/forecasting/stacked.py` | 800 |
 | **Tests** | `tests/` (67 files) | — |

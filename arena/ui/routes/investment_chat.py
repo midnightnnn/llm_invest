@@ -15,6 +15,7 @@ from arena.agents.investment_chat.config_tools import (
 )
 from arena.agents.investment_chat.drafts import load_draft
 from arena.agents.investment_chat.order_tools import build_order_bridge_tool_entries
+from arena.agents.investment_chat.selection import tenant_default_chat_selection
 from arena.providers.registry import canonical_provider, default_model_for_provider, list_adk_provider_specs
 from arena.ui.investment_chat_providers import tenant_available_provider_specs
 from arena.ui.routes.viewer import ViewerRouteDeps
@@ -212,15 +213,24 @@ def register_investment_chat_routes(app: FastAPI, *, deps: ViewerRouteDeps) -> N
             return redirect
         provider_options = _provider_options(deps.repo, tenant)
         chat_config = load_chat_agent_config(deps.repo, tenant_id=tenant)
+        tenant_settings = deps.settings_for_tenant(tenant)
         requested_provider = canonical_provider(provider) or str(provider or "").strip().lower()
         provider_token = requested_provider
         valid_providers = {item["value"] for item in provider_options}
+        tenant_default_provider, tenant_default_model = tenant_default_chat_selection(
+            tenant_settings,
+            allowed_providers=valid_providers,
+        )
+        try:
+            session_tenant = normalize_tenant(str(request.session.get("investment_chat_tenant_id") or ""))
+        except Exception:
+            session_tenant = ""
         if provider_token not in valid_providers:
             stored_provider = canonical_provider(chat_config.get("provider")) or str(
                 chat_config.get("provider") or ""
             ).strip().lower()
             provider_token = stored_provider if stored_provider in valid_providers else ""
-        if provider_token not in valid_providers:
+        if provider_token not in valid_providers and session_tenant == tenant:
             try:
                 provider_token = canonical_provider(request.session.get("investment_chat_provider")) or str(
                     request.session.get("investment_chat_provider") or ""
@@ -228,14 +238,17 @@ def register_investment_chat_routes(app: FastAPI, *, deps: ViewerRouteDeps) -> N
             except Exception:
                 provider_token = ""
         if provider_token not in valid_providers:
+            provider_token = tenant_default_provider if tenant_default_provider in valid_providers else ""
+        if provider_token not in valid_providers:
             provider_token = str(provider_options[0]["value"]) if provider_options else ""
-        tenant_settings = deps.settings_for_tenant(tenant)
         default_model = default_model_for_provider(tenant_settings, provider_token) if provider_token else ""
+        if provider_token and provider_token == tenant_default_provider and tenant_default_model:
+            default_model = tenant_default_model
         model_token = str(model or "").strip() if provider_token and requested_provider == provider_token else ""
         stored_provider = canonical_provider(chat_config.get("provider")) or str(chat_config.get("provider") or "").strip().lower()
         if not model_token and stored_provider == provider_token:
             model_token = str(chat_config.get("model") or "").strip()
-        if not model_token:
+        if not model_token and session_tenant == tenant:
             try:
                 session_provider = canonical_provider(request.session.get("investment_chat_provider")) or str(
                     request.session.get("investment_chat_provider") or ""
@@ -244,6 +257,8 @@ def register_investment_chat_routes(app: FastAPI, *, deps: ViewerRouteDeps) -> N
                     model_token = str(request.session.get("investment_chat_model") or "").strip()
             except Exception:
                 model_token = ""
+        if not model_token and provider_token == tenant_default_provider:
+            model_token = tenant_default_model
         if not model_token:
             model_token = default_model
         try:

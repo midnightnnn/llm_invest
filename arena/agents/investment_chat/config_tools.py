@@ -53,7 +53,7 @@ _CHAT_AGENT_ALLOWED_FIELDS = {
     "account_markets",
 }
 ConfigChangeAction = Literal["update", "upsert", "add", "remove"]
-CapitalAllocationMode = Literal["", "fixed_krw", "account_percent", "whole_account"]
+CapitalAllocationMode = Literal["unchanged", "fixed_krw", "account_percent", "whole_account"]
 
 
 def load_chat_agent_config(repo: Any, *, tenant_id: str) -> dict[str, Any]:
@@ -613,7 +613,7 @@ def _build_config_tool_entries(
         provider: str = "",
         model: str = "",
         capital_krw: Optional[float] = None,
-        capital_allocation_mode: CapitalAllocationMode = "",
+        capital_allocation_mode: CapitalAllocationMode = "unchanged",
         capital_allocation_percent: Optional[float] = None,
         capital_allocation_amount_krw: Optional[float] = None,
         target_market: str = "",
@@ -638,7 +638,9 @@ def _build_config_tool_entries(
                 fields[key] = text
         if capital_krw is not None:
             fields["capital_krw"] = float(capital_krw)
-        allocation_mode = str(capital_allocation_mode or "").strip()
+        allocation_mode = str(capital_allocation_mode or "").strip().lower()
+        if allocation_mode in {"unchanged", "default", "none"}:
+            allocation_mode = ""
         if allocation_mode:
             allocation: dict[str, Any] = {"mode": allocation_mode}
             if capital_allocation_percent is not None:

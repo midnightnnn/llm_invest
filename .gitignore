@@ -35,7 +35,6 @@ htmlcov/
 .claude/settings.local.json
 
 # Internal docs
-llm_arena_codebase_summary.md
 dc_post.md
 logo.svg
 logo_256.png
@@ -45,4 +44,3 @@ disquiet_product.md
 memory_system.md
 
 SKILL.md
-adk_issue_chatAction

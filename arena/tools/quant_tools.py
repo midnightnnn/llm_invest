@@ -60,13 +60,13 @@ OpportunityProfile = Literal[
     "tactical_hedge",
 ]
 ScreenMarketBucket = Literal["balanced", "momentum", "pullback", "recovery", "defensive", "value"]
-ScreenMarketBucketChoice = Literal["", "balanced", "momentum", "pullback", "recovery", "defensive", "value"]
+ScreenMarketBucketChoice = Literal["auto", "balanced", "momentum", "pullback", "recovery", "defensive", "value"]
 ScreenMarketSortBy = Literal["as_of_ts", "ret_20d", "ret_5d", "volatility_20d", "sentiment_score", "close_price_krw"]
-ScreenMarketSortByChoice = Literal["", "as_of_ts", "ret_20d", "ret_5d", "volatility_20d", "sentiment_score", "close_price_krw"]
+ScreenMarketSortByChoice = Literal["none", "as_of_ts", "ret_20d", "ret_5d", "volatility_20d", "sentiment_score", "close_price_krw"]
 SortOrder = Literal["asc", "desc"]
 PortfolioStrategy = Literal["sharpe", "risk_parity", "forecast"]
 ForecastMode = Literal["all", "stacked", "base", "balanced", "lgbm", "ridge", "avg"]
-ForecastModeChoice = Literal["", "all", "stacked", "base", "balanced", "lgbm", "ridge", "avg"]
+ForecastModeChoice = Literal["default", "all", "stacked", "base", "balanced", "lgbm", "ridge", "avg"]
 IndexSymbol = Literal["KOSPI", "KOSPI200", "KOSDAQ", "SPX", "COMP", "DJI", "WTI", "US10Y", "US30Y", "GOLD"]
 _OPPORTUNITY_BUCKET_TOKENS = frozenset({"momentum", "pullback", "recovery"})
 _OPPORTUNITY_PROFILE_ALIASES: dict[str, tuple[str, ...]] = {
@@ -803,7 +803,7 @@ class QuantTools:
     def _forecast_mode(self, override: str | None = None) -> str:
         default_mode = str(self.settings.forecast_mode or "all").strip().lower() or "all"
         token = str(override or default_mode).strip().lower()
-        if not token:
+        if not token or token in {"default", "auto"}:
             return default_mode
         if token == "balanced":
             return "all"
@@ -1076,13 +1076,13 @@ class QuantTools:
 
     def screen_market(
         self,
-        bucket: ScreenMarketBucketChoice = "",
+        bucket: ScreenMarketBucketChoice = "auto",
         top_n: int = 10,
         *,
         per_bucket: Optional[int] = None,
         windows: list[int] = [20, 60, 126],
         vol_adjust: bool = True,
-        sort_by: ScreenMarketSortByChoice = "",
+        sort_by: ScreenMarketSortByChoice = "none",
         order: SortOrder = "desc",
         min_ret_20d: Optional[float] = None,
         max_volatility: Optional[float] = None,
@@ -1095,6 +1095,11 @@ class QuantTools:
         the legacy single-field ranking mode.
         """
         bucket_token = str(bucket or "").strip().lower()
+        if bucket_token in {"auto", "default", "none"}:
+            bucket_token = ""
+        sort_by = str(sort_by or "").strip().lower()
+        if sort_by in {"none", "auto", "default"}:
+            sort_by = ""
         windows = [int(w) for w in windows if int(w) > 1]
         windows = windows[:6] or [20, 60, 126]
 
@@ -1460,7 +1465,7 @@ class QuantTools:
         risk_free_rate: float = 0.04,
         mdd_days: int = 60,
         mu_confidence: float = 1.0,
-        forecast_mode: ForecastModeChoice = "",
+        forecast_mode: ForecastModeChoice = "default",
         regime_scale: float = 1.0,
         max_weight: Optional[float] = None,
         min_weight: Optional[float] = None,
@@ -1652,7 +1657,7 @@ class QuantTools:
     def forecast_returns(
         self,
         tickers: Optional[list[str]] = None,
-        forecast_mode: ForecastModeChoice = "",
+        forecast_mode: ForecastModeChoice = "default",
     ) -> list[dict]:
         """Loads direction forecasts from 7-model ensemble (NBEATSx, NHITS, PatchTST, iTransformer, Chronos, TimesFM, Lag-Llama).
 
