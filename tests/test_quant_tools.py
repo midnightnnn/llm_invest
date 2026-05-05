@@ -3,12 +3,21 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import math
 from types import SimpleNamespace
-from typing import get_args, get_type_hints
+from typing import Literal, get_args, get_origin, get_type_hints
 
 import pytest
 
 from arena.config import Settings
 from arena.tools.quant_tools import QuantTools
+
+
+def _literal_args(annotation) -> set[object]:
+    if get_origin(annotation) is Literal:
+        return set(get_args(annotation))
+    values: set[object] = set()
+    for arg in get_args(annotation):
+        values.update(_literal_args(arg))
+    return values
 
 
 @pytest.fixture(autouse=True)
@@ -278,7 +287,7 @@ def test_screen_market_returns_rows() -> None:
 
 def test_quant_tool_choice_parameters_are_schema_literals() -> None:
     hints = get_type_hints(QuantTools.screen_market)
-    assert set(get_args(hints["bucket"].__args__[0] if hasattr(hints["bucket"], "__args__") else hints["bucket"])) >= {
+    assert _literal_args(hints["bucket"]) >= {
         "balanced",
         "momentum",
         "pullback",
@@ -286,21 +295,16 @@ def test_quant_tool_choice_parameters_are_schema_literals() -> None:
         "defensive",
         "value",
     }
-    assert set(get_args(hints["order"])) == {"asc", "desc"}
+    assert _literal_args(hints["order"]) == {"asc", "desc"}
 
     optimize_hints = get_type_hints(QuantTools.optimize_portfolio)
-    assert set(get_args(optimize_hints["strategy"])) == {"sharpe", "risk_parity", "forecast"}
+    assert _literal_args(optimize_hints["strategy"]) == {"sharpe", "risk_parity", "forecast"}
 
     forecast_hints = get_type_hints(QuantTools.forecast_returns)
-    forecast_args = forecast_hints["forecast_mode"].__args__
-    forecast_literal = next(arg for arg in forecast_args if get_args(arg))
-    assert set(get_args(forecast_literal)) >= {"all", "stacked", "base", "balanced"}
+    assert _literal_args(forecast_hints["forecast_mode"]) >= {"all", "stacked", "base", "balanced"}
 
     index_hints = get_type_hints(QuantTools.index_snapshot)
-    index_args = index_hints["indices"].__args__
-    index_list = next(arg for arg in index_args if get_args(arg))
-    index_literal = get_args(index_list)[0]
-    assert {"SPX", "COMP", "DJI", "US10Y", "GOLD", "KOSPI"} <= set(get_args(index_literal))
+    assert {"SPX", "COMP", "DJI", "US10Y", "GOLD", "KOSPI"} <= _literal_args(index_hints["indices"])
 
 
 def test_screen_market_excludes_quote_only_rows_without_history_features() -> None:
