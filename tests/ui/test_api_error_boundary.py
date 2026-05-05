@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from arena.config import load_settings
 from arena.ui.app import _build_app
 from arena.ui.api_errors import register_api_error_middleware
-from tests.test_ui_admin_routes import _DummyRepo
+from tests.ui.helpers import _DummyRepo
 
 
 def test_api_error_boundary_logs_traceback_and_returns_request_id(caplog) -> None:

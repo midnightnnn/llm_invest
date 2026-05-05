@@ -16,7 +16,7 @@ from arena.tools.registry import ToolEntry, ToolRegistry
 from arena.ui.layout import tailwind_layout
 from arena.ui.server import _build_app
 from tests.direct_route_client import DirectRouteClient
-from tests.test_ui_admin_routes import _DummyRepo
+from tests.ui.helpers import _DummyRepo
 
 
 def test_investment_chat_factory_delegates_tool_implementations() -> None:
