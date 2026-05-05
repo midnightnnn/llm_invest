@@ -1232,21 +1232,21 @@ Cloud Run Service
 | `test_agents_config.py` | Per-agent config CRUD, capital allocation |
 | `test_context.py` | Context builder, memory reranking, cash buffer |
 | `test_data_strict_paths.py` | BQ queries, dedup, checkpoint rebuild |
-| `test_memory_store.py` | Scoring, dedup, tier assignment, tagging |
-| `test_memory_forgetting.py` | Decay math, effective_score, access curves |
-| `test_memory_graph.py` | Node/edge builders, causal chain inference |
-| `test_memory_tuning.py` | Tuner grid search, objective, auto-promote/demote |
-| `test_memory_bq_store.py` | Memory BQ store operations |
-| `test_memory_relations.py` | Deterministic triple extraction |
-| `test_semantic_relation_extractor.py` | LLM triple extraction + validation |
-| `test_semantic_relation_tuning.py` | Shadow↔inject quality gates |
+| `tests/memory/test_memory_store.py` | Scoring, dedup, tier assignment, tagging |
+| `tests/memory/test_memory_forgetting.py` | Decay math, effective_score, access curves |
+| `tests/memory/test_memory_graph.py` | Node/edge builders, causal chain inference |
+| `tests/memory/test_memory_tuning.py` | Tuner grid search, objective, auto-promote/demote |
+| `tests/memory/test_memory_bq_store.py` | Memory BQ store operations |
+| `tests/memory/test_memory_relations.py` | Deterministic triple extraction |
+| `tests/memory/test_semantic_relation_extractor.py` | LLM triple extraction + validation |
+| `tests/memory/test_semantic_relation_tuning.py` | Shadow↔inject quality gates |
 | `test_cli_memory_relations.py` | Semantic triple CLI |
 | `test_cli_thesis_compaction_smoke.py` | Thesis chain compaction smoke |
-| `test_clone_bq_local.py` / `test_init_local_cli.py` / `test_duckdb_schema.py` | Local DuckDB bootstrap/clone/schema |
+| `tests/data/test_clone_bq_local.py` / `tests/data/test_init_local_cli.py` / `tests/data/test_duckdb_schema.py` | Local DuckDB bootstrap/clone/schema |
 | `test_execution_reconcile.py` | Order reconciliation vs. broker |
 | `test_forecasting_stacked.py` | 7-model stacking |
-| `test_opportunity_ranker.py` | Signal-IC meta-learner 학습/스코어링 |
-| `test_signals.py` | Layer 1 signal definitions |
+| `tests/data/test_opportunity_ranker.py` | Signal-IC meta-learner 학습/스코어링 |
+| `tests/data/test_signals.py` | Layer 1 signal definitions |
 | `test_new_tools.py` | 신규 도구 (`recommend_opportunities`, `trade_performance`) |
 | `tests/ui/test_investment_chat_*.py` | Chat ADK shell, order/config approval bridges, tool schema quality |
 | `test_kis_fundamentals_ingestor.py` / `test_sec_fundamentals_ingestor.py` / `test_fmp_fundamentals_ingestor.py` | Fundamentals ingestors |
