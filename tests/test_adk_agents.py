@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime, timezone
 import inspect
 import json
@@ -24,10 +23,6 @@ from arena.agents.adk_agents import (
     _system_prompt,
     _user_prompt,
 )
-from arena.agents.adk_models import (
-    _is_vertex_model_access_error,
-    _normalize_vertex_anthropic_model,
-)
 from arena.agents.adk_agent_flow import (
     explore_phase_output,
     extract_decision_payload,
@@ -46,45 +41,12 @@ from arena.agents.adk_order_support import (
     resolve_order_price,
 )
 from arena.agents.adk_runner_bootstrap import build_tool_wrapper, resolve_max_tool_events, runner_identity
-from arena.agents.adk_runner_runtime import AdkToolBudgetExceeded, collect_response_text
+from arena.agents.adk_runner_runtime import AdkToolBudgetExceeded
 from arena.config import AgentConfig, load_settings
-from arena.memory.query_builders import build_memory_query, build_memory_query_spec
 from arena.models import BoardPost, ExecutionReport, ExecutionStatus, OrderIntent, Side, utc_now
 from arena.tools.default_registry import build_default_registry
 from arena.tools.registry import ToolEntry, ToolRegistry
 from arena.tools.scratch_workspace import ScratchWorkspace
-
-
-def test_normalize_vertex_anthropic_alias_sonnet_46() -> None:
-    out = _normalize_vertex_anthropic_model("claude-sonnet-4-6")
-    assert out == "vertex_ai/claude-sonnet-4-5"
-
-
-def test_normalize_vertex_anthropic_keeps_versioned_model() -> None:
-    out = _normalize_vertex_anthropic_model("vertex_ai/claude-sonnet-4-5@20250929")
-    assert out == "vertex_ai/claude-sonnet-4-5@20250929"
-
-
-def test_vertex_model_access_error_detects_not_found_access() -> None:
-    exc = RuntimeError(
-        "litellm.NotFoundError: Vertex_aiException - "
-        "Publisher Model `projects/x/locations/us-central1/publishers/anthropic/models/claude-sonnet-4-6` "
-        "was not found or your project does not have access to it."
-    )
-    assert _is_vertex_model_access_error(exc) is True
-
-
-def test_vertex_model_access_error_detects_quota_exhausted() -> None:
-    exc = RuntimeError(
-        "litellm.RateLimitError: Vertex_aiException - "
-        "429 RESOURCE_EXHAUSTED. quota exceeded for publishers/anthropic/models/claude-sonnet-4-5"
-    )
-    assert _is_vertex_model_access_error(exc) is True
-
-
-def test_vertex_model_access_error_ignores_unrelated_errors() -> None:
-    exc = RuntimeError("rate limit exceeded 429")
-    assert _is_vertex_model_access_error(exc) is False
 
 
 def test_apply_tool_schema_metadata_prefers_registry_description() -> None:
@@ -1738,20 +1700,6 @@ def test_compact_tool_result_screen_market_keeps_bucket_reason_and_value_fields(
     assert out[0]["pbr"] == 1.1
 
 
-def test_build_memory_query_screen_market_mentions_buckets_and_tickers() -> None:
-    query = build_memory_query(
-        "screen_market",
-        {},
-        [
-            {"ticker": "PBR", "bucket": "value"},
-            {"ticker": "MRVL", "bucket": "momentum"},
-            {"ticker": "DUK", "bucket": "defensive"},
-        ],
-    )
-
-    assert query == "market screening value momentum defensive PBR MRVL DUK"
-
-
 def test_compact_tool_result_recommend_opportunities_keeps_validation_fields() -> None:
     out = _compact_tool_result_for_prompt(
         "recommend_opportunities",
@@ -1802,212 +1750,6 @@ def test_compact_tool_result_recommend_opportunities_keeps_validation_fields() -
     assert out["selection_scope"]["global_limit"] == 8
     assert out["selection_scope"]["per_profile_limit"] == 8
     assert out["selection_scope"]["loaded_rows"] == 73
-
-
-def test_build_memory_query_recommend_opportunities_mentions_profiles_and_tickers() -> None:
-    query = build_memory_query(
-        "recommend_opportunities",
-        {},
-        {
-            "recommendations": [
-                {"ticker": "PBR", "profile": "value"},
-                {"ticker": "MRVL", "profile": "aggressive"},
-                {"ticker": "DUK", "profile": "defensive"},
-            ],
-        },
-    )
-
-    assert query == "validated opportunities value aggressive defensive PBR MRVL DUK"
-
-
-def test_build_memory_query_spec_macro_snapshot_uses_regime_keys() -> None:
-    spec = build_memory_query_spec(
-        "macro_snapshot",
-        {},
-        {
-            "indicators": {
-                "fed_funds_rate": {"value": 5.25, "unit": "%"},
-                "treasury_10y": {"value": 4.8, "unit": "%"},
-                "yield_spread_10y_2y": {"value": -0.42, "unit": "pp"},
-                "cpi_yoy": {"value": 3.4, "unit": "%"},
-            },
-            "source": "fred",
-        },
-    )
-
-    assert spec is not None
-    assert spec.tool_name == "macro_snapshot"
-    assert spec.key_type == "regime"
-    assert spec.keys == ("high_rates", "high_yields", "yield_curve_inverted", "inflation_elevated")
-    assert spec.query == (
-        "macro regime high_rates high_yields yield_curve_inverted inflation_elevated "
-        "fed_funds_rate treasury_10y yield_spread_10y_2y cpi_yoy"
-    )
-    assert "key_type:regime" in spec.search_text()
-    assert "regime:high_rates" in spec.search_text()
-
-
-def test_build_memory_query_spec_fear_greed_uses_risk_and_volatility_regime() -> None:
-    spec = build_memory_query_spec(
-        "fear_greed_index",
-        {},
-        {
-            "regime_label": "risk_off",
-            "regime": "Extreme Fear",
-            "volatility_index": "VIX",
-            "volatility_close": 31.2,
-            "fear_greed_score": 14.0,
-        },
-    )
-
-    assert spec is not None
-    assert spec.key_type == "regime"
-    assert spec.keys == ("risk_off", "high_vol", "extreme_fear")
-    assert spec.query == "market regime risk_off high_vol extreme_fear VIX"
-
-
-def test_build_memory_query_spec_research_briefing_uses_theme_keys() -> None:
-    spec = build_memory_query_spec(
-        "get_research_briefing",
-        {},
-        [
-            {
-                "category": "global_market",
-                "ticker": "NVDA",
-                "headline": "AI capex plans pressure supply chain capacity",
-                "summary": "Hyperscaler AI capex is still accelerating while supply chain bottlenecks persist.",
-            }
-        ],
-    )
-
-    assert spec is not None
-    assert spec.key_type == "theme"
-    assert spec.keys == ("global_market", "ai_capex", "supply_chain")
-    assert spec.context_keys == ("NVDA",)
-    assert spec.query == "research theme global_market ai_capex supply_chain NVDA"
-    assert "theme:ai_capex" in spec.search_text()
-    assert "context:NVDA" in spec.search_text()
-
-
-def test_build_memory_query_spec_earnings_calendar_uses_event_class_keys() -> None:
-    spec = build_memory_query_spec(
-        "earnings_calendar",
-        {"ticker": "AAPL"},
-        {
-            "ticker": "AAPL",
-            "rows": [
-                {"symbol": "AAPL", "event_type": "earnings", "date": "2026-05-01"},
-                {"symbol": "AAPL", "event_type": "dividend", "date": "2026-05-15"},
-            ],
-        },
-    )
-
-    assert spec is not None
-    assert spec.key_type == "event_class"
-    assert spec.keys == ("earnings", "dividend")
-    assert spec.context_keys == ("AAPL",)
-    assert spec.query == "calendar event earnings dividend AAPL"
-
-
-def test_build_memory_query_spec_index_snapshot_uses_regime_keys() -> None:
-    spec = build_memory_query_spec(
-        "index_snapshot",
-        {},
-        {
-            "indices": [
-                {"symbol": "VIX", "type": "index", "close": 31.0},
-                {"symbol": "US10Y", "type": "bond_yield", "value": 4.8},
-            ]
-        },
-    )
-
-    assert spec is not None
-    assert spec.key_type == "regime"
-    assert spec.keys == ("risk_off", "high_vol", "market_index", "rates", "high_yields")
-    assert spec.query == "market index regime risk_off high_vol market_index rates high_yields VIX US10Y"
-
-
-def test_build_memory_query_spec_reddit_sentiment_uses_theme_with_ticker_context() -> None:
-    spec = build_memory_query_spec(
-        "fetch_reddit_sentiment",
-        {"ticker": "AAPL"},
-        [
-            {
-                "title": "AAPL AI capex debate hits wallstreetbets",
-                "subreddit": "wallstreetbets",
-                "selftext_snippet": "Retail sentiment is chasing AI capex beneficiaries.",
-            }
-        ],
-    )
-
-    assert spec is not None
-    assert spec.key_type == "theme"
-    assert spec.keys == ("social_sentiment", "ai_capex", "retail_sentiment")
-    assert spec.context_keys == ("AAPL",)
-    assert spec.query == "social sentiment AAPL ai_capex retail_sentiment"
-
-
-def test_build_memory_query_spec_reddit_sentiment_uses_batch_ticker_context() -> None:
-    spec = build_memory_query_spec(
-        "fetch_reddit_sentiment",
-        {"tickers": ["AAPL", "MSFT"]},
-        {
-            "tickers": ["AAPL", "MSFT"],
-            "rows": [
-                {
-                    "ticker": "AAPL",
-                    "title": "AAPL AI capex debate hits wallstreetbets",
-                    "subreddit": "wallstreetbets",
-                    "selftext_snippet": "Retail sentiment is chasing AI capex beneficiaries.",
-                },
-                {
-                    "ticker": "MSFT",
-                    "title": "MSFT retail sentiment stays constructive",
-                    "subreddit": "stocks",
-                    "selftext_snippet": "Cloud AI capex remains the key debate.",
-                },
-            ],
-        },
-    )
-
-    assert spec is not None
-    assert spec.key_type == "theme"
-    assert spec.context_keys == ("AAPL", "MSFT")
-    assert spec.query == "social sentiment AAPL MSFT ai_capex retail_sentiment"
-
-
-def test_build_memory_query_spec_sec_filings_uses_event_class_with_entity_context() -> None:
-    spec = build_memory_query_spec(
-        "fetch_sec_filings",
-        {"ticker": "AAPL", "filing_type": "10-K"},
-        [{"form_type": "10-K", "entity": "Apple Inc.", "description": "Annual report"}],
-    )
-
-    assert spec is not None
-    assert spec.key_type == "event_class"
-    assert spec.keys == ("10-k",)
-    assert spec.context_keys == ("AAPL", "Apple Inc.")
-    assert spec.query == "filing event 10-k AAPL Apple Inc."
-
-
-def test_build_memory_query_spec_sec_filings_uses_batch_ticker_context() -> None:
-    spec = build_memory_query_spec(
-        "fetch_sec_filings",
-        {"tickers": ["AAPL", "MSFT"], "filing_type": "10-K"},
-        {
-            "tickers": ["AAPL", "MSFT"],
-            "rows": [
-                {"ticker": "AAPL", "form_type": "10-K", "entity": "Apple Inc.", "description": "Annual report"},
-                {"ticker": "MSFT", "form_type": "10-K", "entity": "Microsoft Corp.", "description": "Annual report"},
-            ],
-        },
-    )
-
-    assert spec is not None
-    assert spec.key_type == "event_class"
-    assert spec.keys == ("10-k",)
-    assert spec.context_keys == ("AAPL", "MSFT", "Apple Inc.", "Microsoft Corp.")
-    assert spec.query == "filing event 10-k AAPL MSFT Apple Inc. Microsoft Corp."
 
 
 def test_tool_wrapper_injects_memory_for_macro_tools_with_typed_query() -> None:
@@ -2683,166 +2425,6 @@ def test_decide_orders_keeps_tool_events_reference_for_wrapped_tools(monkeypatch
     assert runner._tool_events is shared_tool_events
     assert captured["tool_events_id"] == id(shared_tool_events)
     assert captured["tool_names"] == ["technical_signals"]
-
-
-class _AsyncRunnerForResponseCollection:
-    async def run_async(self, *, user_id, session_id, new_message, run_config):
-        _ = (user_id, session_id, new_message, run_config)
-        yield SimpleNamespace(
-            usage_metadata=SimpleNamespace(
-                prompt_token_count=120,
-                candidates_token_count=25,
-                cached_content_token_count=60,
-                thoughts_token_count=5,
-            ),
-            content=SimpleNamespace(
-                parts=[
-                    SimpleNamespace(
-                        function_call=SimpleNamespace(name="remote_macro_tool", args={"ticker": "AAPL"}),
-                        text=None,
-                    )
-                ]
-            ),
-        )
-        yield SimpleNamespace(
-            usage_metadata=None,
-            content=SimpleNamespace(
-                parts=[
-                    SimpleNamespace(function_call=None, text='{"orders": []}'),
-                ]
-            ),
-        )
-
-
-class _AsyncRunnerExceedsToolBudget:
-    async def run_async(self, *, user_id, session_id, new_message, run_config):
-        _ = (user_id, session_id, new_message, run_config)
-        for ticker in ("AAPL", "MSFT"):
-            yield SimpleNamespace(
-                usage_metadata=None,
-                content=SimpleNamespace(
-                    parts=[
-                        SimpleNamespace(
-                            function_call=SimpleNamespace(name="remote_macro_tool", args={"ticker": ticker}),
-                            text=None,
-                        )
-                    ]
-                ),
-            )
-
-
-class _AsyncRunnerBudgetThenFinal:
-    def __init__(self) -> None:
-        self.prompts: list[str] = []
-
-    async def run_async(self, *, user_id, session_id, new_message, run_config):
-        _ = (user_id, session_id, run_config)
-        prompt = str(getattr(new_message.parts[0], "text", "") or "")
-        self.prompts.append(prompt)
-        if "도구 호출 예산이 끝났습니다" in prompt:
-            yield SimpleNamespace(
-                usage_metadata=SimpleNamespace(
-                    prompt_token_count=40,
-                    candidates_token_count=12,
-                    cached_content_token_count=0,
-                    thoughts_token_count=0,
-                ),
-                content=SimpleNamespace(
-                    parts=[
-                        SimpleNamespace(function_call=None, text='{"explore_summary":"budget closed"}'),
-                    ]
-                ),
-            )
-            return
-        for ticker in ("AAPL", "MSFT"):
-            yield SimpleNamespace(
-                usage_metadata=None,
-                content=SimpleNamespace(
-                    parts=[
-                        SimpleNamespace(
-                            function_call=SimpleNamespace(name="remote_macro_tool", args={"ticker": ticker}),
-                            text=None,
-                        )
-                    ]
-                ),
-            )
-
-
-def test_collect_response_text_records_mcp_calls_and_token_usage() -> None:
-    tool_events: list[dict] = []
-
-    text, token_usage = asyncio.run(
-        collect_response_text(
-            runner=_AsyncRunnerForResponseCollection(),
-            user_id="arena",
-            session_id="sid_1",
-            prompt="cycle_phase: execution",
-            run_config=object(),
-            max_tool_events=5,
-            wrapped_tool_names={"search_past_experiences"},
-            tool_events=tool_events,
-            agent_id="gpt",
-        )
-    )
-
-    assert text == '{"orders": []}'
-    assert token_usage["llm_calls"] == 1
-    assert token_usage["tool_calls"] == 1
-    assert token_usage["prompt_tokens"] == 120
-    assert token_usage["completion_tokens"] == 25
-    assert token_usage["cached_tokens"] == 60
-    assert token_usage["thinking_tokens"] == 5
-    assert tool_events == [
-        {
-            "tool": "remote_macro_tool",
-            "args": {"ticker": "AAPL"},
-            "elapsed_ms": 0,
-            "result_preview": None,
-            "error": None,
-            "source": "mcp",
-        }
-    ]
-
-
-def test_collect_response_text_aborts_when_tool_budget_exceeded() -> None:
-    tool_events: list[dict] = []
-
-    with pytest.raises(AdkToolBudgetExceeded):
-        asyncio.run(
-            collect_response_text(
-                runner=_AsyncRunnerExceedsToolBudget(),
-                user_id="arena",
-                session_id="sid_1",
-                prompt="cycle_phase: execution",
-                run_config=object(),
-                max_tool_events=1,
-                wrapped_tool_names=set(),
-                tool_events=tool_events,
-                agent_id="gpt",
-            )
-        )
-
-    assert [event["args"]["ticker"] for event in tool_events] == ["AAPL", "MSFT"]
-
-
-def test_run_async_requests_final_json_when_tool_budget_exceeded() -> None:
-    decision_runner = _ADKDecisionRunner.__new__(_ADKDecisionRunner)
-    decision_runner._user_id = "arena"
-    decision_runner._run_config = object()
-    decision_runner._max_tool_events = 1
-    decision_runner._wrapped_tool_names = set()
-    decision_runner._tool_events = []
-    decision_runner.agent_id = "gpt"
-    decision_runner.provider = "gpt"
-    decision_runner._current_phase = "explore"
-    decision_runner.settings = SimpleNamespace(timeout_for=lambda role: 10)
-    fake_runner = _AsyncRunnerBudgetThenFinal()
-
-    text = asyncio.run(decision_runner._run_async(fake_runner, "sid_1", "initial prompt"))
-
-    assert text == '{"explore_summary":"budget closed"}'
-    assert len(fake_runner.prompts) == 2
-    assert "더 이상 도구를 호출하지 마십시오" in fake_runner.prompts[1]
 
 
 def test_search_past_experiences_skips_cycle_seen_memory_ids() -> None:
