@@ -2,29 +2,11 @@ from __future__ import annotations
 
 from arena.data.bigquery.execution_store import ExecutionStore
 from arena.models import OrderIntent, RiskDecision, Side
-
-
-class _FakeSession:
-    dataset_fqn = "proj.ds"
-
-    def __init__(self) -> None:
-        self.executed: list[tuple[str, dict]] = []
-        self.fetched: list[tuple[str, dict]] = []
-        self.fetch_result: list[dict] = []
-
-    def resolve_tenant_id(self, tenant_id=None) -> str:
-        return str(tenant_id or "tenant-a")
-
-    def execute(self, sql: str, params: dict) -> None:
-        self.executed.append((sql, dict(params)))
-
-    def fetch_rows(self, sql: str, params: dict) -> list[dict]:
-        self.fetched.append((sql, dict(params)))
-        return list(self.fetch_result)
+from tests.helpers.bigquery import FakeBigQuerySession
 
 
 def test_write_order_intent_persists_cycle_and_llm_call_ids() -> None:
-    session = _FakeSession()
+    session = FakeBigQuerySession()
     store = ExecutionStore(session)
     intent = OrderIntent(
         agent_id="gpt",
@@ -46,8 +28,7 @@ def test_write_order_intent_persists_cycle_and_llm_call_ids() -> None:
 
 
 def test_recent_trade_history_joins_execution_reports_to_order_intents() -> None:
-    session = _FakeSession()
-    session.fetch_result = [{"order_id": "order-1", "rationale": "why"}]
+    session = FakeBigQuerySession(fetch_result=[{"order_id": "order-1", "rationale": "why"}])
     store = ExecutionStore(session)
 
     rows = store.recent_trade_history(
