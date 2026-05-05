@@ -1,0 +1,285 @@
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+from arena.agents.adk_agents import _compact_tool_result_for_prompt
+from arena.agents.adk_runner_bootstrap import build_tool_wrapper
+from arena.tools.registry import ToolEntry
+
+
+def test_compact_validate_order_draft_hides_manual_confirmation_phrase() -> None:
+    out = _compact_tool_result_for_prompt(
+        "validate_order_draft",
+        {
+            "status": "ok",
+            "tenant_id": "local",
+            "scope": "account",
+            "target_agent_id": "investment_chat",
+            "judgment_source": "user+investment_chat",
+            "approval_token": "abc123",
+            "required_confirmation": "CONFIRM abc123",
+            "submission_status": "not_submitted",
+            "approval_required": True,
+            "notional_krw": 100000,
+            "intent": {"ticker": "AAPL", "side": "BUY", "quantity": 1, "rationale": "test"},
+            "risk": {"allowed": True, "reason": "ok", "policy_hits": []},
+        },
+    )
+
+    assert out["approval_required"] is True
+    assert out["approval_ui"] == "approval_card"
+    assert out["submission_status"] == "not_submitted"
+    assert out["intent"]["ticker"] == "AAPL"
+    assert out["risk"] == {"allowed": True, "reason": "ok", "policy_hits": []}
+    assert "approval_token" not in out
+    assert "required_confirmation" not in out
+
+
+def test_compact_tool_result_reddit_drops_url_and_trims_text() -> None:
+    out = _compact_tool_result_for_prompt(
+        "fetch_reddit_sentiment",
+        [
+            {
+                "title": "AAPL sentiment is ripping higher on wallstreetbets and this title is intentionally very long",
+                "subreddit": "wallstreetbets",
+                "score": 123,
+                "num_comments": 45,
+                "created": "2026-03-14T00:00:00+00:00",
+                "url": "https://reddit.com/r/x",
+                "selftext_snippet": "x" * 400,
+            }
+        ],
+        args={"ticker": "AAPL"},
+    )
+
+    assert isinstance(out, list)
+    assert len(out) == 1
+    assert out[0]["subreddit"] == "wallstreetbets"
+    assert "url" not in out[0]
+    assert len(out[0]["selftext_snippet"]) <= 140
+
+
+def test_compact_tool_result_technical_signals_multi_returns_summary_rows() -> None:
+    out = _compact_tool_result_for_prompt(
+        "technical_signals",
+        {
+            "tickers": ["AAPL", "MSFT"],
+            "count": 2,
+            "rows": [
+                {
+                    "ticker": "AAPL",
+                    "price": 100.0,
+                    "rsi_14": 61.2,
+                    "rsi_state": "neutral",
+                    "macd": {"line": 1.0, "signal": 0.8, "hist": 0.2, "state": "bullish"},
+                    "moving_averages": {"sma_20": 98.0, "sma_50": 95.0, "price_vs_sma20": 0.0204},
+                    "bollinger_20_2": {"upper": 102.0, "mid": 98.0, "lower": 94.0, "state": "inside_bands"},
+                    "trend_state": "uptrend",
+                }
+            ],
+        },
+    )
+
+    assert out["count"] == 1
+    assert out["rows"][0]["ticker"] == "AAPL"
+    assert out["rows"][0]["macd_state"] == "bullish"
+    assert "macd" not in out["rows"][0]
+
+
+def test_compact_tool_result_technical_signals_reports_truncation() -> None:
+    raw_rows = [
+        {
+            "ticker": f"T{i:02d}",
+            "price": 100.0 + i,
+            "rsi_14": 50.0,
+            "rsi_state": "neutral",
+            "macd": {"state": "neutral"},
+            "moving_averages": {"price_vs_sma20": 0.01},
+            "bollinger_20_2": {"state": "inside_bands"},
+            "trend_state": "flat",
+        }
+        for i in range(11)
+    ]
+
+    out = _compact_tool_result_for_prompt(
+        "technical_signals",
+        {"tickers": [row["ticker"] for row in raw_rows], "count": 11, "rows": raw_rows},
+        args={"tickers": [row["ticker"] for row in raw_rows]},
+    )
+
+    assert len(out["rows"]) == 10
+    assert out["compaction"] == {
+        "requested_count": 11,
+        "returned_count": 11,
+        "visible_count": 10,
+        "visible_limit": 10,
+        "truncated": True,
+    }
+
+
+def test_compact_tool_result_earnings_calendar_reports_truncation() -> None:
+    rows = [
+        {"date": "2026-05-01", "symbol": f"T{i:02d}", "name": "Name", "time": "AMC", "eps_forecast": "1.00"}
+        for i in range(11)
+    ]
+
+    out = _compact_tool_result_for_prompt(
+        "earnings_calendar",
+        {"ticker": None, "tickers": [row["symbol"] for row in rows], "count": 11, "rows": rows},
+        args={"tickers": [row["symbol"] for row in rows]},
+    )
+
+    assert len(out["rows"]) == 10
+    assert out["compaction"]["requested_count"] == 11
+    assert out["compaction"]["returned_count"] == 11
+    assert out["compaction"]["visible_limit"] == 10
+    assert out["compaction"]["truncated"] is True
+
+
+def test_compact_tool_result_screen_market_keeps_bucket_reason_and_value_fields() -> None:
+    out = _compact_tool_result_for_prompt(
+        "screen_market",
+        [
+            {
+                "ticker": "PBR",
+                "bucket": "value",
+                "bucket_rank": 1,
+                "score": 2.14,
+                "reason": "Valuation support: PER 6.2, PBR 1.1",
+                "reason_for": "Valuation support: PER 6.2, PBR 1.1",
+                "reason_risk": "Screen-only evidence; confirm first.",
+                "ret_20d": 0.11,
+                "ret_5d": -0.02,
+                "volatility_20d": 0.21,
+                "sentiment_score": 0.08,
+                "per": 6.2,
+                "pbr": 1.1,
+                "roe": 18.0,
+                "debt_ratio": 72.0,
+                "close_price_krw": 18340.0,
+            }
+        ],
+    )
+
+    assert out[0]["ticker"] == "PBR"
+    assert out[0]["bucket"] == "value"
+    assert out[0]["reason"].startswith("Valuation support")
+    assert out[0]["reason_for"].startswith("Valuation support")
+    assert out[0]["reason_risk"] == "Screen-only evidence; confirm first."
+    assert out[0]["per"] == 6.2
+    assert out[0]["pbr"] == 1.1
+
+
+def test_compact_tool_result_recommend_opportunities_keeps_validation_fields() -> None:
+    out = _compact_tool_result_for_prompt(
+        "recommend_opportunities",
+        {
+            "status": "ok",
+            "recommendations": [
+                {
+                    "ticker": "PBR",
+                    "profile": "value",
+                    "bucket": "value",
+                    "recommendation_rank": 1,
+                    "recommendation_score": 1.7,
+                    "score_components": {"forecast": 0.5, "technical": 0.2},
+                    "signal_contributions": [{"signal": "ep", "contribution": 0.4}],
+                    "confidence": "high",
+                    "action": "candidate",
+                    "reason_for": "Validated value candidate",
+                    "reason_risk": "valuation risk",
+                    "optimizer_weight": 0.18,
+                    "evidence_level": "validated",
+                }
+            ],
+            "optimizer": {"status": "ok", "strategy": "forecast_max_sharpe", "weights": {"PBR": 0.18}},
+            "diagnostics": {
+                "score_policy": {
+                    "version": "heuristic_ranker_v1",
+                    "score_formula": "0.40*screen_rank_score + ...",
+                },
+                "selection_scope": {
+                    "mode": "ranked_union",
+                    "global_limit": 8,
+                    "per_profile_limit": 8,
+                    "loaded_rows": 73,
+                    "requested_buckets": ["value"],
+                },
+            },
+        },
+    )
+
+    assert out["status"] == "ok"
+    assert out["recommendations"][0]["ticker"] == "PBR"
+    assert out["recommendations"][0]["profile"] == "value"
+    assert out["recommendations"][0]["signal_contributions"] == [{"signal": "ep", "contribution": 0.4}]
+    assert out["recommendations"][0]["optimizer_weight"] == 0.18
+    assert out["recommendations"][0]["score_components"]["forecast"] == 0.5
+    assert out["optimizer"]["weights"] == {"PBR": 0.18}
+    assert out["score_policy"]["version"] == "heuristic_ranker_v1"
+    assert out["selection_scope"]["global_limit"] == 8
+    assert out["selection_scope"]["per_profile_limit"] == 8
+    assert out["selection_scope"]["loaded_rows"] == 73
+
+
+def test_tool_wrapper_injects_memory_for_macro_tools_with_typed_query() -> None:
+    captured: dict[str, object] = {}
+
+    def macro_snapshot() -> dict:
+        return {
+            "indicators": {
+                "fed_funds_rate": {"value": 5.25, "unit": "%"},
+                "treasury_10y": {"value": 4.8, "unit": "%"},
+            },
+            "source": "fred",
+        }
+
+    def search_tool_memories(query):
+        captured["query"] = query
+        return [{"event_id": "mem_macro", "summary": "High-rate regimes require smaller gross exposure."}]
+
+    wrapper = build_tool_wrapper(
+        ToolEntry(
+            tool_id="macro_snapshot",
+            name="macro_snapshot",
+            description="Fetch macro indicators.",
+            category="macro",
+            callable=macro_snapshot,
+        ),
+        settings=SimpleNamespace(memory_policy=None),
+        agent_id="gpt",
+        tool_events=[],
+        update_candidate_ledger=lambda *args: None,
+        search_tool_memories=search_tool_memories,
+        apply_tool_schema_metadata=lambda fn, **kwargs: fn,
+    )
+
+    out = wrapper()
+
+    assert out["_memory_context"][0]["summary"] == "High-rate regimes require smaller gross exposure."
+    query = captured["query"]
+    assert getattr(query, "key_type") == "regime"
+    assert "regime:high_rates" in query.search_text()
+
+
+def test_compact_tool_result_get_fundamentals_reduces_meta_lists() -> None:
+    out = _compact_tool_result_for_prompt(
+        "get_fundamentals",
+        {
+            "requested": ["AAPL", "MSFT", "XYZ"],
+            "eligible": ["AAPL", "MSFT"],
+            "excluded": ["XYZ"],
+            "rows": [
+                {"ticker": "AAPL", "market": "us", "per": 31.5, "pbr": 45.2, "eps": 6.38, "currency": "USD", "exchange": "NAS"},
+                {"ticker": "MSFT", "market": "us", "per": 34.0, "pbr": 12.1, "eps": 12.5, "currency": "USD", "exchange": "NAS"},
+            ],
+            "errors": [{"ticker": "XYZ", "error": "ticker not found in upstream fundamentals payload"}],
+        },
+    )
+
+    assert out["requested_count"] == 3
+    assert out["eligible_count"] == 2
+    assert out["excluded_count"] == 1
+    assert out["excluded"] == ["XYZ"]
+    assert out["rows"][0]["ticker"] == "AAPL"
+    assert out["errors"][0]["ticker"] == "XYZ"
