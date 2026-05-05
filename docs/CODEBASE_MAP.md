@@ -150,7 +150,7 @@ ADK `FunctionTool`은 함수 signature, type hint, docstring, helper metadata를
 - `arena/agents/investment_chat/factory.py`
 - `arena/ui/routes/investment_chat.py`
 - `arena/ui/investment_chat_adk.py`
-- `tests/test_investment_chat_ui.py`
+- `tests/ui/test_investment_chat_*.py`
 
 ### Agent/Admin 설정
 
@@ -200,7 +200,7 @@ ADK `FunctionTool`은 함수 signature, type hint, docstring, helper metadata를
 
 | 변경 영역 | 우선 실행할 테스트 |
 | --- | --- |
-| Investment Chat UI/approval | `tests/test_investment_chat_ui.py` |
+| Investment Chat UI/approval | `tests/ui/test_investment_chat_*.py` |
 | ADK agent/tool schema | `tests/test_adk_agents.py`, `tests/test_new_tools.py`, `tests/test_tool_registry.py` |
 | Agent/admin config | `tests/test_agents_config.py`, `tests/ui/test_settings_routes.py`, `tests/ui/test_admin_agent_routes.py`, `tests/test_runtime_config.py` |
 | Local DuckDB | `tests/test_init_local_cli.py`, `tests/test_clone_bq_local.py`, `tests/test_duckdb_schema.py`, `tests/test_local_repository.py` |
@@ -218,7 +218,7 @@ python -m arena.cli --help
 python -m arena.cli run-agent-cycle --help
 python -m arena.cli init-local --db-path ./data/arena.duckdb
 python -m arena.cli clone-bq-local --db-path ./data/arena.duckdb --project rising-parser-464807-f6 --dataset llm_arena --dry-run
-TMPDIR=/tmp PYTHONDONTWRITEBYTECODE=1 python -m pytest tests/test_investment_chat_ui.py tests/test_adk_agents.py -q -p no:cacheprovider
+TMPDIR=/tmp PYTHONDONTWRITEBYTECODE=1 python -m pytest tests/ui/test_investment_chat_*.py tests/adk -q -p no:cacheprovider
 ```
 
 ## 유지 규칙

@@ -1248,7 +1248,7 @@ Cloud Run Service
 | `test_opportunity_ranker.py` | Signal-IC meta-learner 학습/스코어링 |
 | `test_signals.py` | Layer 1 signal definitions |
 | `test_new_tools.py` | 신규 도구 (`recommend_opportunities`, `trade_performance`) |
-| `test_investment_chat_ui.py` | Chat ADK shell, order/config approval bridges, tool schema quality |
+| `tests/ui/test_investment_chat_*.py` | Chat ADK shell, order/config approval bridges, tool schema quality |
 | `test_kis_fundamentals_ingestor.py` / `test_sec_fundamentals_ingestor.py` / `test_fmp_fundamentals_ingestor.py` | Fundamentals ingestors |
 | `tests/ui/test_*_routes.py` | Settings/admin agent/memory/board/chart/auth UI routes |
 | `test_ui_helper_modules.py` | UI helper modules |
