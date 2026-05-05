@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -25,9 +26,12 @@ from arena.broker.open_trading import KISOpenTradingBroker
 from arena.broker.paper import KISHttpBroker, PaperBroker
 from arena.config import Settings, merge_agent_risk_settings
 from arena.execution.gateway import ExecutionGateway
+from arena.logging_utils import failure_extra
 from arena.models import ExecutionStatus, OrderIntent, Side
 from arena.risk import RiskEngine
 from arena.tools.registry import ToolEntry
+
+logger = logging.getLogger(__name__)
 
 
 def _parse_audit_detail(row: dict[str, Any]) -> dict[str, Any]:
@@ -187,6 +191,7 @@ def _build_order_tool_entries(
             return {"status": "error", "error": "ticker is required"}
         if safe_float(quantity) <= 0 or safe_float(price_krw) <= 0:
             return {"status": "error", "error": "quantity and price_krw must be positive"}
+        rationale_text = str(rationale or "").strip()
         scope_token = normalize_order_scope(scope)
         if not scope_token:
             return {"status": "error", "error": "scope must be account or agent_sleeve"}
@@ -233,7 +238,7 @@ def _build_order_tool_entries(
             price_native=price_native,
             quote_currency=str(quote_currency or "").strip().upper(),
             fx_rate=float(fx_rate or 0.0),
-            rationale=str(rationale or "").strip() or "chat_order_draft",
+            rationale=rationale_text or "chat_order_draft",
             strategy_refs=strategy_refs,
         )
         include_simulated = settings.trading_mode.strip().lower() != "live"
@@ -413,6 +418,21 @@ def _build_order_tool_entries(
         try:
             memory_store = build_execution_memory(repo, settings)
         except Exception as exc:
+            logger.warning(
+                "[yellow]Investment chat order memory store init failed[/yellow] tenant=%s intent=%s err=%s",
+                tenant,
+                intent.intent_id,
+                str(exc),
+                extra=failure_extra(
+                    "chat_order_memory_store_init_failed",
+                    exc,
+                    tenant_id=tenant,
+                    intent_id=intent.intent_id,
+                    scope=scope_token,
+                    target_agent_id=intent.agent_id,
+                ),
+                exc_info=True,
+            )
             append_chat_audit(
                 repo,
                 tenant_id=tenant,
@@ -479,6 +499,23 @@ def _build_order_tool_entries(
                     memory_warnings.append(warning)
             except Exception as exc:
                 memory_warnings.append("record_chat_decision")
+                logger.warning(
+                    "[yellow]Investment chat order memory sync failed[/yellow] tenant=%s intent=%s order=%s err=%s",
+                    tenant,
+                    intent.intent_id,
+                    report.order_id,
+                    str(exc),
+                    extra=failure_extra(
+                        "chat_order_memory_sync_failed",
+                        exc,
+                        tenant_id=tenant,
+                        intent_id=intent.intent_id,
+                        order_id=report.order_id,
+                        scope=scope_token,
+                        target_agent_id=intent.agent_id,
+                    ),
+                    exc_info=True,
+                )
                 append_chat_audit(
                     repo,
                     tenant_id=tenant,
@@ -652,7 +689,13 @@ def _build_order_tool_entries(
         ToolEntry(
             tool_id="submit_order_with_confirmation",
             name="submit_order_with_confirmation",
-            description="Preferred order submission tool for investment chat. Validates the proposed order, asks for ADK tool confirmation, and submits only after the user approves in the ADK confirmation dialog.",
+            description=(
+                "Preferred order submission tool for investment chat. Validates the proposed order, asks for ADK "
+                "tool confirmation, and submits only after the user approves in the ADK confirmation dialog. "
+                "Write rationale as an ontology-friendly investment memo with explicit ticker names, clear "
+                "catalyst/risk/thesis/outcome terms, user intent, evidence or account/sleeve context, and why the "
+                "side/size is appropriate."
+            ),
             category="execution",
             callable=submit_order_with_confirmation,
             tier="core",
@@ -662,7 +705,12 @@ def _build_order_tool_entries(
         ToolEntry(
             tool_id="validate_order_draft",
             name="validate_order_draft",
-            description="Builds and risk-checks a proposed order draft without submitting it. Always returns submission_status='not_submitted'.",
+            description=(
+                "Builds and risk-checks a proposed order draft without submitting it. Always returns "
+                "submission_status='not_submitted'. Write rationale as an ontology-friendly investment memo with "
+                "explicit ticker names, clear catalyst/risk/thesis/outcome terms, user intent, evidence or "
+                "account/sleeve context, and why the side/size is appropriate."
+            ),
             category="execution",
             callable=validate_order_draft,
             tier="core",

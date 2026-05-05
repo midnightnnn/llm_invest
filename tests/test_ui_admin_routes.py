@@ -241,7 +241,9 @@ def _client_with_repo_and_credential_store(monkeypatch, store_cls) -> tuple[Dire
     monkeypatch.setenv("ARENA_UI_AUTH_ENABLED", "false")
     monkeypatch.setattr("arena.ui.app.CredentialStore", store_cls)
     repo = _DummyRepo()
-    app = _build_app(repo=repo, settings=load_settings())
+    settings = load_settings()
+    settings.arena_mode = "gcp"
+    app = _build_app(repo=repo, settings=settings)
     return DirectRouteClient(app), repo
 
 

@@ -282,6 +282,40 @@ def test_record_thesis_lifecycle_opens_new_thesis_on_filled_buy() -> None:
     assert vector_store.saved == []
 
 
+def test_record_thesis_lifecycle_preserves_full_thesis_summary() -> None:
+    repo = _FakeRepo()
+    store = MemoryStore(repo=repo, vector_store=_FakeVectorStore())
+    long_rationale = (
+        "AAPL의 서비스 매출 성장과 잉여현금흐름 안정성이 AAPL 매수 thesis를 지지한다. "
+        + "sleeve context를 감안해 목표 비중을 유지 가능한 범위에서 올린다. " * 12
+        + "THESIS_TAIL"
+    )
+    intent = OrderIntent(
+        agent_id="gpt",
+        ticker="AAPL",
+        side=Side.BUY,
+        quantity=2.0,
+        price_krw=100_000,
+        rationale=long_rationale,
+        strategy_refs=["momentum"],
+        intent_id="intent_open_long",
+        cycle_id="cycle_open_long",
+    )
+    decision = RiskDecision(allowed=True, reason="approved", policy_hits=[])
+    report = ExecutionReport(
+        status=ExecutionStatus.FILLED,
+        order_id="ord_open_long",
+        filled_qty=2.0,
+        avg_price_krw=100_000.0,
+        message="filled",
+    )
+
+    store.record_thesis_lifecycle(intent=intent, decision=decision, report=report, snapshot_before=None)
+
+    assert repo.events[0].payload["thesis_summary"] == long_rationale
+    assert repo.events[0].payload["thesis_summary"].endswith("THESIS_TAIL")
+
+
 def test_record_thesis_lifecycle_skips_non_material_active_buy() -> None:
     repo = _FakeRepo()
     repo.active_thesis_rows["AAPL"] = {

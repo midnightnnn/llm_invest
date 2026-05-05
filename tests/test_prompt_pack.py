@@ -32,6 +32,10 @@ def test_prompt_pack_loads_text_templates_from_central_package() -> None:
 
     assert prompt_path("adk", "core_prompt.txt").exists()
     assert prompt_path("adk", "system_prompt.txt").exists()
+    assert prompt_path("adk", "explore_shared_format.txt").exists()
+    assert prompt_path("adk", "explore_solo_format.txt").exists()
+    assert prompt_path("adk", "execution_format.txt").exists()
+    assert prompt_path("adk", "board_format.txt").exists()
     assert prompt_path("investment_chat", "system_prompt.txt").exists()
     assert "{agent_id}" in PromptPack.file_core_prompt()
     assert "적극적인 포트폴리오 관리" in PromptPack.file_user_prompt_default()
@@ -55,6 +59,25 @@ def test_prompt_pack_renders_resume_and_board_prompts() -> None:
     assert '"max_tool_calls": 5' in resume
     assert board.startswith("cycle_phase: board")
     assert "주문 없음" in board
+
+
+def test_execution_prompt_describes_ontology_friendly_order_rationale() -> None:
+    prompt = PromptPack.render_decision_prompt(
+        {
+            "cycle_phase": "execution",
+            "portfolio": {"cash_krw": 1000},
+            "order_budget": {"max_buy_notional_krw": 1000},
+        },
+        [],
+        max_tool_calls=5,
+    )
+
+    assert "ontology-friendly investment memo" in prompt
+    assert "explicit ticker names" in prompt
+    assert "catalyst/risk/thesis/outcome" in prompt
+    assert "memory/thesis summary" not in prompt
+    assert "generic placeholders" not in prompt
+    assert "2-4" not in prompt
 
 
 def test_prompt_pack_builds_tool_catalog_payload_from_registry() -> None:
@@ -113,3 +136,6 @@ def test_prompt_pack_renders_investment_chat_instruction() -> None:
     assert "Confirmed 체크박스" in prompt
     assert "Do not ask the user to type CONFIRM" in prompt
     assert "exact confirmation phrase" not in prompt
+    assert "memory/thesis summaries" not in prompt
+    assert "generic placeholders" not in prompt
+    assert "2-4" not in prompt

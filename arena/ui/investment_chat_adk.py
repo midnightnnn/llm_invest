@@ -310,6 +310,235 @@ class InvestmentChatAgentLoader(BaseAgentLoader):
         ]
 
 
+_MOBILE_OVERRIDE_OPEN = "<!-- arena-mobile-overrides:start -->"
+_MOBILE_OVERRIDE_CLOSE = "<!-- arena-mobile-overrides:end -->"
+_MOBILE_OVERRIDE_CSS = """\
+<style>
+@media (max-width: 767px) {
+  /* fit: release desktop min-widths */
+  .chat-card { min-width: 0 !important; }
+  .callback-form { min-width: 0 !important; }
+  .selector-drawer.match-side-panel-width,
+  side-panel-width { width: min(100vw, 92vw) !important; max-width: 100vw !important; }
+  .eval-compare-container .actual-result,
+  .eval-compare-container .expected-result { min-width: 0 !important; max-width: 100% !important; }
+  .chat-input-container { padding: 12px 12px 16px !important; }
+  .chat-messages { padding: 12px !important; }
+  html, body { overflow-x: hidden !important; }
+
+  /* drawer: float as overlay so chat (and its hamburger) stays reachable */
+  selector-drawer { width: min(280px, 80vw) !important; }
+  mat-drawer.mat-drawer-side {
+    position: absolute !important;
+    top: 0 !important;
+    bottom: 0 !important;
+    z-index: 100 !important;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, .18) !important;
+  }
+  mat-drawer-content,
+  .mat-drawer-content {
+    margin-left: 0 !important;
+    margin-right: 0 !important;
+  }
+  mat-drawer-container.mat-drawer-container-has-open
+    .mat-drawer-content::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: rgba(15, 23, 42, .28);
+    z-index: 50;
+    pointer-events: none;
+  }
+
+  /* messages: contain overflow from markdown tables / long tokens */
+  .message-card,
+  .message-text,
+  .message-content { max-width: 100% !important; min-width: 0 !important; }
+  .message-text { overflow-wrap: anywhere !important; word-break: break-word !important; }
+  .message-text table {
+    display: block !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch;
+  }
+  .message-text th,
+  .message-text td {
+    padding: 4px 8px !important;
+    white-space: nowrap;
+  }
+  .message-text pre {
+    max-width: 100% !important;
+    overflow-x: auto !important;
+  }
+  .message-text img,
+  .message-text video,
+  .message-text canvas { max-width: 100% !important; height: auto !important; }
+
+  /* toolbar: prevent icon overlap on the right (theme toggle + user avatar)
+     covers both chat-page toolbar and any nested side-panel toolbar that
+     re-uses the same components */
+  .toolbar { padding: 0 8px !important; gap: 4px !important; flex-wrap: nowrap !important; }
+  app-toolbar { padding: 0 6px !important; flex-wrap: nowrap !important; }
+  .toolbar-actions, .toolbar-group {
+    gap: 6px !important;
+    flex-wrap: nowrap !important;
+    flex-shrink: 0 !important;
+  }
+  user-avatar-button, .user-avatar-button {
+    margin-left: 0 !important;
+    flex-shrink: 0 !important;
+  }
+  theme-toggle-button, .theme-toggle-button {
+    margin-right: 0 !important;
+    margin-left: 0 !important;
+    flex-shrink: 0 !important;
+    width: 32px !important;
+    height: 32px !important;
+  }
+  user-avatar, .user-avatar {
+    width: 28px !important;
+    height: 28px !important;
+    min-width: 28px !important;
+    font-size: 13px !important;
+    flex-shrink: 0 !important;
+  }
+  user-avatar-button mat-icon, .user-avatar-button mat-icon {
+    font-size: 20px !important;
+    width: 20px !important;
+    height: 20px !important;
+  }
+  theme-toggle-button mat-icon, .theme-toggle-button mat-icon {
+    font-size: 18px !important;
+    width: 18px !important;
+    height: 18px !important;
+  }
+
+  /* drawer content: prevent right-side clipping inside the hamburger drawer */
+  selector-drawer, selector-drawer .mat-drawer-inner-container {
+    overflow-x: hidden !important;
+    box-sizing: border-box !important;
+  }
+  selector-drawer-header {
+    padding: 8px 8px 8px 12px !important;
+    gap: 8px !important;
+    min-width: 0 !important;
+  }
+  selector-drawer-title {
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+    min-width: 0 !important;
+    flex: 1 1 auto !important;
+  }
+  app-selector-search { padding: 0 8px 4px !important; }
+  app-selector-list { padding: 0 6px !important; }
+  app-selector-item {
+    padding: 10px 8px !important;
+    gap: 8px !important;
+    min-width: 0 !important;
+    box-sizing: border-box !important;
+  }
+  app-selector-item-name {
+    min-width: 0 !important;
+    flex: 1 1 auto !important;
+  }
+  session-info {
+    padding: 8px !important;
+    min-width: 0 !important;
+    overflow: hidden !important;
+  }
+  session-info .session-header { gap: 4px !important; min-width: 0 !important; }
+  session-info .session-header .session-id { min-width: 0 !important; }
+
+  /* chat input: fill viewport on mobile (was capped to 88%) */
+  .chat-input {
+    width: 100% !important;
+    padding: 8px 10px !important;
+    box-sizing: border-box !important;
+  }
+  .chat-input-content-row { gap: 8px !important; }
+  .chat-input-actions { margin-top: 8px !important; gap: 4px !important; }
+
+  /* iOS auto-zoom prevention: text inputs need >=16px font-size */
+  input-box,
+  .chat-input-box,
+  textarea.chat-input-box,
+  .mat-mdc-form-field input,
+  .mat-mdc-form-field textarea,
+  app-selector-search-field input {
+    font-size: 16px !important;
+  }
+  input-box { line-height: 22px !important; }
+
+  /* toolbar selector buttons: cap tighter so user/theme stay reachable */
+  selector-button {
+    max-width: min(160px, 35vw) !important;
+    padding: 4px 8px !important;
+  }
+
+  /* trace row: release the desktop-only fixed left column */
+  trace-row-left {
+    min-width: 0 !important;
+    width: 40% !important;
+    max-width: 50% !important;
+  }
+
+  /* hover-only message action buttons: always visible on touch */
+  .message-card:hover button,
+  .message-card button,
+  .message-feedback-container button { visibility: visible !important; }
+
+  /* momentum scroll on touch */
+  .chat-messages,
+  .mat-drawer-inner-container,
+  app-selector-list,
+  selector-drawer-content,
+  .mat-mdc-dialog-content,
+  .message-text pre,
+  .message-text table { -webkit-overflow-scrolling: touch !important; }
+
+  /* dialog: maximize content area on small screens */
+  .mat-mdc-dialog-panel {
+    width: calc(100vw - 16px) !important;
+    max-width: calc(100vw - 16px) !important;
+  }
+  .mat-mdc-dialog-content { padding: 12px 16px !important; }
+
+  /* subtle tap highlight (avoid blue flash on every tap) */
+  button, [role="button"], a, mat-list-item, mat-option {
+    -webkit-tap-highlight-color: rgba(0, 0, 0, .04);
+  }
+
+  /* safe-area inset (iOS notch / home indicator) on bottom-anchored UI */
+  .chat-input-container {
+    padding-bottom: max(16px, env(safe-area-inset-bottom)) !important;
+  }
+}
+</style>
+"""
+
+
+def _inject_mobile_overrides(index_html_path: Path) -> None:
+    if not index_html_path.exists():
+        return
+    text = index_html_path.read_text(encoding="utf-8")
+    block = f"{_MOBILE_OVERRIDE_OPEN}\n{_MOBILE_OVERRIDE_CSS}{_MOBILE_OVERRIDE_CLOSE}\n"
+    if text.count(_MOBILE_OVERRIDE_OPEN) == 1 and block in text:
+        return
+    while True:
+        start = text.find(_MOBILE_OVERRIDE_OPEN)
+        end = text.find(_MOBILE_OVERRIDE_CLOSE)
+        if start == -1 or end == -1 or end <= start:
+            break
+        text = text[:start] + text[end + len(_MOBILE_OVERRIDE_CLOSE):].lstrip("\n")
+    head_close = text.lower().find("</head>")
+    if head_close < 0:
+        return
+    patched = text[:head_close] + block + text[head_close:]
+    index_html_path.write_text(patched, encoding="utf-8")
+
+
 def _copy_adk_browser_assets(*, url_prefix: str) -> Path | None:
     import google.adk.cli.fast_api as adk_fast_api
 
@@ -338,6 +567,7 @@ def _copy_adk_browser_assets(*, url_prefix: str) -> Path | None:
     if config.get("backendUrl") != url_prefix:
         config["backendUrl"] = url_prefix
         config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
+    _inject_mobile_overrides(dest / "index.html")
     return dest
 
 

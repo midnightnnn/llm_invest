@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -409,6 +410,20 @@ def test_investment_chat_wrapped_adk_confirmation_tool_builds_declaration(monkey
     assert "tool_context" not in json.dumps(declaration.model_dump(), default=str)
 
 
+def test_chat_order_tool_schema_describes_ontology_friendly_rationale(monkeypatch) -> None:
+    from google.adk.tools.function_tool import FunctionTool
+
+    repo = _ChatOrderRepo()
+    agent = _build_fake_chat_agent(monkeypatch, repo)
+    tool = next(candidate for candidate in agent.tools if candidate.__name__ == "submit_order_with_confirmation")
+
+    declaration = FunctionTool(tool)._get_declaration()
+    dumped = json.dumps(declaration.model_dump(), ensure_ascii=False, default=str)
+
+    assert "ontology-friendly investment memo" in dumped
+    assert "explicit ticker names" in dumped
+
+
 def _build_raw_chat_tools(monkeypatch, repo: _ChatOrderRepo, *, settings=None, include_internal_bridge: bool = False):
     from arena.agents.investment_chat import memory as chat_memory
     from arena.agents.investment_chat.order_tools import build_order_bridge_tool_entries
@@ -428,6 +443,24 @@ def _build_raw_chat_tools(monkeypatch, repo: _ChatOrderRepo, *, settings=None, i
             build_order_bridge_tool_entries(repo=repo, settings=tool_settings, tenant_id="local")
         )
     return {entry.name: entry.callable for entry in entries}
+
+
+def test_chat_order_draft_does_not_block_rationale_by_phrase(monkeypatch) -> None:
+    repo = _ChatOrderRepo()
+    tools = _build_raw_chat_tools(monkeypatch, repo)
+
+    result = tools["validate_order_draft"](
+        ticker="AAPL",
+        side="BUY",
+        quantity=1,
+        price_krw=100_000,
+        rationale="매수 근거",
+        exchange_code="NASD",
+        instrument_id="NASD:AAPL",
+    )
+
+    assert result["status"] == "ok"
+    assert result["intent"]["rationale"] == "매수 근거"
 
 
 def test_chat_order_tools_require_confirmation_and_are_idempotent(monkeypatch) -> None:
@@ -808,6 +841,35 @@ def test_refresh_account_snapshot_tool_calls_sync_service(monkeypatch) -> None:
     assert result["status"] == "ok"
     assert result["total_equity_krw"] == 2.0
     assert calls["repo"] is repo
+
+
+def test_refresh_account_snapshot_logs_unexpected_sync_failure(monkeypatch, caplog) -> None:
+    from arena.agents.investment_chat import account_tools
+
+    repo = _ChatOrderRepo()
+    repo.runtime_credentials["local"] = {"kis_secret_name": "local-local-kis"}
+    agent = _build_fake_chat_agent(monkeypatch, repo)
+    tools = {getattr(tool, "__name__", ""): tool for tool in agent.tools}
+
+    class _FailingAccountSyncService:
+        def __init__(self, *, settings, repo):
+            _ = settings, repo
+
+        def sync_account_snapshot(self):
+            raise RuntimeError("sync boom")
+
+    monkeypatch.setattr(account_tools, "AccountSyncService", _FailingAccountSyncService)
+
+    with caplog.at_level(logging.WARNING):
+        result = tools["refresh_account_snapshot"]()
+
+    assert result["status"] == "error"
+    failure_record = next(
+        record
+        for record in caplog.records
+        if getattr(record, "event", "") == "chat_account_refresh_failed"
+    )
+    assert failure_record.exc_info is not None
 
 
 def test_refresh_account_snapshot_defaults_to_total_account_markets(monkeypatch) -> None:

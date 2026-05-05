@@ -42,6 +42,7 @@ def _run_post_cycle_maintenance(
                 exc,
                 tenant_id=tenant,
             ),
+            exc_info=True,
         )
 
     try:
@@ -57,6 +58,7 @@ def _run_post_cycle_maintenance(
                 exc,
                 tenant_id=tenant,
             ),
+            exc_info=True,
         )
 
     try:
@@ -72,6 +74,7 @@ def _run_post_cycle_maintenance(
                 exc,
                 tenant_id=tenant,
             ),
+            exc_info=True,
         )
 
     try:
@@ -82,6 +85,12 @@ def _run_post_cycle_maintenance(
             "[yellow]Post-cycle memory forgetting tuner failed; continuing[/yellow] tenant=%s err=%s",
             tenant,
             str(exc),
+            extra=failure_extra(
+                "post_cycle_memory_forgetting_tuner_failed",
+                exc,
+                tenant_id=tenant,
+            ),
+            exc_info=True,
         )
 
 
@@ -226,6 +235,13 @@ def _run_agent_cycle_once_guarded(
                     "[yellow]Tenant lease completion failed[/yellow] tenant=%s status=failed err=%s",
                     tenant,
                     str(lease_exc),
+                    extra=failure_extra(
+                        "tenant_lease_completion_failed",
+                        lease_exc,
+                        tenant_id=tenant,
+                        status="failed",
+                    ),
+                    exc_info=True,
                 )
         raise
     else:
@@ -243,6 +259,13 @@ def _run_agent_cycle_once_guarded(
                     "[yellow]Tenant lease completion failed[/yellow] tenant=%s status=success err=%s",
                     tenant,
                     str(lease_exc),
+                    extra=failure_extra(
+                        "tenant_lease_completion_failed",
+                        lease_exc,
+                        tenant_id=tenant,
+                        status="success",
+                    ),
+                    exc_info=True,
                 )
 
 

@@ -411,7 +411,7 @@ def build_order_intents(
         ticker = str(order.get("ticker", "")).strip().upper()
         target_weight = _clamped_unit_float(order.get("target_weight")) if side_raw == "BUY" else 0.0
         sell_ratio = _clamped_unit_float(order.get("sell_ratio")) if side_raw == "SELL" else 0.0
-        rationale = str(order.get("rationale", ""))[:1200]
+        rationale = str(order.get("rationale", ""))
         strategy_refs = order.get("strategy_refs", [])
         if not isinstance(strategy_refs, list):
             strategy_refs = []

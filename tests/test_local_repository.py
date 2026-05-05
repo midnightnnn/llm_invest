@@ -311,6 +311,32 @@ def test_latest_memory_compaction_cycle_id_uses_latest_matching_cycle(repo):
     assert cycle_id == "cycle-new"
 
 
+def test_relation_extraction_pending_sources_returns_source_text(repo):
+    t = _now()
+    _seed_memory_event(
+        repo,
+        event_id="rel-source",
+        agent_id="gpt",
+        summary="AI demand supports NVDA margin recovery.",
+        ts=t,
+    )
+
+    rows = repo.relation_extraction_pending_sources(
+        limit=10,
+        source_table="agent_memory_events",
+        event_types=["lesson"],
+        trading_mode="paper",
+        extractor_version="semantic_relation_extractor_v1",
+        prompt_version="semantic_relation_prompt_v2",
+        ontology_version="semantic_relation_ontology_v1",
+        tenant_id="tenant-a",
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["source_text"] == "AI demand supports NVDA margin recovery."
+    assert "text" not in rows[0]
+
+
 def test_compaction_reflections_for_cycle_returns_existing_reflections(repo):
     t = _now()
     repo.execute(

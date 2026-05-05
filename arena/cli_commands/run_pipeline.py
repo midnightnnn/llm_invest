@@ -88,6 +88,7 @@ def _batch_tenant_work(
                             tenant_id=tenant,
                             phase=phase,
                         ),
+                        exc_info=True,
                     )
 
             snapshot = cli._run_reconciliation_guard(
@@ -549,6 +550,13 @@ def _record_shared_prep_session(
             "[yellow]shared_prep_sessions insert failed[/yellow] err=%s row=%s",
             str(exc),
             {k: v for k, v in row.items() if k != "detail_json"},
+            extra=failure_extra(
+                "shared_prep_session_insert_failed",
+                exc,
+                stage=stage,
+                market=market,
+            ),
+            exc_info=True,
         )
 
 
@@ -719,6 +727,7 @@ def cmd_run_shared_prep(
                             stage=stage_norm,
                             market=market_override or "all",
                         ),
+                        exc_info=True,
                     )
                     raise SystemExit(8)
             logger.info(
@@ -856,6 +865,7 @@ def cmd_run_shared_prep(
                                 stage=stage_norm,
                                 market=market_override or "all",
                             ),
+                            exc_info=True,
                         )
                         raise SystemExit(8)
 
@@ -914,6 +924,7 @@ def cmd_run_shared_prep(
                         live=live,
                         market=market_override or "all",
                     ),
+                    exc_info=True,
                 )
 
             logger.info("[bold cyan]Shared prep: build-opportunity-ranker[/bold cyan]")
@@ -1158,6 +1169,7 @@ def cmd_run_pipeline(live: bool, *, all_tenants: bool = False, market_override: 
                     live=live,
                     market=market_override or "all",
                 ),
+                exc_info=True,
             )
 
         current_stage = "opportunity_ranker"
@@ -1199,6 +1211,7 @@ def cmd_run_pipeline(live: bool, *, all_tenants: bool = False, market_override: 
                     live=live,
                     market=market_override or "all",
                 ),
+                exc_info=True,
             )
 
         now_utc = cli.utc_now()
@@ -1217,6 +1230,7 @@ def cmd_run_pipeline(live: bool, *, all_tenants: bool = False, market_override: 
                         live=live,
                         market=market_override or "all",
                     ),
+                    exc_info=True,
                 )
         else:
             logger.info("[dim]Pipeline step 7/7: memory-cleanup — skipped (not Monday)[/dim]")

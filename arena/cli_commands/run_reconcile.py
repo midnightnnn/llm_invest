@@ -8,6 +8,7 @@ from typing import Any
 
 from arena.config import Settings
 from arena.data.bq import BigQueryRepository
+from arena.logging_utils import failure_extra
 from arena.memory.policy import memory_event_enabled, memory_graph_semantic_triples_enabled
 from arena.memory.tuning import run_memory_forgetting_tuner
 from arena.orchestrator import ArenaOrchestrator
@@ -192,6 +193,13 @@ def _run_memory_compaction(
             tenant,
             cycle_id,
             str(exc),
+            extra=failure_extra(
+                "post_cycle_memory_compaction_failed",
+                exc,
+                tenant_id=tenant,
+                cycle_id=cycle_id,
+            ),
+            exc_info=True,
         )
         return
 
@@ -578,6 +586,12 @@ def _run_memory_relation_extraction_post_cycle(
             "[yellow]Memory relation extraction failed; continuing[/yellow] tenant=%s err=%s",
             tenant,
             str(exc),
+            extra=failure_extra(
+                "post_cycle_memory_relation_extraction_failed",
+                exc,
+                tenant_id=tenant,
+            ),
+            exc_info=True,
         )
         return
 
@@ -617,6 +631,12 @@ def _run_memory_relation_tuner_post_cycle(
             "[yellow]Memory relation tuner failed; continuing[/yellow] tenant=%s err=%s",
             tenant,
             str(exc),
+            extra=failure_extra(
+                "post_cycle_memory_relation_tuner_failed",
+                exc,
+                tenant_id=tenant,
+            ),
+            exc_info=True,
         )
         return
 
@@ -660,6 +680,12 @@ def _run_memory_forgetting_tuner_post_cycle(
             "[yellow]Memory forgetting tuner failed; continuing[/yellow] tenant=%s err=%s",
             tenant,
             str(exc),
+            extra=failure_extra(
+                "post_cycle_memory_forgetting_tuner_failed",
+                exc,
+                tenant_id=tenant,
+            ),
+            exc_info=True,
         )
         return
 

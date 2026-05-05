@@ -35,6 +35,7 @@ from arena.ui.access import default_tenant_for_email as _default_tenant_for_emai
 from arena.ui.access import is_operator as _is_operator_raw
 from arena.ui.access import safe_tenant as _safe_tenant_raw
 from arena.ui.access import tenant_list_for_roles as _tenant_list_for_roles_raw
+from arena.ui.api_errors import register_api_error_middleware
 from arena.ui.http import html_response as _html_response
 from arena.ui.http import json_response as _json_response
 from arena.ui.layout import md_block as _md_block
@@ -126,6 +127,7 @@ def _build_app(*, repo: BigQueryRepository, settings: Settings) -> FastAPI:
 
     app = FastAPI(title="LLM INVEST", docs_url=None, redoc_url=None, lifespan=_app_lifespan)
     app.add_middleware(GZipMiddleware, minimum_size=500)
+    register_api_error_middleware(app)
 
     auth_enabled = str(os.getenv("ARENA_UI_AUTH_ENABLED", "false")).strip().lower() in {"1", "true", "yes", "on"}
     settings_enabled = str(os.getenv("ARENA_UI_SETTINGS_ENABLED", "false")).strip().lower() in {"1", "true", "yes", "on"}

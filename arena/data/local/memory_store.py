@@ -941,7 +941,7 @@ class LocalMemoryStore:
                   agent_id,
                   trading_mode,
                   cycle_id,
-                  summary AS text
+                  summary AS source_text
                 FROM agent_memory_events
                 WHERE tenant_id = $tenant_id
                   AND trading_mode = $trading_mode
@@ -961,7 +961,7 @@ class LocalMemoryStore:
             return self.session.fetch_rows(
                 """
                 SELECT 'board_posts' AS source_table, post_id AS source_id, created_at AS source_created_at,
-                       agent_id, trading_mode, cycle_id, title || '\n' || body AS text
+                       agent_id, trading_mode, cycle_id, title || '\n' || body AS source_text
                 FROM board_posts
                 WHERE tenant_id = $tenant_id
                   AND trading_mode = $trading_mode

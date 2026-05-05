@@ -72,6 +72,7 @@ class ExecutionGateway:
                     tenant_id=self._tenant_label(),
                     action=action,
                 ),
+                exc_info=True,
             )
 
     def _sync_execution_memory(
@@ -112,6 +113,7 @@ class ExecutionGateway:
                     ticker=intent.ticker,
                     stage="record_execution",
                 ),
+                exc_info=True,
             )
             self._append_runtime_warning(
                 action="execution_memory_sync",
@@ -155,6 +157,7 @@ class ExecutionGateway:
                         ticker=intent.ticker,
                         stage="record_thesis_lifecycle",
                     ),
+                    exc_info=True,
                 )
                 self._append_runtime_warning(
                     action="execution_memory_sync",
@@ -359,6 +362,12 @@ class ExecutionGateway:
                     "[yellow]Reconcile snapshot lookup failed; continuing without snapshot FX[/yellow] tenant=%s err=%s",
                     tenant,
                     snapshot_lookup_error,
+                    extra=failure_extra(
+                        "reconcile_snapshot_lookup_failed",
+                        exc,
+                        tenant_id=tenant,
+                    ),
+                    exc_info=True,
                 )
             if snapshot is not None and float(getattr(snapshot, "usd_krw_rate", 0.0) or 0.0) > 0:
                 snapshot_fx = float(snapshot.usd_krw_rate)
@@ -382,6 +391,14 @@ class ExecutionGateway:
                     "[yellow]Submitted reconcile failed[/yellow] order=%s err=%s",
                     str(row.get("order_id") or ""),
                     str(exc),
+                    extra=failure_extra(
+                        "submitted_reconcile_failed",
+                        exc,
+                        tenant_id=tenant,
+                        order_id=str(row.get("order_id") or ""),
+                        ticker=str(row.get("ticker") or ""),
+                    ),
+                    exc_info=True,
                 )
                 token = str(row.get("order_id") or "").strip()
                 if token:

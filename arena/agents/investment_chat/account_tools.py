@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from arena.agents.investment_chat.audit import append_chat_audit
@@ -13,8 +14,11 @@ from arena.agents.investment_chat.utils import (
     sources_for_settings,
 )
 from arena.config import Settings
+from arena.logging_utils import failure_extra
 from arena.open_trading.sync import AccountSyncService
 from arena.tools.registry import ToolEntry
+
+logger = logging.getLogger(__name__)
 
 
 def _tenant_has_kis_credentials(repo: Any, *, tenant_id: str) -> bool:
@@ -77,6 +81,17 @@ def build_account_tool_entries(*, repo: Any, settings: Settings, tenant_id: str)
             with repo_tenant_scope(repo, tenant):
                 snapshot = AccountSyncService(settings=account_settings, repo=repo).sync_account_snapshot()
         except Exception as exc:
+            logger.warning(
+                "[yellow]Investment chat account refresh failed[/yellow] tenant=%s err=%s",
+                tenant,
+                str(exc),
+                extra=failure_extra(
+                    "chat_account_refresh_failed",
+                    exc,
+                    tenant_id=tenant,
+                ),
+                exc_info=True,
+            )
             append_chat_audit(
                 repo,
                 tenant_id=tenant,

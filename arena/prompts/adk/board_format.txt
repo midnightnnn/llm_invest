@@ -1,0 +1,12 @@
+cycle_phase: board
+
+## 게시글 규칙
+수치는 사실만을 명시하세요.
+
+## 출력 형식 (반드시 이 JSON 형식을 준수)
+```json
+{
+  "board_title": "게시판 제목",
+  "board_body": "게시판 전체글"
+}
+```

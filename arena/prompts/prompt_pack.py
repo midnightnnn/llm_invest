@@ -28,79 +28,10 @@ def safe_json(value: Any) -> Any:
     return value
 
 
-EXPLORE_SHARED_FORMAT = """\
-## explore phase 규칙
-지금은 도구 탐색과 근거 수집 단계입니다. 거래를 실행하지 마십시오.
-**중요: 서로 독립적인 도구 호출은 반드시 하나의 턴에서 병렬로 동시에 호출하십시오.**
-도구를 통해 투자 판단에 필요한 정보를 탐색하십시오.
-핵심 논리, 계획된 행동과 행동의 근거를 간결하게 요약한 explore_summary 필드를 반드시 포함해야 합니다.
-이 요약은 다른 에이전트들과 공유되며 핵심만 압축해서 적으십시오.
-
-## 출력 형식 (반드시 이 JSON 형식을 준수)
-```json
-{
-  "explore_summary": "핵심 논리와 계획 요약"
-}
-```"""
-
-
-EXPLORE_SOLO_FORMAT = """\
-## explore phase 규칙
-지금은 도구 탐색과 근거 수집 단계입니다. 거래를 실행하지 마십시오.
-**중요: 서로 독립적인 도구 호출은 반드시 하나의 턴에서 병렬로 동시에 호출하십시오.**
-순차 호출은 이전 결과가 다음 호출의 입력에 필요한 경우에만 사용하십시오.
-도구를 통해 투자 판단에 필요한 정보를 탐색하십시오.
-
-## 출력 형식 (반드시 이 JSON 형식을 준수)
-```json
-{
-  "explore_status": "complete"
-}
-```"""
-
-
-EXECUTION_FORMAT = """\
-## 주문 규칙
-- 정수(whole-share) 단위의 주식 주문만 지원합니다. 소수점 단위 주식(fractional shares)은 주문하지 마십시오.
-- side는 BUY, SELL, HOLD 중 하나입니다.
-- BUY 주문은 target_weight를 사용합니다. target_weight는 sleeve_equity 대비 해당 종목의 최종 목표 비중이며 0.0~1.0 범위입니다.
-- SELL 주문은 sell_ratio를 사용합니다. sell_ratio는 현재 보유 수량 대비 매도 비율이며 0.0~1.0 범위입니다.
-- BUY에는 target_weight만 포함하고, SELL에는 sell_ratio만 포함하십시오.
-- BUY는 예상 추가 주식 수(max(sleeve_equity * target_weight - current_position_value, 0) / price_per_share)가 최소 1 이상이 되도록 설정하십시오. 1 미만이면 해당 티커는 HOLD를 사용하십시오.
-- sleeve_state.buy_blocked가 true이거나 order_budget.max_buy_notional_krw가 0 또는 0에 가까우면 BUY를 내지 말고 SELL 또는 HOLD만 사용하십시오.
-- orders 배열에는 여러 종목의 주문을 넣을 수 있습니다. 거래가 필요 없으면 빈 배열 []로 반환하십시오.
-- 도구의 출력은 최종 판단을 대체하지 않습니다. 도구의 근거와 자신의 분석을 종합해 최적의 투자 결정을 내리십시오.
-
-## 출력 형식 (반드시 이 JSON 형식을 준수)
-```json
-{
-  "explore_summary": "핵심 논리와 계획 요약",
-  "orders": [
-    {
-      "ticker": "AAPL",
-      "side": "BUY",
-      "target_weight": 0.15,
-      "rationale": "매수 근거",
-      "strategy_refs": ["momentum", "earnings_growth"]
-    }
-  ]
-}
-```"""
-
-
-BOARD_FORMAT = """\
-cycle_phase: board
-
-## 게시글 규칙
-수치는 사실만을 명시하세요.
-
-## 출력 형식 (반드시 이 JSON 형식을 준수)
-```json
-{
-  "board_title": "게시판 제목",
-  "board_body": "게시판 전체글"
-}
-```"""
+EXPLORE_SHARED_FORMAT = load_prompt_text("adk", "explore_shared_format.txt")
+EXPLORE_SOLO_FORMAT = load_prompt_text("adk", "explore_solo_format.txt")
+EXECUTION_FORMAT = load_prompt_text("adk", "execution_format.txt")
+BOARD_FORMAT = load_prompt_text("adk", "board_format.txt")
 
 
 class PromptPack:

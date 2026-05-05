@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from types import SimpleNamespace
 
 import arena.cli_commands.run_reconcile as run_reconcile_module
@@ -59,7 +60,7 @@ def test_run_memory_forgetting_tuner_post_cycle_skips_when_disabled(monkeypatch)
     )
 
 
-def test_run_memory_forgetting_tuner_post_cycle_swallows_errors(monkeypatch) -> None:
+def test_run_memory_forgetting_tuner_post_cycle_swallows_errors(monkeypatch, caplog) -> None:
     monkeypatch.setattr(
         run_reconcile_module,
         "_cli",
@@ -71,8 +72,16 @@ def test_run_memory_forgetting_tuner_post_cycle_swallows_errors(monkeypatch) -> 
 
     monkeypatch.setattr(run_reconcile_module, "run_memory_forgetting_tuner", _boom)
 
-    run_reconcile_module._run_memory_forgetting_tuner_post_cycle(
-        settings=SimpleNamespace(),
-        repo=object(),
-        tenant="alpha",
+    with caplog.at_level(logging.WARNING):
+        run_reconcile_module._run_memory_forgetting_tuner_post_cycle(
+            settings=SimpleNamespace(),
+            repo=object(),
+            tenant="alpha",
+        )
+
+    failure_record = next(
+        record
+        for record in caplog.records
+        if getattr(record, "event", "") == "post_cycle_memory_forgetting_tuner_failed"
     )
+    assert failure_record.exc_info is not None

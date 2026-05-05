@@ -519,6 +519,58 @@ def test_build_order_intents_defaults_single_market_us_exchange() -> None:
     assert intents[0].instrument_id == "NASD:AAPL"
 
 
+def test_build_order_intents_preserves_full_rationale_text() -> None:
+    settings = load_settings()
+    settings.trading_mode = "paper"
+    settings.kis_target_market = "nasdaq"
+    settings.max_order_krw = 2_000_000.0
+    settings.max_position_ratio = 1.0
+    long_rationale = (
+        "AAPL의 서비스 매출 성장과 잉여현금흐름 안정성이 AAPL 매수 thesis를 지지한다. "
+        + "sleeve context를 감안해 목표 비중을 유지 가능한 범위에서 올린다. " * 35
+        + "TAIL_MARKER"
+    )
+
+    intents, _ = build_order_intents(
+        repo=_RepoForAdkGenerate(),
+        settings=settings,
+        agent_id="gpt",
+        sleeve_capital_krw=2_000_000.0,
+        cycle_id="cycle_order_long_rationale",
+        context={
+            "portfolio": {
+                "cash_krw": 2_000_000.0,
+                "total_equity_krw": 2_000_000.0,
+                "positions": {},
+            },
+            "order_budget": {"max_buy_notional_krw": 2_000_000.0},
+        },
+        orders=[
+            {
+                "ticker": "AAPL",
+                "side": "BUY",
+                "target_weight": 0.5,
+                "rationale": long_rationale,
+            }
+        ],
+        row_map={
+            "AAPL": {
+                "ticker": "AAPL",
+                "exchange_code": "",
+                "instrument_id": "",
+                "close_price_krw": 130000.0,
+                "close_price_native": 100.0,
+                "quote_currency": "USD",
+                "fx_rate_used": 1300.0,
+            }
+        },
+    )
+
+    assert len(intents) == 1
+    assert intents[0].rationale == long_rationale
+    assert intents[0].rationale.endswith("TAIL_MARKER")
+
+
 def test_build_order_intents_buy_target_weight_only_adds_shortfall() -> None:
     settings = load_settings()
     settings.trading_mode = "paper"

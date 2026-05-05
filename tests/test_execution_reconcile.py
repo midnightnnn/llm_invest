@@ -257,3 +257,9 @@ def test_process_preserves_broker_report_when_memory_sync_fails(caplog) -> None:
     assert report.status == ExecutionStatus.FILLED
     assert len(repo.writes) == 1
     assert "preserving broker result" in caplog.text
+    failure_record = next(
+        record
+        for record in caplog.records
+        if getattr(record, "event", "") == "execution_memory_sync_failed"
+    )
+    assert failure_record.exc_info is not None

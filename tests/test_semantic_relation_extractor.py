@@ -90,6 +90,10 @@ def test_memory_prompts_are_loaded_from_central_text_templates() -> None:
     assert "장기기억 정리 담당" in COMPACTION_SYSTEM_INSTRUCTION
     assert "source-grounded semantic relation triples" in RELATION_EXTRACTOR_SYSTEM_INSTRUCTION
     assert "Extract up to 3 high-signal semantic relation triples." in prompt
+    assert "Entity labels are canonical graph node names" in prompt
+    assert "evidence_text is the only field for verbatim source spans" in prompt
+    assert "compact canonical graph node name" in prompt
+    assert "exact entity label" not in prompt
     assert "ontology_version: test" in prompt
     assert '"source_id": "evt_1"' in prompt
 
@@ -159,6 +163,36 @@ def test_validate_extracted_relations_accepts_non_ascii_concept_labels() -> None
     assert len(result.accepted) == 1
     assert result.accepted[0]["subject_node_id"] == "entity:risk:수출_규제"
     assert result.rejected == []
+
+
+def test_validate_extracted_relations_accepts_evidence_like_entity_labels() -> None:
+    evidence = "아마존이 물류 인프라를 외부 기업에 개방한다는 뉴스가 UPS 리스크를 키웠다."
+    result = validate_extracted_relations(
+        [
+            {
+                "subject": {"label": evidence, "type": "event"},
+                "predicate": "risk_to",
+                "object": {"label": "UPS", "type": "ticker"},
+                "confidence": 0.9,
+                "evidence_text": evidence,
+            },
+            {
+                "subject": {"label": "아마존 물류망 개방", "type": "event"},
+                "predicate": "risk_to",
+                "object": {"label": "UPS", "type": "ticker"},
+                "confidence": 0.9,
+                "evidence_text": evidence,
+            },
+        ],
+        source=_source(evidence),
+        extractor_version="semantic_relation_extractor_v1",
+        prompt_version="semantic_relation_prompt_v1",
+    )
+
+    assert result.rejected == []
+    assert len(result.accepted) == 2
+    assert result.accepted[0]["subject_label"] == evidence
+    assert result.accepted[1]["subject_node_id"] == "entity:event:아마존_물류망_개방"
 
 
 def test_validate_extracted_relations_applies_predicate_confidence_threshold() -> None:

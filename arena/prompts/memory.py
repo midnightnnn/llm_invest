@@ -31,9 +31,9 @@ def build_relation_extraction_prompt(
     schema = {
         "triples": [
             {
-                "subject": {"label": "exact entity label", "type": "ticker|risk|catalyst|..."},
+                "subject": {"label": "compact canonical graph node name", "type": "ticker|risk|catalyst|..."},
                 "predicate": "supports|contradicts|risk_to|caused_by|leads_to|similar_setup|invalidates|outcome_of|mentions|contains",
-                "object": {"label": "exact entity label", "type": "ticker|thesis|outcome|..."},
+                "object": {"label": "compact canonical graph node name", "type": "ticker|thesis|outcome|..."},
                 "confidence": 0.0,
                 "evidence_text": "copy one exact span from source text",
             }

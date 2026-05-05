@@ -715,7 +715,7 @@ def test_cmd_run_agent_cycle_skips_closed_tenant_in_multi_tenant_mode(monkeypatc
     assert repo.run_status_rows[-1]["status"] == "skipped"
 
 
-def test_run_agent_cycle_once_ignores_post_cycle_maintenance_failures(monkeypatch) -> None:
+def test_run_agent_cycle_once_ignores_post_cycle_maintenance_failures(monkeypatch, caplog) -> None:
     settings = load_settings()
 
     class _Repo(_FakeRepo):
@@ -746,17 +746,24 @@ def test_run_agent_cycle_once_ignores_post_cycle_maintenance_failures(monkeypatc
     )
     monkeypatch.delattr(cli, "_run_memory_forgetting_tuner_post_cycle", raising=False)
 
-    cli._run_agent_cycle_once(
-        False,
-        settings=settings,
-        repo=repo,
-        orchestrator=_Orchestrator(),
-        tenant="tenant-a",
-        run_id="run-1",
-    )
+    with caplog.at_level(logging.WARNING):
+        cli._run_agent_cycle_once(
+            False,
+            settings=settings,
+            repo=repo,
+            orchestrator=_Orchestrator(),
+            tenant="tenant-a",
+            run_id="run-1",
+        )
 
     assert repo.run_status_rows[-1]["status"] == "success"
     assert repo.run_status_rows[-1]["stage"] == "complete"
+    failure_record = next(
+        record
+        for record in caplog.records
+        if getattr(record, "event", "") == "post_cycle_memory_compaction_failed"
+    )
+    assert failure_record.exc_info is not None
 
 
 def test_post_cycle_maintenance_runs_relation_extraction_after_compaction(monkeypatch) -> None:
@@ -2355,6 +2362,7 @@ def test_dispatch_agent_job_propagates_execution_source(monkeypatch) -> None:
 
 def test_run_agent_cycle_guarded_skips_when_lease_exists(monkeypatch) -> None:
     settings = load_settings()
+    settings.arena_mode = "gcp"
     settings.google_cloud_project = "proj-x"
     repo = _FakeRepo()
 
@@ -2387,6 +2395,7 @@ def test_run_agent_cycle_guarded_skips_when_lease_exists(monkeypatch) -> None:
 
 def test_run_agent_cycle_guarded_marks_lease_success(monkeypatch) -> None:
     settings = load_settings()
+    settings.arena_mode = "gcp"
     settings.google_cloud_project = "proj-x"
     repo = _FakeRepo()
     completed: list[tuple[str, str]] = []
@@ -2423,6 +2432,7 @@ def test_run_agent_cycle_guarded_marks_lease_success(monkeypatch) -> None:
 
 def test_run_agent_cycle_guarded_passes_execution_source_to_lease(monkeypatch) -> None:
     settings = load_settings()
+    settings.arena_mode = "gcp"
     settings.google_cloud_project = "proj-x"
     repo = _FakeRepo()
     acquire_calls: list[dict[str, object]] = []

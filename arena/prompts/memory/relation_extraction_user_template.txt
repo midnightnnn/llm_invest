@@ -1,6 +1,9 @@
 Extract up to {max_triples} high-signal semantic relation triples.
 Prefer causal, risk, support, contradiction, invalidation, and outcome relations. Use mentions only when no stronger predicate is justified.
 Every evidence_text must be copied verbatim from the source text. Do not use outside knowledge.
+Entity labels are canonical graph node names, not quoted evidence.
+Use evidence_text for verbatim source text; evidence_text is the only field for verbatim source spans.
+Do not encode the full claim in a label; encode the claim through subject + predicate + object.
 Use ticker type only for actual ticker symbols or exchange codes, such as NVDA or 005930. Use company for company names.
 Use uppercase labels for ticker entities when the ticker has letters.
 {ontology_block}

@@ -113,7 +113,7 @@ def build_thesis_payload(
     position_qty_after: float | None = None,
 ) -> dict[str, Any]:
     previous = previous_payload if isinstance(previous_payload, dict) else {}
-    summary = _trim_text(intent.rationale or previous.get("thesis_summary") or "", max_len=220)
+    summary = str(intent.rationale or previous.get("thesis_summary") or "").replace("\n", " ").strip()
     cycle_id = str(intent.cycle_id or "").strip()
     strategy_refs = normalize_strategy_refs(intent.strategy_refs)
     state = thesis_state_for_event_type(event_type)

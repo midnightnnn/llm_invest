@@ -6,6 +6,7 @@ from datetime import date, timedelta
 
 from arena.config import Settings
 from arena.data.bq import BigQueryRepository
+from arena.logging_utils import failure_extra
 from arena.market_sources import live_market_sources_for_markets
 from arena.market_hours import MarketWindow
 
@@ -498,7 +499,19 @@ def _run_mtm_score_update(settings: Settings) -> int:
                     try:
                         db.collection("agent_memories").document(event_id).update({"score": float(new_score)})
                     except Exception as fs_exc:
-                        logger.warning("Firestore sync failed for %s: %s", event_id[:8], fs_exc)
+                        logger.warning(
+                            "Firestore sync failed for %s: %s",
+                            event_id[:8],
+                            fs_exc,
+                            extra=failure_extra(
+                                "mtm_score_firestore_sync_failed",
+                                fs_exc,
+                                event_id=event_id,
+                                agent_id=agent_id,
+                                ticker=ticker,
+                            ),
+                            exc_info=True,
+                        )
                 logger.info("[MTM] %s (%s) score: %.2f → %.2f (PnL: %+.1f%%)", event_id[:8], ticker, old_score, new_score, pnl_ratio * 100)
                 updated += 1
 
