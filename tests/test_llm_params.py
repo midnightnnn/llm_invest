@@ -176,11 +176,7 @@ class TestAnthropicRuntimeKwargs:
 class TestResolveModelLlmParams:
     def test_openai_injects_reasoning_effort_and_max_completion_tokens(self) -> None:
         from arena.agents.adk_models import _resolve_model
-        from arena.config import Settings
-
-        settings = Settings.__new__(Settings)  # skip validation — minimal fields
-        # Fallback: use load_settings flavor used in the existing tests
-        from tests.test_adk_agents import load_settings
+        from arena.config import load_settings
 
         settings = load_settings()
         settings.openai_api_key = "tenant-openai"
@@ -202,7 +198,7 @@ class TestResolveModelLlmParams:
 
     def test_openai_without_llm_params_does_not_inject_reasoning(self) -> None:
         from arena.agents.adk_models import _resolve_model
-        from tests.test_adk_agents import load_settings
+        from arena.config import load_settings
 
         settings = load_settings()
         settings.openai_api_key = "tenant-openai"
@@ -213,7 +209,7 @@ class TestResolveModelLlmParams:
 
     def test_claude_direct_injects_user_effort_override(self) -> None:
         from arena.agents.adk_models import _resolve_model
-        from tests.test_adk_agents import load_settings
+        from arena.config import load_settings
 
         settings = load_settings()
         settings.anthropic_api_key = "tenant-anthropic"

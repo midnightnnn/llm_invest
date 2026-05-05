@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from arena.agents.adk_agents import _ADKDecisionRunner
+from arena.agents.adk_agents import _ADKDecisionRunner, _is_retryable_adk_error
 from arena.agents.adk_runner_runtime import AdkToolBudgetExceeded, collect_response_text
 
 
@@ -167,3 +167,11 @@ def test_run_async_requests_final_json_when_tool_budget_exceeded() -> None:
     assert text == '{"explore_summary":"budget closed"}'
     assert len(fake_runner.prompts) == 2
     assert "더 이상 도구를 호출하지 마십시오" in fake_runner.prompts[1]
+
+
+def test_adk_own_timeout_is_not_retryable() -> None:
+    assert _is_retryable_adk_error(TimeoutError("ADK coroutine timed out after 1530s")) is False
+    assert _is_retryable_adk_error(TimeoutError("ADK tool-budget finalization timed out after 60s")) is False
+    assert _is_retryable_adk_error(AdkToolBudgetExceeded("ADK tool budget exceeded after 121 tool calls")) is False
+    assert _is_retryable_adk_error(RuntimeError("429 RESOURCE_EXHAUSTED")) is True
+    assert _is_retryable_adk_error(RuntimeError("litellm.BadGatewayError: 502 Bad gateway")) is True
