@@ -6,6 +6,12 @@ from typing import Any
 
 from arena.config import Settings
 from arena.data.bq import BigQueryRepository
+from arena.forecast_selection import (
+    FORECAST_RANKER_BUCKETS,
+    FORECAST_RANKER_PROFILES,
+    merge_forecast_tickers,
+    ranker_rows_to_tickers,
+)
 from arena.market_feature_normalization import (
     daily_history_sources,
     normalize_market_feature_rows_from_closes,
@@ -183,6 +189,22 @@ def _build_forecast_tickers(repo, settings: Settings, top_n: int) -> list[str]:
     """Selects discovery-bucket candidates + current holdings for forecast computation."""
     sources = live_market_sources_for_markets(parse_markets(settings.kis_target_market)) or None
     universe = resolve_runtime_universe(settings, repo=repo)
+    held_tickers = _latest_position_tickers(repo, settings)
+    ranker_tickers = _ranker_forecast_tickers(repo, settings, universe=universe)
+    if ranker_tickers:
+        combined = merge_forecast_tickers(
+            held_tickers=held_tickers,
+            ranker_tickers=ranker_tickers,
+            max_tickers=int(getattr(settings, "forecast_max_tickers", 80) or 80),
+        )
+        logger.info(
+            "[cyan]Forecast ticker selection[/cyan] source=ranker_baskets held=%d ranker=%d combined=%d top_per_bucket=%d",
+            len(held_tickers),
+            len(ranker_tickers),
+            len(combined),
+            max(1, int(getattr(settings, "forecast_ranker_top_per_bucket", 10) or 10)),
+        )
+        return combined
 
     latest_rows: list[dict] = []
     latest_loader = getattr(repo, "latest_market_features", None)
@@ -239,15 +261,6 @@ def _build_forecast_tickers(repo, settings: Settings, top_n: int) -> list[str]:
             if ticker not in discovery_tickers:
                 discovery_tickers.append(ticker)
 
-    held_tickers: list[str] = []
-    try:
-        held_tickers = repo.get_latest_position_tickers(
-            market=settings.kis_target_market,
-            all_tenants=True,
-        )
-    except Exception as exc:
-        logger.warning("[yellow]Failed to load held tickers for forecast[/yellow] err=%s", str(exc))
-
     combined = list(dict.fromkeys(discovery_tickers + held_tickers))
     logger.info(
         "[cyan]Forecast ticker selection[/cyan] bucket_cap=%d discovery=%d held=%d combined=%d buckets=%s",
@@ -258,6 +271,73 @@ def _build_forecast_tickers(repo, settings: Settings, top_n: int) -> list[str]:
         ",".join(f"{name}:{bucket_counts.get(name, 0)}" for name in DISCOVERY_BUCKETS),
     )
     return combined
+
+
+def _latest_position_tickers(repo, settings: Settings) -> list[str]:
+    try:
+        return repo.get_latest_position_tickers(
+            market=settings.kis_target_market,
+            all_tenants=True,
+        )
+    except Exception as exc:
+        logger.warning("[yellow]Failed to load held tickers for forecast[/yellow] err=%s", str(exc))
+        return []
+
+
+def _ranker_forecast_tickers(repo, settings: Settings, *, universe: list[str]) -> list[str]:
+    loader = getattr(repo, "latest_opportunity_ranker_scores", None)
+    if not callable(loader):
+        return []
+
+    top_per_bucket = max(1, int(getattr(settings, "forecast_ranker_top_per_bucket", 10) or 10))
+    max_age_hours = max(1, int(getattr(settings, "forecast_ranker_max_age_hours", 24 * 14) or (24 * 14)))
+    markets = parse_markets(settings.kis_target_market)
+    row_markets: list[str] = []
+    if any(token in {"us", "nasdaq", "nyse", "amex"} for token in markets):
+        row_markets.append("us")
+    if any(token in {"kospi", "krx", "kosdaq"} for token in markets):
+        row_markets.append("kospi")
+    allowed = {str(ticker or "").strip().upper() for ticker in universe if str(ticker or "").strip()}
+    out: list[str] = []
+    for bucket in FORECAST_RANKER_BUCKETS:
+        try:
+            rows = loader(
+                limit=top_per_bucket,
+                max_age_hours=max_age_hours,
+                buckets=[bucket],
+                markets=row_markets or None,
+            ) or []
+        except Exception as exc:
+            logger.warning(
+                "[yellow]forecast ranker bucket load failed[/yellow] bucket=%s err=%s",
+                bucket,
+                str(exc)[:160],
+            )
+            continue
+        for ticker in ranker_rows_to_tickers(rows, limit=top_per_bucket):
+            if allowed and ticker not in allowed:
+                continue
+            out.append(ticker)
+    for profile in FORECAST_RANKER_PROFILES:
+        try:
+            rows = loader(
+                limit=top_per_bucket,
+                max_age_hours=max_age_hours,
+                profiles=[profile],
+                markets=row_markets or None,
+            ) or []
+        except Exception as exc:
+            logger.warning(
+                "[yellow]forecast ranker profile load failed[/yellow] profile=%s err=%s",
+                profile,
+                str(exc)[:160],
+            )
+            continue
+        for ticker in ranker_rows_to_tickers(rows, limit=top_per_bucket):
+            if allowed and ticker not in allowed:
+                continue
+            out.append(ticker)
+    return list(dict.fromkeys(out))
 
 
 def cmd_build_forecasts(args: object) -> Any:

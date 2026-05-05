@@ -188,6 +188,9 @@ class Settings:
     us_quote_exchanges: list[str] = field(default_factory=lambda: ["NAS", "NYS"])
     reddit_sentiment_enabled: bool = False
     forecast_mode: str = "all"
+    forecast_ranker_top_per_bucket: int = 10
+    forecast_max_tickers: int = 80
+    forecast_ranker_max_age_hours: int = 24 * 14
     opportunity_ranker_max_scoring_rows: int = 1000
     forecast_table: str = ""
     fred_api_key: str = ""
@@ -646,6 +649,9 @@ def load_settings() -> Settings:
         ],
         reddit_sentiment_enabled=_to_bool(os.getenv("ARENA_REDDIT_SENTIMENT_ENABLED"), True),
         forecast_mode=(os.getenv("ARENA_FORECAST_MODE", "all").strip().lower() or "all"),
+        forecast_ranker_top_per_bucket=_to_int(os.getenv("ARENA_FORECAST_RANKER_TOP_PER_BUCKET"), 10),
+        forecast_max_tickers=_to_int(os.getenv("ARENA_FORECAST_MAX_TICKERS"), 80),
+        forecast_ranker_max_age_hours=_to_int(os.getenv("ARENA_FORECAST_RANKER_MAX_AGE_HOURS"), 24 * 14),
         opportunity_ranker_max_scoring_rows=_to_int(
             os.getenv("ARENA_OPPORTUNITY_RANKER_MAX_SCORING_ROWS"),
             1000,
@@ -750,6 +756,9 @@ def apply_runtime_overrides(settings: Settings, repo: Any, tenant_id: str) -> Se
         "universe_run_top_n",
         "universe_per_exchange_cap",
         "opportunity_ranker_max_scoring_rows",
+        "forecast_ranker_top_per_bucket",
+        "forecast_max_tickers",
+        "forecast_ranker_max_age_hours",
         "forecast_mode",
         "reddit_sentiment_enabled",
         "research_max_tickers",
@@ -913,6 +922,26 @@ def apply_runtime_overrides(settings: Settings, repo: Any, tenant_id: str) -> Se
     forecast_mode_raw = str(values.get("forecast_mode") or "").strip().lower()
     if forecast_mode_raw:
         settings.forecast_mode = forecast_mode_raw
+
+    for key, attr in (
+        ("forecast_ranker_top_per_bucket", "forecast_ranker_top_per_bucket"),
+        ("forecast_max_tickers", "forecast_max_tickers"),
+        ("forecast_ranker_max_age_hours", "forecast_ranker_max_age_hours"),
+    ):
+        raw = str(values.get(key) or "").strip()
+        if not raw:
+            continue
+        try:
+            parsed = int(float(raw))
+            if parsed > 0:
+                setattr(settings, attr, parsed)
+        except ValueError:
+            logger.warning(
+                "[yellow]Runtime forecast override skipped[/yellow] tenant=%s key=%s value=%s",
+                tenant,
+                key,
+                raw,
+            )
 
     if values.get("reddit_sentiment_enabled") is not None:
         settings.reddit_sentiment_enabled = _to_bool_token(
@@ -1207,6 +1236,12 @@ def validate_settings(
             errors.append("ARENA_UNIVERSE_PER_EXCHANGE_CAP must be >= 1")
         if int(settings.opportunity_ranker_max_scoring_rows) <= 0:
             errors.append("ARENA_OPPORTUNITY_RANKER_MAX_SCORING_ROWS must be >= 1")
+        if int(settings.forecast_ranker_top_per_bucket) <= 0:
+            errors.append("ARENA_FORECAST_RANKER_TOP_PER_BUCKET must be >= 1")
+        if int(settings.forecast_max_tickers) <= 0:
+            errors.append("ARENA_FORECAST_MAX_TICKERS must be >= 1")
+        if int(settings.forecast_ranker_max_age_hours) <= 0:
+            errors.append("ARENA_FORECAST_RANKER_MAX_AGE_HOURS must be >= 1")
         if any(token in {"nasdaq", "nyse", "amex", "us"} for token in market_tokens) and not settings.us_quote_exchanges:
             errors.append("ARENA_US_QUOTE_EXCHANGES must not be empty for US markets")
 

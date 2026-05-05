@@ -211,6 +211,133 @@ def test_build_forecast_tickers_passes_market_scope_to_runtime_universe() -> Non
     assert repo.last_markets == ["us"]
 
 
+def test_build_forecast_tickers_prefers_ranker_bucket_basket_plus_holdings() -> None:
+    settings = load_settings()
+    settings.kis_target_market = "us"
+    settings.default_universe = (
+        ["HOLD"]
+        + [f"M{i:02d}" for i in range(12)]
+        + [f"P{i:02d}" for i in range(12)]
+        + [f"A{i:02d}" for i in range(12)]
+        + [f"B{i:02d}" for i in range(12)]
+        + [f"D{i:02d}" for i in range(12)]
+    )
+    settings.forecast_ranker_top_per_bucket = 10
+    settings.forecast_max_tickers = 80
+
+    class _Repo:
+        def __init__(self) -> None:
+            self.ranker_calls: list[dict] = []
+
+        def latest_universe_candidate_tickers(self, *, limit=200, markets=None):
+            _ = (limit, markets)
+            return list(settings.default_universe)
+
+        def latest_opportunity_ranker_scores(self, **kwargs):
+            self.ranker_calls.append(dict(kwargs))
+            rows = []
+            for idx in range(12):
+                rows.append(
+                    {
+                        "ticker": f"M{idx:02d}",
+                        "market": "us",
+                        "bucket": "momentum",
+                        "profile": "aggressive",
+                        "recommendation_rank": idx + 20,
+                        "recommendation_score": 1.0 - idx / 100.0,
+                    }
+                )
+                rows.append(
+                    {
+                        "ticker": f"P{idx:02d}",
+                        "market": "us",
+                        "bucket": "pullback",
+                        "profile": "balanced",
+                        "recommendation_rank": idx + 20,
+                        "recommendation_score": 0.8 - idx / 100.0,
+                    }
+                )
+                rows.append(
+                    {
+                        "ticker": f"X{idx:02d}",
+                        "market": "us",
+                        "bucket": "recovery",
+                        "profile": "value",
+                        "recommendation_rank": idx + 1,
+                        "recommendation_score": 0.9 - idx / 100.0,
+                    }
+                )
+                rows.append(
+                    {
+                        "ticker": f"A{idx:02d}",
+                        "market": "us",
+                        "bucket": "profile_aggressive",
+                        "profile": "aggressive",
+                        "recommendation_rank": idx + 1,
+                        "recommendation_score": 0.7 - idx / 100.0,
+                    }
+                )
+                rows.append(
+                    {
+                        "ticker": f"B{idx:02d}",
+                        "market": "us",
+                        "bucket": "profile_balanced",
+                        "profile": "balanced",
+                        "recommendation_rank": idx + 1,
+                        "recommendation_score": 0.6 - idx / 100.0,
+                    }
+                )
+                rows.append(
+                    {
+                        "ticker": f"D{idx:02d}",
+                        "market": "us",
+                        "bucket": "profile_defensive",
+                        "profile": "defensive",
+                        "recommendation_rank": idx + 1,
+                        "recommendation_score": 0.5 - idx / 100.0,
+                    }
+                )
+            buckets = kwargs.get("buckets") or []
+            if buckets:
+                allow = {str(bucket).strip().lower() for bucket in buckets}
+                rows = [row for row in rows if str(row.get("bucket") or "").lower() in allow]
+            profiles = kwargs.get("profiles") or []
+            if profiles:
+                allow = {str(profile).strip().lower() for profile in profiles}
+                rows = [row for row in rows if str(row.get("profile") or "").lower() in allow]
+            return rows
+
+        def get_latest_position_tickers(self, *, market="", all_tenants=False):
+            assert market == "us"
+            assert all_tenants is True
+            return ["HOLD", "M00"]
+
+    repo = _Repo()
+
+    out = cli._build_forecast_tickers(repo, settings, top_n=50)
+
+    assert [call["buckets"] for call in repo.ranker_calls if call.get("buckets")] == [
+        ["momentum"],
+        ["pullback"],
+        ["recovery"],
+        ["defensive"],
+    ]
+    assert [call["profiles"] for call in repo.ranker_calls if call.get("profiles")] == [
+        ["aggressive"],
+        ["balanced"],
+        ["defensive"],
+    ]
+    assert out == (
+        ["HOLD"]
+        + [f"M{i:02d}" for i in range(10)]
+        + [f"P{i:02d}" for i in range(10)]
+        + [f"A{i:02d}" for i in range(10)]
+        + [f"B{i:02d}" for i in range(10)]
+        + [f"D{i:02d}" for i in range(10)]
+    )
+    assert not ({f"X{i:02d}" for i in range(10)} & set(out))
+
+
 def test_batch_phase_uses_daily_sources_for_live_us_seed_probe(monkeypatch) -> None:
     settings = load_settings()
     settings.kis_target_market = "us"

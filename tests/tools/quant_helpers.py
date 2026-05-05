@@ -94,6 +94,7 @@ class FakeRepo:
         ]
         self.last_forecast_mode = None
         self.last_forecast_table = None
+        self.last_ranker_kwargs = None
 
     def screen_latest_features(self, **kwargs):
         self.last_screen_kwargs = dict(kwargs)
@@ -165,6 +166,46 @@ class FakeRepo:
             want = {str(t).strip().upper() for t in tickers}
             rows = [r for r in rows if str(r.get("ticker", "")).upper() in want]
         return rows
+
+    def latest_opportunity_ranker_scores(
+        self,
+        *,
+        tickers=None,
+        profiles=None,
+        buckets=None,
+        markets=None,
+        per_profile_limit=None,
+        limit=50,
+        max_age_hours=30,
+    ):
+        self.last_ranker_kwargs = {
+            "tickers": list(tickers) if tickers is not None else None,
+            "profiles": list(profiles) if profiles is not None else None,
+            "buckets": list(buckets) if buckets is not None else None,
+            "markets": list(markets) if markets is not None else None,
+            "per_profile_limit": per_profile_limit,
+            "limit": limit,
+            "max_age_hours": max_age_hours,
+        }
+        rows = [
+            {"ticker": "AAPL", "market": "us", "bucket": "momentum", "profile": "aggressive", "recommendation_rank": 1, "recommendation_score": 0.9},
+            {"ticker": "MSFT", "market": "us", "bucket": "pullback", "profile": "balanced", "recommendation_rank": 2, "recommendation_score": 0.8},
+            {"ticker": "TSLA", "market": "us", "bucket": "recovery", "profile": "aggressive", "recommendation_rank": 3, "recommendation_score": 0.7},
+            {"ticker": "PLTD", "market": "us", "bucket": "defensive", "profile": "defensive", "recommendation_rank": 4, "recommendation_score": 0.6},
+        ]
+        if buckets:
+            allow = {str(bucket).strip().lower() for bucket in buckets}
+            rows = [row for row in rows if str(row.get("bucket") or "").lower() in allow]
+        if profiles:
+            allow = {str(profile).strip().lower() for profile in profiles}
+            rows = [row for row in rows if str(row.get("profile") or "").lower() in allow]
+        if markets:
+            allow = {str(market).strip().lower() for market in markets}
+            rows = [row for row in rows if str(row.get("market") or "").lower() in allow]
+        if tickers:
+            allow = {str(ticker).strip().upper() for ticker in tickers}
+            rows = [row for row in rows if str(row.get("ticker") or "").upper() in allow]
+        return rows[: int(limit or 50)]
 
     def latest_universe_candidate_tickers(self, *, limit=200):
         self.last_universe_limit = limit

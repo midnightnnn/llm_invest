@@ -15,6 +15,12 @@ _forecast_built_dates: set[str] = set()
 
 from arena.config import Settings
 from arena.data.bq import BigQueryRepository
+from arena.forecast_selection import (
+    FORECAST_RANKER_BUCKETS,
+    FORECAST_RANKER_PROFILES,
+    merge_forecast_tickers,
+    ranker_rows_to_tickers,
+)
 from arena.market_sources import live_market_sources_for_markets
 from arena.market_hours import equity_market_window, previous_trading_day
 from arena.tools._market_scope import MarketScope, MarketScopeError
@@ -623,15 +629,72 @@ class QuantTools:
         return self._target_universe()[: max(1, min(int(limit), 50))]
 
     def _forecast_default_tickers(self) -> list[str]:
-        """Builds the default forecast basket from the discovered basket plus holdings."""
-        candidates = (
+        """Builds the default forecast basket from ranker buckets plus holdings."""
+        context_candidates = (
             self._discovered_candidate_tickers_from_context()
             or self._working_set_tickers_from_context()
             or self._candidate_tickers_from_context()
         )
         held = self._held_tickers_from_context()
-        combined = self._normalize_tickers(candidates + held)
-        return combined[:50]
+        ranker_tickers = [] if context_candidates else self._ranker_forecast_tickers()
+        fallback = self._normalize_tickers(context_candidates)
+        return merge_forecast_tickers(
+            held_tickers=self._normalize_tickers(held, restrict_to_universe=False),
+            ranker_tickers=ranker_tickers,
+            fallback_tickers=fallback,
+            max_tickers=int(getattr(self.settings, "forecast_max_tickers", 80) or 80),
+        )
+
+    def _ranker_forecast_tickers(self) -> list[str]:
+        loader = getattr(self.repo, "latest_opportunity_ranker_scores", None)
+        if not callable(loader):
+            return []
+
+        top_per_bucket = max(1, int(getattr(self.settings, "forecast_ranker_top_per_bucket", 10) or 10))
+        max_age_hours = max(1, int(getattr(self.settings, "forecast_ranker_max_age_hours", 24 * 14) or (24 * 14)))
+        market_filter = self._scope().row_market_filter()
+        allowed = set(self._target_universe())
+
+        out: list[str] = []
+        for bucket in FORECAST_RANKER_BUCKETS:
+            try:
+                rows = loader(
+                    limit=top_per_bucket,
+                    max_age_hours=max_age_hours,
+                    buckets=[bucket],
+                    markets=market_filter or None,
+                ) or []
+            except Exception as exc:
+                logger.warning(
+                    "[yellow]forecast ranker bucket load failed[/yellow] bucket=%s err=%s",
+                    bucket,
+                    str(exc)[:160],
+                )
+                continue
+            for ticker in ranker_rows_to_tickers(rows, limit=top_per_bucket):
+                if allowed and ticker not in allowed:
+                    continue
+                out.append(ticker)
+        for profile in FORECAST_RANKER_PROFILES:
+            try:
+                rows = loader(
+                    limit=top_per_bucket,
+                    max_age_hours=max_age_hours,
+                    profiles=[profile],
+                    markets=market_filter or None,
+                ) or []
+            except Exception as exc:
+                logger.warning(
+                    "[yellow]forecast ranker profile load failed[/yellow] profile=%s err=%s",
+                    profile,
+                    str(exc)[:160],
+                )
+                continue
+            for ticker in ranker_rows_to_tickers(rows, limit=top_per_bucket):
+                if allowed and ticker not in allowed:
+                    continue
+                out.append(ticker)
+        return self._normalize_tickers(out)
 
     def _log_tool_result(self, tool_name: str, rows: list | dict | None, *, key_fields: list[str] | None = None) -> None:
         """Emit a structured TOOL_RESULT log line for later extraction.
