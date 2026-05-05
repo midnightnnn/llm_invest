@@ -47,6 +47,20 @@ CurrentUserFn = Callable[[Request], dict[str, Any] | None]
 _LOADER_CACHE_MAX_ENTRIES = 64
 
 
+class _SuppressAdkExperimentalWarnings:
+    _ENV_KEY = "ADK_SUPPRESS_EXPERIMENTAL_FEATURE_WARNINGS"
+
+    def __enter__(self) -> None:
+        self._previous = os.environ.get(self._ENV_KEY)
+        os.environ[self._ENV_KEY] = "true"
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        if self._previous is None:
+            os.environ.pop(self._ENV_KEY, None)
+        else:
+            os.environ[self._ENV_KEY] = self._previous
+
+
 def _secretish(name: str) -> bool:
     token = str(name or "").strip().lower()
     return any(marker in token for marker in ("key", "secret", "token", "password"))
@@ -816,18 +830,19 @@ def build_investment_chat_adk_app(
     )
     session_service_uri = _default_session_service_uri()
     artifact_service_uri = str(os.getenv("ARENA_CHAT_ARTIFACT_SERVICE_URI") or "memory://").strip() or "memory://"
-    app = get_fast_api_app(
-        agents_dir=_adk_agents_dir(),
-        agent_loader=loader,
-        session_service_uri=session_service_uri,
-        artifact_service_uri=artifact_service_uri,
-        memory_service_uri=str(os.getenv("ARENA_CHAT_MEMORY_SERVICE_URI") or "").strip() or None,
-        use_local_storage=False,
-        allow_origins=None,
-        web=False,
-        url_prefix=url_prefix,
-        auto_create_session=False,
-    )
+    with _SuppressAdkExperimentalWarnings():
+        app = get_fast_api_app(
+            agents_dir=_adk_agents_dir(),
+            agent_loader=loader,
+            session_service_uri=session_service_uri,
+            artifact_service_uri=artifact_service_uri,
+            memory_service_uri=str(os.getenv("ARENA_CHAT_MEMORY_SERVICE_URI") or "").strip() or None,
+            use_local_storage=False,
+            allow_origins=None,
+            web=False,
+            url_prefix=url_prefix,
+            auto_create_session=False,
+        )
     _install_auth_gate(app, auth_enabled=auth_enabled, current_user=current_user, default_tenant=default_tenant)
     _mount_adk_static(app, url_prefix=url_prefix)
     return app

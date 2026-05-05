@@ -30,6 +30,7 @@ def mock_settings():
     settings.anthropic_model = "claude-sonnet-4-6"
     settings.trading_mode = "paper"
     settings.llm_timeout_seconds = 10
+    settings.timeout_for = lambda role: 10
     return settings
 
 
@@ -63,6 +64,7 @@ def test_research_agent_stays_gemini_for_single_gpt_trader(mock_repo):
     settings.research_max_tickers = 5
     settings.trading_mode = "paper"
     settings.llm_timeout_seconds = 10
+    settings.timeout_for = lambda role: 10
 
     agent = ResearchAgent(settings=settings, repo=mock_repo)
 
@@ -186,7 +188,8 @@ class TestRun:
         assert results == []
         mock_repo.insert_research_briefings.assert_not_called()
 
-    def test_missing_gemini_key_returns_empty(self, mock_repo):
+    def test_missing_gemini_key_returns_empty(self, monkeypatch, mock_repo):
+        monkeypatch.delenv("GOOGLE_GENAI_USE_VERTEXAI", raising=False)
         settings = MagicMock(spec=Settings)
         settings.agent_ids = ["gpt"]
         settings.agent_configs = {}
@@ -205,6 +208,7 @@ class TestRun:
         settings.research_max_tickers = 5
         settings.trading_mode = "paper"
         settings.llm_timeout_seconds = 10
+        settings.timeout_for = lambda role: 10
 
         agent = ResearchAgent(settings=settings, repo=mock_repo)
         results = asyncio.run(agent.run(["AAPL"]))
