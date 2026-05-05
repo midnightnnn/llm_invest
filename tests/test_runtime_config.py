@@ -2,54 +2,15 @@ from __future__ import annotations
 
 import json
 
-from arena.config import apply_runtime_overrides, load_settings
+from arena.config import apply_runtime_overrides
 from arena.data.bigquery.runtime_store import RuntimeStore
-
-
-class _FakeConfigRepo:
-    def __init__(self, values: dict[str, str]):
-        self._values = values
-        self.universe_rows: list[str] = ["AAPL", "MSFT"]
-
-    def get_configs(self, tenant_id: str, config_keys: list[str]) -> dict[str, str]:
-        _ = tenant_id, config_keys
-        return dict(self._values)
-
-    def latest_universe_candidate_tickers(self, *, limit=200):
-        return list(self.universe_rows[:limit])
-
-
-class _DummyClient:
-    def __init__(self) -> None:
-        self.insert_calls: list[tuple[str, list[dict[str, object]]]] = []
-
-    def insert_rows_json(self, table_id: str, rows: list[dict[str, object]]) -> list[dict[str, object]]:
-        self.insert_calls.append((table_id, rows))
-        return []
-
-
-class _FakeSession:
-    dataset_fqn = "proj.ds"
-    tenant_id = "local"
-
-    def __init__(self, rows: list[dict[str, object]] | None = None) -> None:
-        self.client = _DummyClient()
-        self._rows = rows or []
-        self.last_fetch: tuple[str, dict[str, object]] | None = None
-
-    def resolve_tenant_id(self, tenant_id: str | None = None) -> str:
-        return str(tenant_id or self.tenant_id or "local").strip().lower() or "local"
-
-    def fetch_rows(self, sql: str, params: dict[str, object] | None = None) -> list[dict[str, object]]:
-        self.last_fetch = (sql, params or {})
-        return list(self._rows)
-
-    def execute(self, sql: str, params: dict[str, object] | None = None) -> None:
-        pass
+from tests.helpers.bigquery import FakeBigQuerySession
+from tests.helpers.repos import FakeRuntimeConfigRepo
+from tests.helpers.settings import make_test_settings
 
 
 def test_apply_runtime_overrides_applies_agents_config_risk_and_sleeve() -> None:
-    settings = load_settings()
+    settings = make_test_settings()
     settings.agent_ids = ["gpt"]
     settings.openai_model = "gpt-default"
     settings.gemini_model = "gemini-default"
@@ -57,7 +18,7 @@ def test_apply_runtime_overrides_applies_agents_config_risk_and_sleeve() -> None
     settings.max_order_krw = 10.0
     settings.sleeve_capital_krw = 100.0
 
-    repo = _FakeConfigRepo(
+    repo = FakeRuntimeConfigRepo(
         {
             "agents_config": json.dumps(
                 [
@@ -97,10 +58,10 @@ def test_apply_runtime_overrides_applies_agents_config_risk_and_sleeve() -> None
 
 
 def test_apply_runtime_overrides_respects_explicit_empty_agents_config() -> None:
-    settings = load_settings()
+    settings = make_test_settings()
     settings.agent_ids = ["gpt", "gemini", "claude"]
 
-    repo = _FakeConfigRepo({"agents_config": "[]"})
+    repo = FakeRuntimeConfigRepo({"agents_config": "[]"})
 
     out = apply_runtime_overrides(settings, repo, tenant_id="tenant-a")
 
@@ -110,10 +71,10 @@ def test_apply_runtime_overrides_respects_explicit_empty_agents_config() -> None
 
 
 def test_apply_runtime_overrides_applies_memory_compaction_models() -> None:
-    settings = load_settings()
+    settings = make_test_settings()
     settings.memory_compaction_models = {}
 
-    repo = _FakeConfigRepo(
+    repo = FakeRuntimeConfigRepo(
         {
             "memory_compaction_models": json.dumps(
                 {
@@ -136,11 +97,11 @@ def test_apply_runtime_overrides_applies_memory_compaction_models() -> None:
 
 
 def test_apply_runtime_overrides_ignores_invalid_numeric_tokens() -> None:
-    settings = load_settings()
+    settings = make_test_settings()
     settings.max_order_krw = 11.0
     settings.sleeve_capital_krw = 22.0
 
-    repo = _FakeConfigRepo(
+    repo = FakeRuntimeConfigRepo(
         {
             "risk_policy": json.dumps(
                 {
@@ -159,7 +120,7 @@ def test_apply_runtime_overrides_ignores_invalid_numeric_tokens() -> None:
 
 
 def test_runtime_repo_set_config_writes_normalized_row() -> None:
-    session = _FakeSession()
+    session = FakeBigQuerySession(tenant_id="local")
     store = RuntimeStore(session)
     store.set_config("Tenant-A", " Agent_Ids ", "[\"gpt\"]", "tester")
 
@@ -176,7 +137,7 @@ def test_runtime_repo_set_config_writes_normalized_row() -> None:
 
 
 def test_runtime_repo_get_config_returns_latest_value() -> None:
-    session = _FakeSession(rows=[{"config_value": "abc"}])
+    session = FakeBigQuerySession(tenant_id="local", fetch_result=[{"config_value": "abc"}])
     store = RuntimeStore(session)
     value = store.get_config("tenant-a", "system_prompt")
     assert value == "abc"
@@ -187,8 +148,9 @@ def test_runtime_repo_get_config_returns_latest_value() -> None:
 
 
 def test_runtime_repo_get_configs_returns_key_value_map() -> None:
-    session = _FakeSession(
-        rows=[
+    session = FakeBigQuerySession(
+        tenant_id="local",
+        fetch_result=[
             {"config_key": "agent_ids", "config_value": "[\"gpt\"]"},
             {"config_key": "risk_policy", "config_value": "{\"max_order_krw\":1}"},
         ]
@@ -200,8 +162,9 @@ def test_runtime_repo_get_configs_returns_key_value_map() -> None:
 
 
 def test_runtime_repo_latest_config_values_returns_latest_value_per_tenant() -> None:
-    session = _FakeSession(
-        rows=[
+    session = FakeBigQuerySession(
+        tenant_id="local",
+        fetch_result=[
             {"tenant_id": "Tenant-A", "config_value": "us"},
             {"tenant_id": "tenant-b", "config_value": "kospi"},
         ]
@@ -218,8 +181,9 @@ def test_runtime_repo_latest_config_values_returns_latest_value_per_tenant() -> 
 
 
 def test_runtime_repo_list_runtime_tenants_normalizes_tokens() -> None:
-    session = _FakeSession(
-        rows=[
+    session = FakeBigQuerySession(
+        tenant_id="local",
+        fetch_result=[
             {"tenant_id": "Tenant-A"},
             {"tenant_id": " local "},
             {"tenant_id": ""},
@@ -233,48 +197,48 @@ def test_runtime_repo_list_runtime_tenants_normalizes_tokens() -> None:
 
 
 def test_apply_runtime_overrides_applies_kis_target_market() -> None:
-    settings = load_settings()
+    settings = make_test_settings()
     settings.kis_target_market = "nasdaq"
 
-    repo = _FakeConfigRepo({"kis_target_market": "kospi"})
+    repo = FakeRuntimeConfigRepo({"kis_target_market": "kospi"})
     out = apply_runtime_overrides(settings, repo, tenant_id="tenant-kr")
 
     assert out.kis_target_market == "kospi"
 
 
 def test_apply_runtime_overrides_keeps_market_when_not_set() -> None:
-    settings = load_settings()
+    settings = make_test_settings()
     settings.kis_target_market = "us"
 
-    repo = _FakeConfigRepo({})
+    repo = FakeRuntimeConfigRepo({})
     out = apply_runtime_overrides(settings, repo, tenant_id="tenant-us")
 
     assert out.kis_target_market == "us"
 
 
 def test_apply_runtime_overrides_does_not_populate_default_universe_from_repo() -> None:
-    settings = load_settings()
+    settings = make_test_settings()
     settings.default_universe = []
     settings.universe_run_top_n = 2
 
-    repo = _FakeConfigRepo({})
+    repo = FakeRuntimeConfigRepo({})
     out = apply_runtime_overrides(settings, repo, tenant_id="tenant-a")
 
     assert out.default_universe == []
 
 
 def test_apply_runtime_overrides_merges_reconcile_excluded_tickers() -> None:
-    settings = load_settings()
+    settings = make_test_settings()
     settings.reconcile_excluded_tickers = ["PLTD"]
 
-    repo = _FakeConfigRepo({"reconcile_excluded_tickers": " tsll , pltd "})
+    repo = FakeRuntimeConfigRepo({"reconcile_excluded_tickers": " tsll , pltd "})
     out = apply_runtime_overrides(settings, repo, tenant_id="tenant-us")
 
     assert out.reconcile_excluded_tickers == ["PLTD", "TSLL"]
 
 
 def test_apply_runtime_overrides_applies_runtime_strategy_knobs() -> None:
-    settings = load_settings()
+    settings = make_test_settings()
     settings.universe_run_top_n = 400
     settings.universe_per_exchange_cap = 200
     settings.forecast_mode = "all"
@@ -283,7 +247,7 @@ def test_apply_runtime_overrides_applies_runtime_strategy_knobs() -> None:
     settings.research_mover_top_n = 3
     settings.research_earnings_lookahead_days = 7
 
-    repo = _FakeConfigRepo(
+    repo = FakeRuntimeConfigRepo(
         {
             "universe_run_top_n": "120",
             "universe_per_exchange_cap": "80",
@@ -307,12 +271,12 @@ def test_apply_runtime_overrides_applies_runtime_strategy_knobs() -> None:
 
 
 def test_apply_runtime_overrides_applies_agent_autonomy_config() -> None:
-    settings = load_settings()
+    settings = make_test_settings()
     settings.autonomy_working_set_enabled = False
     settings.autonomy_tool_default_candidates_enabled = False
     settings.autonomy_opportunity_context_enabled = False
 
-    repo = _FakeConfigRepo(
+    repo = FakeRuntimeConfigRepo(
         {
             "agent_autonomy_config": json.dumps(
                 {
@@ -332,12 +296,12 @@ def test_apply_runtime_overrides_applies_agent_autonomy_config() -> None:
 
 
 def test_apply_runtime_overrides_can_disable_agent_autonomy_config() -> None:
-    settings = load_settings()
+    settings = make_test_settings()
     settings.autonomy_working_set_enabled = True
     settings.autonomy_tool_default_candidates_enabled = True
     settings.autonomy_opportunity_context_enabled = True
 
-    repo = _FakeConfigRepo(
+    repo = FakeRuntimeConfigRepo(
         {
             "agent_autonomy_config": json.dumps(
                 {
@@ -357,12 +321,12 @@ def test_apply_runtime_overrides_can_disable_agent_autonomy_config() -> None:
 
 
 def test_apply_runtime_overrides_applies_kis_account_selection() -> None:
-    settings = load_settings()
+    settings = make_test_settings()
     settings.kis_account_no = ""
     settings.kis_account_product_code = "01"
     settings.kis_account_key_suffix = ""
 
-    repo = _FakeConfigRepo(
+    repo = FakeRuntimeConfigRepo(
         {
             "kis_account_no": "6431760301",
             "kis_account_product_code": "01",
@@ -378,10 +342,10 @@ def test_apply_runtime_overrides_applies_kis_account_selection() -> None:
 
 
 def test_apply_runtime_overrides_applies_real_trading_approval() -> None:
-    settings = load_settings()
+    settings = make_test_settings()
     settings.real_trading_approved = False
 
-    repo = _FakeConfigRepo({"real_trading_approved": "true"})
+    repo = FakeRuntimeConfigRepo({"real_trading_approved": "true"})
     out = apply_runtime_overrides(settings, repo, tenant_id="tenant-a")
 
     assert out.real_trading_approved is True

@@ -5,46 +5,21 @@ from datetime import datetime, timezone
 
 from arena.data.bigquery.ledger_store import LedgerStore
 from arena.data.schema import parse_ddl_columns, render_table_ddls
+from tests.helpers.bigquery import FakeBigQuerySession
 
 
-class _InsertClient:
-    def __init__(self) -> None:
-        self.calls: list[tuple[str, list[dict[str, object]]]] = []
+def _make_store() -> tuple[LedgerStore, FakeBigQuerySession]:
+    session: FakeBigQuerySession
 
-    def insert_rows_json(self, table_id: str, rows: list[dict[str, object]]):
-        self.calls.append((table_id, rows))
-        return []
-
-
-class _FakeSession:
-    """Mock BigQuerySession for LedgerStore tests."""
-
-    def __init__(self) -> None:
-        self.dataset_fqn = "proj.ds"
-        self.tenant_id = "local"
-        self.client = _InsertClient()
-        self._latest_rows: list[dict[str, object]] = []
-        self._existing_event_ids: set[str] = set()
-        self.last_fetch_sql = ""
-        self.last_fetch_params = None
-
-    def resolve_tenant_id(self, tenant_id: str | None = None) -> str:
-        return tenant_id or self.tenant_id
-
-    def fetch_rows(self, sql: str, params=None):
-        self.last_fetch_sql = sql
-        self.last_fetch_params = params
+    def fetch_handler(sql: str, params: dict[str, object]) -> list[dict[str, object]]:
         if "SELECT event_id" in sql:
-            tokens = set(((params or {}).get("event_ids") or []))
-            return [{"event_id": token} for token in tokens if token in self._existing_event_ids]
-        return list(self._latest_rows)
+            tokens = set((params.get("event_ids") or []))
+            return [{"event_id": token} for token in tokens if token in session._existing_event_ids]
+        return list(session._latest_rows)
 
-    def execute(self, sql: str, params=None):
-        pass
-
-
-def _make_store() -> tuple[LedgerStore, _FakeSession]:
-    session = _FakeSession()
+    session = FakeBigQuerySession(tenant_id="local", fetch_handler=fetch_handler)
+    session._latest_rows = []
+    session._existing_event_ids = set()
     return LedgerStore(session), session
 
 

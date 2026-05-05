@@ -6,19 +6,7 @@ import pytest
 from google.api_core.exceptions import NotFound
 
 from arena.security.credential_store import CredentialStore
-
-
-class _DummyRepo:
-    def __init__(self, latest: dict | None = None):
-        self._latest = latest or {}
-        self.upserts: list[dict] = []
-
-    def upsert_runtime_credentials(self, **kwargs):
-        self.upserts.append(dict(kwargs))
-
-    def latest_runtime_credentials(self, *, tenant_id: str):
-        _ = tenant_id
-        return dict(self._latest)
+from tests.helpers.repos import FakeRuntimeCredentialsRepo
 
 
 def test_latest_secret_json_returns_empty_on_not_found(monkeypatch) -> None:
@@ -31,7 +19,7 @@ def test_latest_secret_json_returns_empty_on_not_found(monkeypatch) -> None:
         "arena.security.credential_store.secretmanager.SecretManagerServiceClient",
         lambda: _FakeClient(),
     )
-    store = CredentialStore(project="proj", repo=_DummyRepo())
+    store = CredentialStore(project="proj", repo=FakeRuntimeCredentialsRepo())
 
     assert store._latest_secret_json(secret_id="tenant-kis") == {}
 
@@ -46,7 +34,7 @@ def test_latest_secret_json_raises_on_read_error(monkeypatch) -> None:
         "arena.security.credential_store.secretmanager.SecretManagerServiceClient",
         lambda: _FakeClient(),
     )
-    store = CredentialStore(project="proj", repo=_DummyRepo())
+    store = CredentialStore(project="proj", repo=FakeRuntimeCredentialsRepo())
 
     with pytest.raises(RuntimeError, match="failed to read secret payload"):
         store._latest_secret_json(secret_id="tenant-kis")
@@ -67,7 +55,7 @@ def test_latest_secret_json_raises_on_invalid_payload(monkeypatch) -> None:
         "arena.security.credential_store.secretmanager.SecretManagerServiceClient",
         lambda: _FakeClient(),
     )
-    store = CredentialStore(project="proj", repo=_DummyRepo())
+    store = CredentialStore(project="proj", repo=FakeRuntimeCredentialsRepo())
 
     with pytest.raises(RuntimeError, match="must be a JSON object"):
         store._latest_secret_json(secret_id="tenant-kis")
@@ -82,7 +70,7 @@ def test_list_kis_accounts_meta_skips_secret_lookup_without_runtime_secret_ref(m
         "arena.security.credential_store.secretmanager.SecretManagerServiceClient",
         lambda: _FakeClient(),
     )
-    store = CredentialStore(project="proj", repo=_DummyRepo())
+    store = CredentialStore(project="proj", repo=FakeRuntimeCredentialsRepo())
 
     assert store.list_kis_accounts_meta(tenant_id="local") == []
 
@@ -112,7 +100,7 @@ def test_list_kis_accounts_meta_uses_runtime_secret_name(monkeypatch) -> None:
     )
     store = CredentialStore(
         project="proj",
-        repo=_DummyRepo(latest={"kis_secret_name": "custom-kis-secret"}),
+        repo=FakeRuntimeCredentialsRepo(latest={"kis_secret_name": "custom-kis-secret"}),
     )
 
     rows = store.list_kis_accounts_meta(tenant_id="local")
@@ -162,7 +150,7 @@ def test_list_kis_accounts_meta_masks_saved_keys(monkeypatch) -> None:
     )
     store = CredentialStore(
         project="proj",
-        repo=_DummyRepo(latest={"kis_secret_name": "custom-kis-secret"}),
+        repo=FakeRuntimeCredentialsRepo(latest={"kis_secret_name": "custom-kis-secret"}),
     )
 
     rows = store.list_kis_accounts_meta(tenant_id="local")
@@ -175,7 +163,7 @@ def test_list_kis_accounts_meta_masks_saved_keys(monkeypatch) -> None:
 
 
 def test_save_model_keys_writes_provider_payload_and_preserves_existing_flags(monkeypatch) -> None:
-    repo = _DummyRepo()
+    repo = FakeRuntimeCredentialsRepo()
     store = CredentialStore(project="proj", repo=repo)
     writes: list[tuple[str, dict]] = []
 
@@ -217,7 +205,7 @@ def test_save_model_keys_writes_provider_payload_and_preserves_existing_flags(mo
 
 
 def test_save_model_keys_preserves_kis_metadata(monkeypatch) -> None:
-    repo = _DummyRepo(latest={
+    repo = FakeRuntimeCredentialsRepo(latest={
         "kis_account_no_masked": "****5678",
         "kis_env": "real",
         "notes": "prev note",

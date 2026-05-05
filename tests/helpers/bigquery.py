@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 
 @dataclass(frozen=True)
@@ -20,6 +20,10 @@ class FakeInsertClient:
 
     @property
     def inserts(self) -> list[tuple[str, list[dict[str, Any]]]]:
+        return self.calls
+
+    @property
+    def insert_calls(self) -> list[tuple[str, list[dict[str, Any]]]]:
         return self.calls
 
     @property
@@ -56,6 +60,7 @@ class FakeBigQuerySession:
         client: object | None = None,
         fetch_result: list[dict[str, Any]] | None = None,
         fetch_results: list[list[dict[str, Any]]] | None = None,
+        fetch_handler: Callable[[str, dict[str, Any]], list[dict[str, Any]]] | None = None,
     ) -> None:
         self.project = project
         self.dataset = dataset
@@ -68,6 +73,19 @@ class FakeBigQuerySession:
         self.fetch_calls: list[BigQueryCall] = []
         self.fetch_result = list(fetch_result or [])
         self.fetch_results = [list(rows) for rows in (fetch_results or [])]
+        self.fetch_handler = fetch_handler
+
+    @property
+    def last_fetch(self) -> tuple[str, dict[str, Any]] | None:
+        return self.fetched[-1] if self.fetched else None
+
+    @property
+    def last_fetch_sql(self) -> str:
+        return self.fetched[-1][0] if self.fetched else ""
+
+    @property
+    def last_fetch_params(self) -> dict[str, Any] | None:
+        return self.fetched[-1][1] if self.fetched else None
 
     def resolve_tenant_id(self, tenant_id: str | None = None) -> str:
         return str(tenant_id or self.tenant_id)
@@ -85,6 +103,8 @@ class FakeBigQuerySession:
         copied = dict(params or {})
         self.fetched.append((sql, copied))
         self.fetch_calls.append(BigQueryCall(sql=sql, params=copied))
+        if self.fetch_handler is not None:
+            return list(self.fetch_handler(sql, copied))
         if self.fetch_results:
             return list(self.fetch_results.pop(0))
         return list(self.fetch_result)
