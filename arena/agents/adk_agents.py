@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import inspect
 import json
 import logging
 import threading
@@ -89,6 +88,7 @@ from arena.agents.adk_tool_config import (
     _load_disabled_tool_ids,
     _resolve_disabled_tool_ids,
 )
+from arena.agents.adk_tool_helpers import apply_tool_schema_metadata as _apply_tool_schema_metadata
 from arena.agents.base import AgentOutput, TradingAgent
 from arena.config import AgentConfig, Settings, normalize_agent_settings
 from arena.data.bq import BigQueryRepository
@@ -158,18 +158,6 @@ def _extract_json_tail(text: str, *, marker: str = "") -> dict[str, Any] | None:
     except (json.JSONDecodeError, TypeError):
         return None
     return parsed if isinstance(parsed, dict) else None
-
-
-def _apply_tool_schema_metadata(fn, *, entry: ToolEntry, sig: inspect.Signature):
-    """Applies canonical registry metadata to the runtime tool wrapper."""
-    name = str(entry.name or entry.tool_id or getattr(fn, "__name__", "tool")).strip() or "tool"
-    description = str(entry.description or "").strip()
-    fn.__name__ = name
-    fn.__qualname__ = name
-    if description:
-        fn.__doc__ = description
-    fn.__signature__ = sig
-    return fn
 
 
 def _is_retryable_adk_error(exc: Exception) -> bool:

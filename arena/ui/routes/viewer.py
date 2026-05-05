@@ -15,6 +15,7 @@ class ViewerRouteDeps:
     kst: Any
     resolve_viewer_context: Callable[..., Any]
     cached_fetch: Callable[..., Any]
+    invalidate_tenant_cache: Callable[..., None]
     current_user: Callable[[Request], dict[str, Any] | None]
     tailwind_layout: Callable[..., str]
     html_response: Callable[..., HTMLResponse]

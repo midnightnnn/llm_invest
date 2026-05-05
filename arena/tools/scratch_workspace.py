@@ -7,7 +7,7 @@ import sys
 import tempfile
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import Any
+from typing import Any, Optional
 
 
 _ALLOWED_IMPORTS = (
@@ -324,7 +324,7 @@ class ScratchWorkspace:
         self._phase = str((context or {}).get("cycle_phase") or "").strip().lower()
         self._context = _safe_json(context or {})
 
-    def run_python(self, code: str, inputs: dict[str, Any] | None = None) -> dict[str, Any]:
+    def run_python(self, code: str, inputs: Optional[dict[str, Any]] = None) -> dict[str, Any]:
         payload = {
             "code": str(code or ""),
             "inputs": _safe_json(inputs or {}),

@@ -465,6 +465,7 @@ def _build_app(*, repo: BigQueryRepository, settings: Settings) -> FastAPI:
         kst=_KST,
         resolve_viewer_context=_resolve_viewer_context,
         cached_fetch=_cached_fetch,
+        invalidate_tenant_cache=_invalidate_tenant_cache,
         current_user=_current_user,
         tailwind_layout=_tailwind_layout,
         html_response=_html_response,

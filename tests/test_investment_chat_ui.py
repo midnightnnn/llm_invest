@@ -241,6 +241,84 @@ def test_build_investment_chat_agent_injects_tool_memory_for_request_tenant(monk
     assert repo.resolve_tenant_id() == "local"
 
 
+def test_build_investment_chat_agent_uses_stored_chat_agent_config(monkeypatch) -> None:
+    from arena.agents.investment_chat import factory
+
+    settings = load_settings()
+    repo = _ChatOrderRepo()
+    repo.set_config(
+        "local",
+        "investment_chat_config",
+        json.dumps(
+            {
+                "provider": "gpt",
+                "model": "gpt-5.5",
+                "llm_params": {"reasoning_effort": "high", "verbosity": "low"},
+            }
+        ),
+        "seed",
+    )
+    captured: dict[str, object] = {}
+
+    def fake_resolve_model(provider, settings, *, model_override="", llm_params=None):
+        captured["provider"] = provider
+        captured["model_override"] = model_override
+        captured["llm_params"] = dict(llm_params or {})
+        return "fake-model"
+
+    monkeypatch.setattr(factory, "_resolve_model", fake_resolve_model)
+    monkeypatch.setattr(factory, "Agent", lambda **kwargs: SimpleNamespace(**kwargs))
+
+    factory.build_investment_chat_agent(
+        repo=repo,
+        settings=settings,
+        tenant_id="local",
+        registry=ToolRegistry([]),
+    )
+
+    assert captured["provider"] == "gpt"
+    assert captured["model_override"] == "gpt-5.5"
+    assert captured["llm_params"] == {"reasoning_effort": "high", "verbosity": "low"}
+
+
+def test_build_investment_chat_agent_applies_stored_chat_tool_filter(monkeypatch) -> None:
+    from arena.agents.investment_chat import factory
+
+    settings = load_settings()
+    repo = _ChatOrderRepo()
+    repo.set_config(
+        "local",
+        "investment_chat_config",
+        json.dumps({"disabled_tools": ["recommend_opportunities"]}),
+        "seed",
+    )
+    registry = ToolRegistry(
+        [
+            ToolEntry(
+                tool_id="recommend_opportunities",
+                name="recommend_opportunities",
+                description="read tool",
+                category="quant",
+                callable=lambda top_n=8: {"top_n": top_n},
+            )
+        ]
+    )
+
+    monkeypatch.setattr(factory, "_resolve_model", lambda *args, **kwargs: "fake-model")
+    monkeypatch.setattr(factory, "Agent", lambda **kwargs: SimpleNamespace(**kwargs))
+
+    agent = factory.build_investment_chat_agent(
+        repo=repo,
+        settings=settings,
+        tenant_id="local",
+        registry=registry,
+    )
+
+    tool_names = {getattr(tool, "__name__", "") for tool in agent.tools}
+    assert "recommend_opportunities" not in tool_names
+    assert "get_account_snapshot" in tool_names
+
+
 class _ChatOrderRepo(_DummyRepo):
     tenant_id = "local"
 
@@ -424,8 +502,83 @@ def test_chat_order_tool_schema_describes_ontology_friendly_rationale(monkeypatc
     assert "explicit ticker names" in dumped
 
 
+def test_chat_order_tool_schema_preserves_required_fields_and_enums(monkeypatch) -> None:
+    from google.adk.tools.function_tool import FunctionTool
+
+    repo = _ChatOrderRepo()
+    agent = _build_fake_chat_agent(monkeypatch, repo)
+    tool = next(candidate for candidate in agent.tools if candidate.__name__ == "submit_order_with_confirmation")
+
+    declaration = FunctionTool(tool)._get_declaration()
+    params = declaration.parameters.model_dump(mode="json", exclude_none=True)
+    props = params["properties"]
+
+    assert set(params["required"]) >= {"ticker", "side", "quantity", "price_krw", "rationale"}
+    assert props["side"]["enum"] == ["BUY", "SELL"]
+    assert props["scope"]["enum"] == ["account", "agent_sleeve"]
+    assert props["price_native"]["type"] == "NUMBER"
+    assert props["price_native"]["nullable"] is True
+
+
+def test_chat_config_tools_expose_structured_schema(monkeypatch) -> None:
+    from google.adk.tools.function_tool import FunctionTool
+
+    repo = _ChatOrderRepo()
+    agent = _build_fake_chat_agent(monkeypatch, repo)
+    tools = {candidate.__name__: candidate for candidate in agent.tools}
+
+    assert "propose_config_change" not in tools
+    assert {
+        "propose_agent_config_change",
+        "propose_chat_agent_config_change",
+        "propose_tenant_config_change",
+    }.issubset(tools)
+
+    declaration = FunctionTool(tools["propose_agent_config_change"])._get_declaration()
+    params = declaration.parameters.model_dump(mode="json", exclude_none=True)
+    props = params["properties"]
+
+    assert "change_json" not in props
+    assert "agent_id" in params["required"]
+    assert props["action"]["enum"] == ["update", "upsert", "add", "remove"]
+    assert props["capital_allocation_mode"]["enum"] == ["", "fixed_krw", "account_percent", "whole_account"]
+
+
+def test_chat_analysis_tool_schema_keeps_required_fields_with_optional_params(monkeypatch) -> None:
+    from google.adk.tools.function_tool import FunctionTool
+
+    from arena.agents.investment_chat import factory
+    from arena.agents.investment_chat import memory as chat_memory
+
+    settings = load_settings()
+    settings.trading_mode = "paper"
+    settings.kis_target_market = "us"
+    repo = _ChatOrderRepo()
+
+    _FakeExecutionMemory.instances.clear()
+    monkeypatch.setattr(chat_memory, "MemoryStore", _FakeExecutionMemory, raising=False)
+    monkeypatch.setattr(factory, "_resolve_model", lambda *args, **kwargs: "fake-model")
+    monkeypatch.setattr(factory, "Agent", lambda **kwargs: SimpleNamespace(**kwargs))
+    agent = factory.build_investment_chat_agent(
+        repo=repo,
+        settings=settings,
+        tenant_id="local",
+        registry=None,
+    )
+    tool = next(candidate for candidate in agent.tools if candidate.__name__ == "optimize_portfolio")
+
+    declaration = FunctionTool(tool)._get_declaration()
+    params = declaration.parameters.model_dump(mode="json", exclude_none=True)
+
+    assert "tickers" in params["required"]
+    assert params["properties"]["tickers"]["items"]["type"] == "STRING"
+    assert params["properties"]["strategy"]["enum"] == ["sharpe", "risk_parity", "forecast"]
+    assert params["properties"]["forecast_mode"]["enum"] == ["", "all", "stacked", "base", "balanced", "lgbm", "ridge", "avg"]
+
+
 def _build_raw_chat_tools(monkeypatch, repo: _ChatOrderRepo, *, settings=None, include_internal_bridge: bool = False):
     from arena.agents.investment_chat import memory as chat_memory
+    from arena.agents.investment_chat.config_tools import build_config_bridge_tool_entries
     from arena.agents.investment_chat.order_tools import build_order_bridge_tool_entries
     from arena.agents.investment_chat.registry import build_chat_registry
 
@@ -441,6 +594,9 @@ def _build_raw_chat_tools(monkeypatch, repo: _ChatOrderRepo, *, settings=None, i
     if include_internal_bridge:
         entries.extend(
             build_order_bridge_tool_entries(repo=repo, settings=tool_settings, tenant_id="local")
+        )
+        entries.extend(
+            build_config_bridge_tool_entries(repo=repo, settings=tool_settings, tenant_id="local")
         )
     return {entry.name: entry.callable for entry in entries}
 
@@ -523,6 +679,134 @@ def test_chat_order_tools_require_confirmation_and_are_idempotent(monkeypatch) -
 
     assert second_draft["approval_token"] != token
     assert tools["submit_approved_order"](token, f"CONFIRM {token}")["status"] == "already_submitted"
+
+
+def test_chat_config_change_tool_requires_button_approval(monkeypatch) -> None:
+    from arena.agents.investment_chat.drafts import config_draft_key
+
+    repo = _ChatOrderRepo()
+    repo.set_config(
+        "local",
+        "agents_config",
+        json.dumps(
+            [
+                {
+                    "id": "gpt",
+                    "provider": "gpt",
+                    "model": "gpt-5.2",
+                    "capital_krw": 1_000_000,
+                    "target_market": "us",
+                }
+            ]
+        ),
+        "seed",
+    )
+    tools = _build_raw_chat_tools(monkeypatch, repo, include_internal_bridge=True)
+
+    proposed = tools["propose_agent_config_change"](
+        agent_id="gpt",
+        action="update",
+        provider="gpt",
+        model="gpt-5.5",
+        capital_allocation_mode="account_percent",
+        capital_allocation_percent=50,
+        target_market="us",
+        disabled_tools=["screen_market"],
+        memory_compaction_model="gpt-5.4",
+        rationale="gpt sleeve should manage half of the account",
+    )
+
+    token = str(proposed.get("approval_token") or "")
+    assert proposed["status"] == "ok"
+    assert proposed["approval_required"] is True
+    assert token
+    assert repo.get_config("local", config_draft_key(token))
+    saved_before_approval = json.loads(repo.get_config("local", "agents_config") or "[]")
+    assert saved_before_approval[0]["model"] == "gpt-5.2"
+
+    status = tools["get_config_change_status"](approval_token=token)
+
+    assert status["status"] == "ok"
+    assert status["drafts"][0]["approval_token"] == token
+    assert status["drafts"][0]["submittable"] is True
+    assert "gpt" in status["drafts"][0]["summary"]
+
+    blocked = tools["apply_approved_config_change"](approval_token=token, confirmation_text="승인")
+
+    assert blocked["status"] == "blocked"
+    assert "CONFIRM" in blocked["required_confirmation"]
+    assert repo.capital_sync_calls == []
+
+    applied = tools["apply_approved_config_change"](
+        approval_token=token,
+        confirmation_text=f"CONFIRM {token}",
+    )
+    repeated = tools["apply_approved_config_change"](
+        approval_token=token,
+        confirmation_text=f"CONFIRM {token}",
+    )
+
+    assert applied["status"] == "applied"
+    assert repeated["status"] == "already_applied"
+    saved = json.loads(repo.get_config("local", "agents_config") or "[]")
+    assert saved[0]["id"] == "gpt"
+    assert saved[0]["model"] == "gpt-5.5"
+    assert saved[0]["capital_krw"] == 5_000_000
+    assert saved[0]["disabled_tools"] == ["screen_market"]
+    assert saved[0]["memory_compaction_model"] == "gpt-5.4"
+    assert repo.capital_sync_calls
+    assert repo.capital_sync_calls[-1]["target_capitals"]["gpt"] == 5_000_000
+
+
+def test_investment_chat_config_draft_api_lists_and_applies_pending_draft(monkeypatch) -> None:
+    import arena.ui.app as ui_app
+
+    monkeypatch.setenv("ARENA_UI_AUTH_ENABLED", "false")
+    monkeypatch.setenv("ARENA_UI_SETTINGS_ENABLED", "true")
+    monkeypatch.setattr(
+        ui_app,
+        "build_investment_chat_adk_app",
+        lambda **kwargs: FastAPI(title="stub-adk"),
+    )
+    repo = _ChatOrderRepo()
+    repo.set_config(
+        "local",
+        "agents_config",
+        json.dumps([{"id": "gpt", "provider": "gpt", "model": "gpt-5.2", "capital_krw": 1_000_000}]),
+        "seed",
+    )
+    repo.recent_runtime_audit_logs = lambda limit=50: list(reversed(repo.audit_logs[-limit:]))  # type: ignore[method-assign]
+    settings = load_settings()
+    tools = _build_raw_chat_tools(monkeypatch, repo, settings=settings, include_internal_bridge=True)
+    draft = tools["propose_agent_config_change"](
+        agent_id="gpt",
+        action="update",
+        provider="gpt",
+        model="gpt-5.5",
+        capital_krw=2_000_000,
+        rationale="upgrade model and capital",
+    )
+    token = str(draft["approval_token"])
+    client = DirectRouteClient(_build_app(repo=repo, settings=settings))
+
+    listed = client.get("/investment-chat/config-drafts", params={"tenant_id": "local"})
+
+    assert listed.status_code == 200
+    payload = listed.json()
+    assert payload["status"] == "ok"
+    assert payload["drafts"][0]["approval_token"] == token
+    assert payload["drafts"][0]["submittable"] is True
+
+    applied = client.post(f"/investment-chat/config-drafts/{token}/apply", params={"tenant_id": "local"})
+    repeated = client.post(f"/investment-chat/config-drafts/{token}/apply", params={"tenant_id": "local"})
+
+    assert applied.status_code == 200
+    assert applied.json()["status"] == "applied"
+    assert "chat_delivery_text" in applied.json()
+    assert repeated.json()["status"] == "already_applied"
+    saved = json.loads(repo.get_config("local", "agents_config") or "[]")
+    assert saved[0]["model"] == "gpt-5.5"
+    assert saved[0]["capital_krw"] == 2_000_000
 
 
 def test_chat_order_tool_uses_adk_confirmation_before_execution(monkeypatch) -> None:
@@ -1194,6 +1478,10 @@ def test_ui_registers_investment_chat_page_and_adk_mount(monkeypatch) -> None:
     assert "submitResultMessage" in response.text
     assert "execution_report.message" in response.text
     assert "deliverOrderResultToChat" in response.text
+    assert "Config Approval" in response.text
+    assert "data-config-draft-panel" in response.text
+    assert "/investment-chat/config-drafts" in response.text
+    assert "data-config-draft-apply" in response.text
     assert "isAdkChatBusy" in response.text
     assert "mat-progress-bar" in response.text
     assert "textarea.chat-input-box" in response.text
@@ -1262,6 +1550,35 @@ def test_investment_chat_provider_options_come_from_adk_provider_registry(monkey
     assert '<option value="claude"' in response.text
     assert client.session["investment_chat_provider"] == "deepseek"
     assert client.session["investment_chat_model"] == "deepseek-reasoner"
+
+
+def test_investment_chat_page_defaults_to_stored_chat_agent_config(monkeypatch) -> None:
+    import arena.ui.app as ui_app
+
+    monkeypatch.setenv("ARENA_UI_AUTH_ENABLED", "false")
+    monkeypatch.setattr(
+        ui_app,
+        "build_investment_chat_adk_app",
+        lambda **kwargs: FastAPI(title="stub-adk"),
+    )
+    repo = _DummyRepo()
+    repo.set_config(
+        "local",
+        "investment_chat_config",
+        json.dumps({"provider": "claude", "model": "claude-opus-4-7"}),
+        "seed",
+    )
+    app = _build_app(repo=repo, settings=load_settings())
+    client = DirectRouteClient(app)
+
+    response = client.get("/investment-chat", params={"tenant_id": "local"})
+
+    assert response.status_code == 200
+    assert '<option value="claude" selected>Anthropic Claude</option>' in response.text
+    assert '<option value="claude-opus-4-7" selected>claude-opus-4-7</option>' in response.text
+    assert "/investment-chat/adk/dev-ui/?tenant_id=local&amp;provider=claude&amp;model=claude-opus-4-7" in response.text
+    assert client.session["investment_chat_provider"] == "claude"
+    assert client.session["investment_chat_model"] == "claude-opus-4-7"
 
 
 def test_investment_chat_provider_options_are_limited_to_tenant_model_keys(monkeypatch) -> None:

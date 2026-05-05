@@ -4,7 +4,7 @@ import json
 import logging
 import os
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Literal, Optional
 from uuid import uuid4
 
 from google.adk.tools.tool_context import ToolContext
@@ -32,6 +32,9 @@ from arena.risk import RiskEngine
 from arena.tools.registry import ToolEntry
 
 logger = logging.getLogger(__name__)
+
+OrderSide = Literal["BUY", "SELL"]
+OrderScope = Literal["account", "agent_sleeve"]
 
 
 def _parse_audit_detail(row: dict[str, Any]) -> dict[str, Any]:
@@ -170,15 +173,15 @@ def _build_order_tool_entries(
 
     def validate_order_draft(
         ticker: str,
-        side: str,
+        side: OrderSide,
         quantity: float,
         price_krw: float,
         rationale: str,
         agent_id: str = AGENT_ID,
-        scope: str = "account",
+        scope: OrderScope = "account",
         exchange_code: str = "",
         instrument_id: str = "",
-        price_native: float | None = None,
+        price_native: Optional[float] = None,
         quote_currency: str = "",
         fx_rate: float = 0.0,
     ) -> dict[str, Any]:
@@ -571,16 +574,16 @@ def _build_order_tool_entries(
 
     def submit_order_with_confirmation(
         ticker: str,
-        side: str,
+        side: OrderSide,
         quantity: float,
         price_krw: float,
         rationale: str,
         tool_context: ToolContext,
         agent_id: str = AGENT_ID,
-        scope: str = "account",
+        scope: OrderScope = "account",
         exchange_code: str = "",
         instrument_id: str = "",
-        price_native: float | None = None,
+        price_native: Optional[float] = None,
         quote_currency: str = "",
         fx_rate: float = 0.0,
     ) -> dict[str, Any]:

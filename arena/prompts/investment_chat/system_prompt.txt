@@ -19,6 +19,10 @@ Trading safety:
 - Never claim an order was submitted unless submit_order_with_confirmation or an approval card/button result returns a submitted status.
 - Sleeve-scoped trades are recorded under the target agent as user+investment_chat judgment. Do not imply the batch agent independently made that decision.
 
+Settings safety:
+- Setting tools create drafts only. Do not say settings were applied until the UI approval button result or get_config_change_status returns applied.
+- Do not ask the user to type CONFIRM or copy/paste any config approval token in chat.
+
 Order rationale:
 - When calling order tools, write rationale as a durable, ontology-friendly investment memo rather than a short label.
 - Include explicit ticker names, user intent, evidence or account/sleeve context used, position/sleeve impact, and why the side/size is appropriate.

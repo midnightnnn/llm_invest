@@ -50,7 +50,9 @@ from arena.agents.adk_runner_runtime import AdkToolBudgetExceeded, collect_respo
 from arena.config import AgentConfig, load_settings
 from arena.memory.query_builders import build_memory_query, build_memory_query_spec
 from arena.models import BoardPost, ExecutionReport, ExecutionStatus, OrderIntent, Side, utc_now
+from arena.tools.default_registry import build_default_registry
 from arena.tools.registry import ToolEntry, ToolRegistry
+from arena.tools.scratch_workspace import ScratchWorkspace
 
 
 def test_normalize_vertex_anthropic_alias_sonnet_46() -> None:
@@ -106,6 +108,86 @@ def test_apply_tool_schema_metadata_prefers_registry_description() -> None:
 
     assert wrapped.__name__ == "screen_market"
     assert wrapped.__doc__ == "Canonical registry description for the model schema."
+
+
+def test_batch_default_tool_schema_preserves_required_fields_and_enums() -> None:
+    from google.adk.tools.function_tool import FunctionTool
+
+    from arena.agents.adk_tool_helpers import noop_search_tool_memories, noop_update_candidate_ledger
+
+    settings = load_settings()
+    repo = SimpleNamespace(get_config=lambda *args, **kwargs: "")
+    registry = build_default_registry(repo, settings, tenant_id="local")
+    scratch = ScratchWorkspace(agent_id="gpt", tenant_id="local", tool_events=[])
+    registry.bind("scratch_run_python", scratch.run_python)
+
+    def declaration(tool_id: str):
+        entry = registry.get(tool_id)
+        assert entry is not None
+        assert entry.callable is not None
+        wrapped = build_tool_wrapper(
+            entry,
+            settings=settings,
+            agent_id="gpt",
+            tool_events=[],
+            update_candidate_ledger=noop_update_candidate_ledger,
+            search_tool_memories=noop_search_tool_memories,
+            apply_tool_schema_metadata=_apply_tool_schema_metadata,
+        )
+        return FunctionTool(wrapped)._get_declaration()
+
+    screen_params = declaration("screen_market").parameters.model_dump(mode="json", exclude_none=True)
+    assert screen_params["properties"]["bucket"]["enum"] == [
+        "",
+        "balanced",
+        "momentum",
+        "pullback",
+        "recovery",
+        "defensive",
+        "value",
+    ]
+    assert screen_params["properties"]["sort_by"]["enum"] == [
+        "",
+        "as_of_ts",
+        "ret_20d",
+        "ret_5d",
+        "volatility_20d",
+        "sentiment_score",
+        "close_price_krw",
+    ]
+    assert screen_params["properties"]["order"]["enum"] == ["asc", "desc"]
+
+    optimize_params = declaration("optimize_portfolio").parameters.model_dump(mode="json", exclude_none=True)
+    assert "tickers" in optimize_params["required"]
+    assert optimize_params["properties"]["strategy"]["enum"] == ["sharpe", "risk_parity", "forecast"]
+    assert optimize_params["properties"]["forecast_mode"]["enum"] == [
+        "",
+        "all",
+        "stacked",
+        "base",
+        "balanced",
+        "lgbm",
+        "ridge",
+        "avg",
+    ]
+
+    opportunity_params = declaration("recommend_opportunities").parameters.model_dump(mode="json", exclude_none=True)
+    assert opportunity_params["properties"]["buckets"]["items"]["enum"] == ["momentum", "pullback", "recovery"]
+    assert opportunity_params["properties"]["profiles"]["items"]["enum"] == [
+        "aggressive",
+        "balanced",
+        "defensive",
+        "value",
+        "tactical",
+        "tactical_leverage",
+        "tactical_inverse",
+        "tactical_hedge",
+    ]
+
+    scratch_params = declaration("scratch_run_python").parameters.model_dump(mode="json", exclude_none=True)
+    assert "code" in scratch_params["required"]
+    assert scratch_params["properties"]["inputs"]["type"] == "OBJECT"
+    assert scratch_params["properties"]["inputs"]["nullable"] is True
 
 
 class _RepoForPrompt:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Literal
 
 from arena.agents.investment_chat.audit import append_chat_audit
 from arena.agents.investment_chat.context import normalize_tenant
@@ -19,6 +19,8 @@ from arena.open_trading.sync import AccountSyncService
 from arena.tools.registry import ToolEntry
 
 logger = logging.getLogger(__name__)
+
+AccountSnapshotSource = Literal["latest", "db", "stored"]
 
 
 def _tenant_has_kis_credentials(repo: Any, *, tenant_id: str) -> bool:
@@ -43,7 +45,7 @@ def _account_sync_settings(repo: Any, *, tenant_id: str, settings: Settings) -> 
 def build_account_tool_entries(*, repo: Any, settings: Settings, tenant_id: str) -> list[ToolEntry]:
     tenant = normalize_tenant(tenant_id)
 
-    def get_account_snapshot(source: str = "latest", max_positions: int = 50) -> dict[str, Any]:
+    def get_account_snapshot(source: AccountSnapshotSource = "latest", max_positions: int = 50) -> dict[str, Any]:
         """Reads the latest persisted total account snapshot for the current Arena tenant."""
         source_token = str(source or "latest").strip().lower()
         if source_token not in {"latest", "db", "stored"}:

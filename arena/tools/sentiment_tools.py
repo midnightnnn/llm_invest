@@ -4,7 +4,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Optional
 from urllib.parse import quote_plus
 
 import requests
@@ -208,7 +208,7 @@ class SentimentTools:
         self,
         ticker: str = "",
         *,
-        tickers: list[str] | None = None,
+        tickers: Optional[list[str]] = None,
         max_posts: int = 10,
     ) -> list[dict[str, Any]] | dict[str, Any]:
         """Fetches recent Reddit posts mentioning ticker(s) from finance subreddits."""
@@ -324,7 +324,7 @@ class SentimentTools:
         self,
         ticker: str = "",
         *,
-        tickers: list[str] | None = None,
+        tickers: Optional[list[str]] = None,
         filing_type: str = "10-K",
         max_items: int = 5,
     ) -> list[dict[str, Any]] | dict[str, Any]:
@@ -590,7 +590,7 @@ class SentimentTools:
         days_ahead: int,
         limit: int,
         *,
-        tickers: list[str] | None = None,
+        tickers: Optional[list[str]] = None,
     ) -> dict[str, Any]:
         """US earnings from Nasdaq calendar API."""
         token = str(ticker or "").strip().upper()
@@ -748,7 +748,7 @@ class SentimentTools:
         self,
         ticker: str = "",
         *,
-        tickers: list[str] | None = None,
+        tickers: Optional[list[str]] = None,
         days_ahead: int = 14,
         limit: int = 30,
     ) -> dict[str, Any]:

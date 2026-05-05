@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 from datetime import date, datetime
-from typing import Any
+from typing import Any, Literal
 
 from arena.agents.investment_chat.constants import AGENT_ID
 from arena.agents.investment_chat.context import normalize_tenant
 from arena.agents.investment_chat.utils import safe_float
 from arena.tools.registry import ToolEntry
+
+TradeHistoryScope = Literal["all", "account", "agent_sleeve"]
 
 
 _DEFAULT_STATUSES = ["FILLED", "SIMULATED", "SUBMITTED"]
@@ -122,7 +124,7 @@ def build_history_tool_entries(*, repo: Any, tenant_id: str) -> list[ToolEntry]:
     def get_trade_history(
         ticker: str = "",
         agent_id: str = "",
-        scope: str = "all",
+        scope: TradeHistoryScope = "all",
         days: int = 365,
         limit: int = 50,
         statuses: str = "",

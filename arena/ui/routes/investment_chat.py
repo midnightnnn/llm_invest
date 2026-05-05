@@ -8,6 +8,11 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from arena.agents.investment_chat.context import REQUEST_USER_EMAIL
+from arena.agents.investment_chat.config_tools import (
+    build_config_bridge_tool_entries,
+    load_chat_agent_config,
+    recent_config_drafts,
+)
 from arena.agents.investment_chat.drafts import load_draft
 from arena.agents.investment_chat.order_tools import build_order_bridge_tool_entries
 from arena.providers.registry import canonical_provider, default_model_for_provider, list_adk_provider_specs
@@ -206,8 +211,15 @@ def register_investment_chat_routes(app: FastAPI, *, deps: ViewerRouteDeps) -> N
         if redirect is not None:
             return redirect
         provider_options = _provider_options(deps.repo, tenant)
-        provider_token = canonical_provider(provider) or str(provider or "").strip().lower()
+        chat_config = load_chat_agent_config(deps.repo, tenant_id=tenant)
+        requested_provider = canonical_provider(provider) or str(provider or "").strip().lower()
+        provider_token = requested_provider
         valid_providers = {item["value"] for item in provider_options}
+        if provider_token not in valid_providers:
+            stored_provider = canonical_provider(chat_config.get("provider")) or str(
+                chat_config.get("provider") or ""
+            ).strip().lower()
+            provider_token = stored_provider if stored_provider in valid_providers else ""
         if provider_token not in valid_providers:
             try:
                 provider_token = canonical_provider(request.session.get("investment_chat_provider")) or str(
@@ -219,8 +231,10 @@ def register_investment_chat_routes(app: FastAPI, *, deps: ViewerRouteDeps) -> N
             provider_token = str(provider_options[0]["value"]) if provider_options else ""
         tenant_settings = deps.settings_for_tenant(tenant)
         default_model = default_model_for_provider(tenant_settings, provider_token) if provider_token else ""
-        requested_provider = canonical_provider(provider) or str(provider or "").strip().lower()
         model_token = str(model or "").strip() if provider_token and requested_provider == provider_token else ""
+        stored_provider = canonical_provider(chat_config.get("provider")) or str(chat_config.get("provider") or "").strip().lower()
+        if not model_token and stored_provider == provider_token:
+            model_token = str(chat_config.get("model") or "").strip()
         if not model_token:
             try:
                 session_provider = canonical_provider(request.session.get("investment_chat_provider")) or str(
@@ -273,6 +287,57 @@ def register_investment_chat_routes(app: FastAPI, *, deps: ViewerRouteDeps) -> N
         if redirect is not None:
             return JSONResponse({"status": "blocked", "error": "authentication required"}, status_code=401)
         return {"status": "ok", "tenant_id": tenant, "drafts": _recent_order_drafts(deps.repo, tenant_id=tenant, limit=limit)}
+
+    @app.get("/investment-chat/config-drafts")
+    def investment_chat_config_drafts(request: Request, tenant_id: str = "", limit: int = 5):
+        tenant, _agent_ids, _user, redirect = deps.resolve_viewer_context(
+            request,
+            requested_tenant=tenant_id,
+            next_path=_next_path(tenant_id),
+        )
+        if redirect is not None:
+            return JSONResponse({"status": "blocked", "error": "authentication required"}, status_code=401)
+        return {
+            "status": "ok",
+            "tenant_id": tenant,
+            "drafts": recent_config_drafts(deps.repo, tenant_id=tenant, limit=limit),
+        }
+
+    @app.post("/investment-chat/config-drafts/{approval_token}/apply")
+    def investment_chat_apply_config_draft(request: Request, approval_token: str, tenant_id: str = ""):
+        tenant, _agent_ids, user, redirect = deps.resolve_viewer_context(
+            request,
+            requested_tenant=tenant_id,
+            next_path=_next_path(tenant_id),
+        )
+        if redirect is not None:
+            return JSONResponse({"status": "blocked", "error": "authentication required"}, status_code=401)
+        token = str(approval_token or "").strip()
+        if not token:
+            return JSONResponse({"status": "blocked", "error": "approval_token is required"}, status_code=400)
+        user_token = REQUEST_USER_EMAIL.set(str(getattr(user, "email", "") or "").strip().lower())
+        try:
+            tenant_settings = deps.settings_for_tenant(tenant)
+            bridge_entries = build_config_bridge_tool_entries(
+                repo=deps.repo,
+                settings=tenant_settings,
+                tenant_id=tenant,
+            )
+            apply_tool = bridge_entries[0].callable if bridge_entries else None
+            if not callable(apply_tool):
+                return JSONResponse({"status": "error", "error": "config approval bridge is unavailable"}, status_code=500)
+            result = apply_tool(approval_token=token, confirmation_text=f"CONFIRM {token}")
+            if result.get("status") in {"applied", "already_applied"}:
+                deps.invalidate_tenant_cache(tenant, "runtime", "memory", "portfolio")
+            if result.get("status") == "applied":
+                result["chat_delivery_text"] = "방금 설정 변경 승인 결과를 확인해서 알려줘."
+            elif result.get("status") == "already_applied":
+                result["chat_delivery_text"] = "방금 설정 변경은 이미 적용된 상태야. 현재 적용 결과를 확인해서 알려줘."
+            else:
+                result["chat_delivery_text"] = "방금 설정 변경 승인이 실패했어. 실패 이유를 확인해서 알려줘."
+            return JSONResponse(result, status_code=200 if result.get("status") != "error" else 500)
+        finally:
+            REQUEST_USER_EMAIL.reset(user_token)
 
     @app.post("/investment-chat/order-drafts/{approval_token}/submit")
     def investment_chat_submit_order_draft(request: Request, approval_token: str, tenant_id: str = ""):

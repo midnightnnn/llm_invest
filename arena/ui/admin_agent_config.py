@@ -211,13 +211,12 @@ def build_agents_config_save_payload(
             continue
         entries.append(entry)
 
-        provider_payload = dict(api_keys.get(provider) or {})
         if raw_api_key:
+            provider_payload = dict(api_keys.get(provider) or {})
             provider_payload["api_key"] = raw_api_key
-        model = str(entry.get("model") or "").strip()
-        if model:
-            provider_payload["model"] = model
-        if provider_payload:
+            model = str(entry.get("model") or "").strip()
+            if model:
+                provider_payload["model"] = model
             api_keys[provider] = provider_payload
 
     return AgentsConfigSavePayload(entries=entries, api_keys=api_keys)

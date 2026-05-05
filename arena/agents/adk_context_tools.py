@@ -5,7 +5,7 @@ import json
 import logging
 import os
 from datetime import date, datetime, timezone
-from typing import Any
+from typing import Any, Optional
 
 from arena.config import Settings, research_generation_status
 from arena.data.bq import BigQueryRepository
@@ -418,8 +418,8 @@ class _ContextTools:
 
     def get_research_briefing(
         self,
-        tickers: list[str] | None = None,
-        categories: list[str] | None = None,
+        tickers: Optional[list[str]] = None,
+        categories: Optional[list[str]] = None,
         limit: int = 5,
     ) -> list[dict[str, Any]]:
         """Fetches research briefings (global market, geopolitical, sector, held-stock)."""

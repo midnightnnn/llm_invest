@@ -17,6 +17,7 @@ from arena.agents.adk_tool_helpers import (
     noop_update_candidate_ledger,
 )
 from arena.agents.adk_runner_runtime import search_tool_memories
+from arena.agents.investment_chat.config_tools import load_chat_agent_config
 from arena.agents.investment_chat.constants import AGENT_ID, APP_NAME
 from arena.agents.investment_chat.context import normalize_tenant
 from arena.agents.investment_chat.registry import build_chat_registry
@@ -93,9 +94,15 @@ def build_investment_chat_agent(
     model_override: str | None = None,
 ) -> Agent:
     tenant = normalize_tenant(tenant_id)
-    provider_token = str(provider or os.getenv("ARENA_CHAT_PROVIDER") or "gemini").strip().lower() or "gemini"
-    model_id = str(model_override or os.getenv("ARENA_CHAT_MODEL") or "").strip()
-    llm_params: dict[str, Any] = {}
+    chat_config = load_chat_agent_config(repo, tenant_id=tenant)
+    provider_token = str(
+        provider
+        or chat_config.get("provider")
+        or os.getenv("ARENA_CHAT_PROVIDER")
+        or "gemini"
+    ).strip().lower() or "gemini"
+    model_id = str(model_override or chat_config.get("model") or os.getenv("ARENA_CHAT_MODEL") or "").strip()
+    llm_params = chat_config.get("llm_params") if isinstance(chat_config.get("llm_params"), dict) else {}
     max_tool_events = resolve_max_tool_events(settings)
     chat_registry = build_chat_registry(repo=repo, settings=settings, tenant_id=tenant, registry=registry)
     tools = _wrapped_tools(chat_registry, repo=repo, settings=settings, tenant_id=tenant)

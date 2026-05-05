@@ -4,6 +4,7 @@ from typing import Any
 
 from arena.agents.adk_context_tools import _ContextTools
 from arena.agents.adk_tool_config import _load_disabled_tool_ids
+from arena.agents.investment_chat.config_tools import load_chat_agent_config
 from arena.agents.investment_chat.constants import AGENT_ID, CHAT_ANALYSIS_TOOL_IDS, WRITE_TOOL_MARKERS
 from arena.agents.investment_chat.context import normalize_tenant
 from arena.agents.investment_chat.market_scope import account_scope_settings
@@ -24,6 +25,9 @@ def build_chat_registry(
     tool_settings = account_scope_settings(repo, tenant_id=tenant, settings=settings)
     source = registry.clone() if registry is not None else build_default_registry(repo, tool_settings, tenant_id=tenant)
     disabled = _load_disabled_tool_ids(repo, tenant)
+    chat_config = load_chat_agent_config(repo, tenant_id=tenant)
+    if isinstance(chat_config.get("disabled_tools"), list):
+        disabled.update(str(tool_id).strip() for tool_id in chat_config["disabled_tools"] if str(tool_id).strip())
 
     context_tools = _ContextTools(repo=repo, settings=tool_settings, agent_id=AGENT_ID, tenant_id=tenant)
     for tool_id, fn in {

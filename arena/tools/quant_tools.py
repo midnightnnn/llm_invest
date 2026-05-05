@@ -5,7 +5,7 @@ import os
 import threading
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Literal
+from typing import Any, Literal, Optional
 
 import numpy as np
 
@@ -60,10 +60,13 @@ OpportunityProfile = Literal[
     "tactical_hedge",
 ]
 ScreenMarketBucket = Literal["balanced", "momentum", "pullback", "recovery", "defensive", "value"]
+ScreenMarketBucketChoice = Literal["", "balanced", "momentum", "pullback", "recovery", "defensive", "value"]
 ScreenMarketSortBy = Literal["as_of_ts", "ret_20d", "ret_5d", "volatility_20d", "sentiment_score", "close_price_krw"]
+ScreenMarketSortByChoice = Literal["", "as_of_ts", "ret_20d", "ret_5d", "volatility_20d", "sentiment_score", "close_price_krw"]
 SortOrder = Literal["asc", "desc"]
 PortfolioStrategy = Literal["sharpe", "risk_parity", "forecast"]
 ForecastMode = Literal["all", "stacked", "base", "balanced", "lgbm", "ridge", "avg"]
+ForecastModeChoice = Literal["", "all", "stacked", "base", "balanced", "lgbm", "ridge", "avg"]
 IndexSymbol = Literal["KOSPI", "KOSPI200", "KOSDAQ", "SPX", "COMP", "DJI", "WTI", "US10Y", "US30Y", "GOLD"]
 _OPPORTUNITY_BUCKET_TOKENS = frozenset({"momentum", "pullback", "recovery"})
 _OPPORTUNITY_PROFILE_ALIASES: dict[str, tuple[str, ...]] = {
@@ -1073,16 +1076,16 @@ class QuantTools:
 
     def screen_market(
         self,
-        bucket: ScreenMarketBucket | None = None,
+        bucket: ScreenMarketBucketChoice = "",
         top_n: int = 10,
         *,
-        per_bucket: int | None = None,
+        per_bucket: Optional[int] = None,
         windows: list[int] = [20, 60, 126],
         vol_adjust: bool = True,
-        sort_by: ScreenMarketSortBy | None = None,
+        sort_by: ScreenMarketSortByChoice = "",
         order: SortOrder = "desc",
-        min_ret_20d: float | None = None,
-        max_volatility: float | None = None,
+        min_ret_20d: Optional[float] = None,
+        max_volatility: Optional[float] = None,
     ) -> list[dict]:
         """Discovers candidates across multiple styles inside the runtime universe.
 
@@ -1311,9 +1314,9 @@ class QuantTools:
         self,
         top_n: int = 8,
         *,
-        buckets: list[OpportunityBucket] | None = None,
-        profiles: list[OpportunityProfile] | None = None,
-        max_candidates: int | None = None,
+        buckets: Optional[list[OpportunityBucket]] = None,
+        profiles: Optional[list[OpportunityProfile]] = None,
+        max_candidates: Optional[int] = None,
         include_watchlist: bool = True,
         max_score_age_hours: int = _OPPORTUNITY_DEFAULT_MAX_SCORE_AGE_HOURS,
     ) -> dict[str, Any]:
@@ -1457,11 +1460,11 @@ class QuantTools:
         risk_free_rate: float = 0.04,
         mdd_days: int = 60,
         mu_confidence: float = 1.0,
-        forecast_mode: ForecastMode | None = None,
+        forecast_mode: ForecastModeChoice = "",
         regime_scale: float = 1.0,
-        max_weight: float | None = None,
-        min_weight: float | None = None,
-        cash_buffer: float | None = None,
+        max_weight: Optional[float] = None,
+        min_weight: Optional[float] = None,
+        cash_buffer: Optional[float] = None,
     ) -> dict:
         """Runs portfolio optimization with backtest MDD.
 
@@ -1648,8 +1651,8 @@ class QuantTools:
 
     def forecast_returns(
         self,
-        tickers: list[str] | None = None,
-        forecast_mode: ForecastMode | None = None,
+        tickers: Optional[list[str]] = None,
+        forecast_mode: ForecastModeChoice = "",
     ) -> list[dict]:
         """Loads direction forecasts from 7-model ensemble (NBEATSx, NHITS, PatchTST, iTransformer, Chronos, TimesFM, Lag-Llama).
 
@@ -1947,7 +1950,7 @@ class QuantTools:
         self,
         ticker: str = "",
         *,
-        tickers: list[str] | None = None,
+        tickers: Optional[list[str]] = None,
         lookback_days: int = 180,
     ) -> dict[str, Any]:
         """Calculates RSI/MACD/Bollinger/SMA signals for one or more tickers."""
@@ -2039,7 +2042,7 @@ class QuantTools:
 
     def get_fundamentals(
         self,
-        tickers: list[str] | None = None,
+        tickers: Optional[list[str]] = None,
         *,
         excd: str = "NAS",
         max_items: int = 10,
@@ -2202,7 +2205,7 @@ class QuantTools:
 
     def index_snapshot(
         self,
-        indices: list[IndexSymbol] | None = None,
+        indices: Optional[list[IndexSymbol]] = None,
         lookback_days: int = 30,
     ) -> dict[str, Any]:
         """주요 시장지수, 원자재, 채권 수익률 요약을 반환한다. 에이전트의 타겟 마켓에 따라 적절한 지수를 선택한다."""
