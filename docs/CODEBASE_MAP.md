@@ -173,7 +173,7 @@ ADK `FunctionTool`은 함수 signature, type hint, docstring, helper metadata를
 - `arena/agents/adk_tool_helpers.py`
 - `tests/test_tool_registry.py`
 - `tests/test_new_tools.py`
-- `tests/test_quant_tools.py`
+- `tests/tools/test_quant_*.py`
 
 ### Local DuckDB
 
