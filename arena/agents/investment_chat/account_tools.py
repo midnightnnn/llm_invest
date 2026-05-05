@@ -16,11 +16,106 @@ from arena.agents.investment_chat.utils import (
 from arena.config import Settings
 from arena.logging_utils import failure_extra
 from arena.open_trading.sync import AccountSyncService
+from arena.providers.registry import canonical_provider, provider_alias_map
 from arena.tools.registry import ToolEntry
 
 logger = logging.getLogger(__name__)
 
 AccountSnapshotSource = Literal["latest", "db", "stored"]
+
+_PROVIDER_MODEL_ALIASES = {
+    "gpt": {"chatgpt", "gpt4", "gpt4o", "gpt-4", "gpt-4o", "openai"},
+    "gemini": {"gemini", "google", "gemini_2_0_flash_exp", "gemini-2.0-flash-exp"},
+    "claude": {"anthropic", "claude", "claude_3_7_sonnet", "claude-3-7-sonnet", "sonnet", "opus"},
+}
+
+
+def _compact_agent_alias(value: str | None) -> str:
+    return str(value or "").strip().lower().replace("-", "").replace("_", "").replace(".", "")
+
+
+def _available_agent_ids(settings: Settings) -> list[str]:
+    tokens = [
+        str(agent_id or "").strip().lower()
+        for agent_id in (getattr(settings, "agent_ids", []) or [])
+        if str(agent_id or "").strip()
+    ]
+    if not tokens:
+        tokens = [
+            str(agent_id or "").strip().lower()
+            for agent_id in (getattr(settings, "agent_configs", {}) or {}).keys()
+            if str(agent_id or "").strip()
+        ]
+    return list(dict.fromkeys(tokens))
+
+
+def _agent_provider(settings: Settings, agent_id: str) -> str:
+    agent = str(agent_id or "").strip().lower()
+    config = (getattr(settings, "agent_configs", {}) or {}).get(agent)
+    configured = canonical_provider(getattr(config, "provider", "") if config is not None else "")
+    return configured or canonical_provider(agent)
+
+
+def _agent_model(settings: Settings, agent_id: str) -> str:
+    agent = str(agent_id or "").strip().lower()
+    config = (getattr(settings, "agent_configs", {}) or {}).get(agent)
+    return str(getattr(config, "model", "") if config is not None else "").strip().lower()
+
+
+def _single_agent_for_provider(settings: Settings, provider: str, available: list[str]) -> str:
+    provider_token = canonical_provider(provider)
+    if not provider_token:
+        return ""
+    matches = [agent_id for agent_id in available if _agent_provider(settings, agent_id) == provider_token]
+    return matches[0] if len(matches) == 1 else ""
+
+
+def _resolve_available_agent_id(settings: Settings, requested_agent_id: str) -> tuple[str, list[str]]:
+    available = _available_agent_ids(settings)
+    requested = str(requested_agent_id or "").strip().lower()
+    if not requested:
+        return "", available
+    if requested in available:
+        return requested, available
+
+    provider_token = canonical_provider(requested)
+    if provider_token:
+        provider_agent = _single_agent_for_provider(settings, provider_token, available)
+        if provider_agent:
+            return provider_agent, available
+
+    alias_provider = provider_alias_map().get(requested) or ""
+    if alias_provider:
+        provider_agent = _single_agent_for_provider(settings, alias_provider, available)
+        if provider_agent:
+            return provider_agent, available
+
+    compact_requested = _compact_agent_alias(requested)
+    for provider, aliases in _PROVIDER_MODEL_ALIASES.items():
+        compact_aliases = {_compact_agent_alias(alias) for alias in aliases}
+        provider_prefixes = {
+            "gpt": ("gpt", "openai"),
+            "gemini": ("gemini", "google"),
+            "claude": ("claude", "anthropic", "sonnet", "opus"),
+        }.get(provider, ())
+        if (
+            requested in aliases
+            or compact_requested in compact_aliases
+            or any(compact_requested.startswith(prefix) for prefix in provider_prefixes)
+            or any(prefix in compact_requested for prefix in ("sonnet", "opus") if provider == "claude")
+        ):
+            provider_agent = _single_agent_for_provider(settings, provider, available)
+            if provider_agent:
+                return provider_agent, available
+
+    for agent_id in available:
+        model = _agent_model(settings, agent_id)
+        if requested == model or compact_requested == _compact_agent_alias(model):
+            return agent_id, available
+        short_model = model.split("/", 1)[-1] if "/" in model else model
+        if requested == short_model or compact_requested == _compact_agent_alias(short_model):
+            return agent_id, available
+    return "", available
 
 
 def _tenant_has_kis_credentials(repo: Any, *, tenant_id: str) -> bool:
@@ -44,6 +139,7 @@ def _account_sync_settings(repo: Any, *, tenant_id: str, settings: Settings) -> 
 
 def build_account_tool_entries(*, repo: Any, settings: Settings, tenant_id: str) -> list[ToolEntry]:
     tenant = normalize_tenant(tenant_id)
+    available_agent_ids = _available_agent_ids(settings)
 
     def get_account_snapshot(source: AccountSnapshotSource = "latest", max_positions: int = 50) -> dict[str, Any]:
         """Reads the latest persisted total account snapshot for the current Arena tenant."""
@@ -53,6 +149,7 @@ def build_account_tool_entries(*, repo: Any, settings: Settings, tenant_id: str)
                 "status": "blocked",
                 "error": "Only persisted account snapshots are enabled in chat. Run account sync outside chat, then retry with source='latest'.",
                 "requested_source": source_token,
+                "available_agent_ids": available_agent_ids,
             }
         snapshot = latest_account_snapshot(repo, tenant_id=tenant)
         if snapshot is None:
@@ -60,8 +157,11 @@ def build_account_tool_entries(*, repo: Any, settings: Settings, tenant_id: str)
                 "status": "missing",
                 "tenant_id": tenant,
                 "error": "No account snapshot is stored for this tenant.",
+                "available_agent_ids": available_agent_ids,
             }
-        return snapshot_payload(snapshot, tenant_id=tenant, max_positions=max_positions)
+        payload = snapshot_payload(snapshot, tenant_id=tenant, max_positions=max_positions)
+        payload["available_agent_ids"] = available_agent_ids
+        return payload
 
     def refresh_account_snapshot(max_positions: int = 50) -> dict[str, Any]:
         """Reads the broker account through the configured KIS account sync path and stores the latest snapshot."""
@@ -116,12 +216,29 @@ def build_account_tool_entries(*, repo: Any, settings: Settings, tenant_id: str)
 
     def get_agent_sleeve_snapshot(agent_id: str, max_positions: int = 50) -> dict[str, Any]:
         """Reads one batch agent sleeve snapshot so chat advice can distinguish total account vs sleeve scope."""
-        agent = str(agent_id or "").strip().lower()
+        requested_agent = str(agent_id or "").strip().lower()
+        agent, current_available_agent_ids = _resolve_available_agent_id(settings, requested_agent)
+        if not requested_agent:
+            return {
+                "status": "error",
+                "error": "agent_id is required",
+                "available_agent_ids": current_available_agent_ids,
+            }
         if not agent:
-            return {"status": "error", "error": "agent_id is required"}
+            return {
+                "status": "blocked",
+                "requested_agent_id": requested_agent,
+                "available_agent_ids": current_available_agent_ids,
+                "error": "agent_id must name one of the configured batch agents.",
+            }
         builder = getattr(repo, "build_agent_sleeve_snapshot", None)
         if not callable(builder):
-            return {"status": "unavailable", "error": "sleeve snapshot reader is unavailable"}
+            return {
+                "status": "unavailable",
+                "requested_agent_id": requested_agent,
+                "available_agent_ids": current_available_agent_ids,
+                "error": "sleeve snapshot reader is unavailable",
+            }
         try:
             snapshot, baseline_equity_krw, meta = builder(
                 agent_id=agent,
@@ -139,6 +256,8 @@ def build_account_tool_entries(*, repo: Any, settings: Settings, tenant_id: str)
         payload.update(
             {
                 "agent_id": agent,
+                "requested_agent_id": requested_agent,
+                "available_agent_ids": current_available_agent_ids,
                 "scope": "agent_sleeve",
                 "baseline_equity_krw": safe_float(baseline_equity_krw),
                 "metadata": meta if isinstance(meta, dict) else {},
@@ -170,7 +289,12 @@ def build_account_tool_entries(*, repo: Any, settings: Settings, tenant_id: str)
         ToolEntry(
             tool_id="get_agent_sleeve_snapshot",
             name="get_agent_sleeve_snapshot",
-            description="Reads one batch agent sleeve snapshot. Use this to compare sleeve-level state against the total account.",
+            description=(
+                "Reads one configured batch agent sleeve snapshot. agent_id should be one of "
+                "available_agent_ids from get_account_snapshot; provider/model aliases like "
+                "gpt4o, gemini_2_0_flash_exp, or claude_3_7_sonnet are normalized only when "
+                "they match one configured agent unambiguously."
+            ),
             category="account",
             callable=get_agent_sleeve_snapshot,
             tier="core",

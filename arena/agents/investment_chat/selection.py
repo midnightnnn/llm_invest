@@ -6,6 +6,22 @@ from arena.config import Settings
 from arena.providers.registry import canonical_provider, default_model_for_provider
 
 
+_CHAT_MODEL_ALIASES: dict[tuple[str, str], str] = {
+    ("gemini", "gemini-3.1-flash-preview"): "gemini-3-flash-preview",
+}
+
+
+def normalize_chat_model_selection(provider: str | None, model: str | None) -> str:
+    """Normalizes chat model tokens that providers have renamed or removed."""
+    provider_token = canonical_provider(provider) or str(provider or "").strip().lower()
+    model_token = str(model or "").strip()
+    if model_token.startswith("models/"):
+        model_token = model_token.split("/", 1)[1].strip()
+    if not provider_token or not model_token:
+        return model_token
+    return _CHAT_MODEL_ALIASES.get((provider_token, model_token), model_token)
+
+
 def tenant_default_chat_selection(
     settings: Settings,
     *,
@@ -31,7 +47,7 @@ def tenant_default_chat_selection(
         model = str(getattr(config, "model", "") if config is not None else "").strip()
         if not model:
             model = default_model_for_provider(settings, provider)
-        return provider, model
+        return provider, normalize_chat_model_selection(provider, model)
 
     for agent_id in getattr(settings, "agent_ids", []) or []:
         selected = _selection_for_agent(str(agent_id))

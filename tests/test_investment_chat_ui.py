@@ -406,6 +406,62 @@ class _ChatOrderRepo(_DummyRepo):
         self.audit_logs.append(dict(kwargs))
 
 
+def test_investment_chat_account_tools_expose_available_agent_ids() -> None:
+    from arena.agents.investment_chat.account_tools import build_account_tool_entries
+
+    settings = load_settings()
+    repo = _ChatOrderRepo()
+    tools = {
+        entry.name: entry.callable
+        for entry in build_account_tool_entries(repo=repo, settings=settings, tenant_id="local")
+    }
+
+    payload = tools["get_account_snapshot"]()
+
+    assert payload["available_agent_ids"] == ["gemini", "gpt", "claude"]
+
+
+def test_investment_chat_sleeve_tool_normalizes_model_aliases_to_agent_ids() -> None:
+    from arena.agents.investment_chat.account_tools import build_account_tool_entries
+
+    settings = load_settings()
+    repo = _ChatOrderRepo()
+    tools = {
+        entry.name: entry.callable
+        for entry in build_account_tool_entries(repo=repo, settings=settings, tenant_id="local")
+    }
+
+    for alias, expected_agent_id in [
+        ("gpt4o", "gpt"),
+        ("gemini_2_0_flash_exp", "gemini"),
+        ("claude_3_7_sonnet", "claude"),
+    ]:
+        payload = tools["get_agent_sleeve_snapshot"](agent_id=alias)
+
+        assert payload["agent_id"] == expected_agent_id
+        assert payload["requested_agent_id"] == alias
+        assert payload["available_agent_ids"] == ["gemini", "gpt", "claude"]
+        assert repo.sleeve_calls[-1]["agent_id"] == expected_agent_id
+
+
+def test_investment_chat_sleeve_tool_rejects_unknown_agent_id() -> None:
+    from arena.agents.investment_chat.account_tools import build_account_tool_entries
+
+    settings = load_settings()
+    repo = _ChatOrderRepo()
+    tools = {
+        entry.name: entry.callable
+        for entry in build_account_tool_entries(repo=repo, settings=settings, tenant_id="local")
+    }
+
+    payload = tools["get_agent_sleeve_snapshot"](agent_id="quant_bot")
+
+    assert payload["status"] == "blocked"
+    assert payload["requested_agent_id"] == "quant_bot"
+    assert payload["available_agent_ids"] == ["gemini", "gpt", "claude"]
+    assert repo.sleeve_calls == []
+
+
 class _FakeExecutionMemory:
     instances: list["_FakeExecutionMemory"] = []
 
@@ -1477,6 +1533,31 @@ def test_investment_chat_loader_uses_encoded_claude_selection_without_request_co
     assert calls["model_override"] == "claude-sonnet-4-6"
 
 
+def test_investment_chat_loader_normalizes_removed_gemini_flash_preview(monkeypatch) -> None:
+    from arena.ui import investment_chat_adk
+
+    calls: dict[str, object] = {}
+    settings = load_settings()
+
+    def fake_build_agent(**kwargs):
+        calls.update(kwargs)
+        return SimpleNamespace(name="investment_chat", description="chat")
+
+    monkeypatch.setattr(investment_chat_adk, "build_investment_chat_agent", fake_build_agent)
+    loader = investment_chat_adk.InvestmentChatAgentLoader(
+        repo=_DummyRepo(),
+        settings_for_tenant=lambda tenant: settings,
+        get_default_registry=lambda tenant: ToolRegistry([]),
+        default_tenant="local",
+    )
+
+    removed_model_app_name = "investment_chat__local__gemini__m_Z2VtaW5pLTMuMS1mbGFzaC1wcmV2aWV3"
+    loader.load_agent(removed_model_app_name)
+
+    assert calls["provider"] == "gemini"
+    assert calls["model_override"] == "gemini-3-flash-preview"
+
+
 def test_ui_registers_investment_chat_page_and_adk_mount(monkeypatch) -> None:
     import arena.ui.app as ui_app
 
@@ -1527,7 +1608,8 @@ def test_ui_registers_investment_chat_page_and_adk_mount(monkeypatch) -> None:
     assert 'list="investment-chat-model-presets"' not in response.text
     assert 'value="gpt-5.2"' in response.text
     assert "gpt-5.5" in response.text
-    assert "gemini-3.1-flash-preview" in response.text
+    assert "gemini-3-flash-preview" in response.text
+    assert "gemini-3.1-flash-preview" not in response.text
     assert "gemini-3.1-pro-preview" in response.text
     assert 'data-active="investment_chat"' in response.text
     assert "investment-chat-shell" in response.text
@@ -1535,6 +1617,34 @@ def test_ui_registers_investment_chat_page_and_adk_mount(monkeypatch) -> None:
     assert "investment-chat-frame" in response.text
     assert 'body[data-active="investment_chat"] .sidebar-backdrop.open' in response.text
     assert any(getattr(route, "path", "") == "/investment-chat/adk" for route in app.routes)
+
+
+def test_investment_chat_page_normalizes_removed_gemini_flash_preview(monkeypatch) -> None:
+    import arena.ui.app as ui_app
+
+    monkeypatch.setenv("ARENA_UI_AUTH_ENABLED", "false")
+    monkeypatch.setattr(
+        ui_app,
+        "build_investment_chat_adk_app",
+        lambda **kwargs: FastAPI(title="stub-adk"),
+    )
+
+    app = _build_app(repo=_DummyRepo(), settings=load_settings())
+    client = DirectRouteClient(app)
+
+    response = client.get(
+        "/investment-chat",
+        params={
+            "tenant_id": "local",
+            "provider": "gemini",
+            "model": "gemini-3.1-flash-preview",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "/investment-chat/adk/dev-ui/?tenant_id=local&amp;provider=gemini&amp;model=gemini-3-flash-preview" in response.text
+    assert "gemini-3.1-flash-preview" not in response.text
+    assert client.session["investment_chat_model"] == "gemini-3-flash-preview"
 
 
 def test_investment_chat_model_select_renders_all_provider_presets(monkeypatch) -> None:
@@ -2116,6 +2226,130 @@ def test_investment_chat_adk_api_requires_ui_auth(monkeypatch) -> None:
     assert blocked_response.status_code == 401
     assert allowed_response.status_code == 200
     assert json.loads(allowed_response.body) == ["investment_chat"]
+
+
+def test_investment_chat_adk_auth_middleware_uses_provider_model_query(monkeypatch) -> None:
+    import asyncio
+
+    from arena.agents.investment_chat.context import REQUEST_MODEL, REQUEST_PROVIDER
+    from arena.ui import investment_chat_adk
+
+    def fake_get_fast_api_app(**kwargs):
+        _ = kwargs
+        return FastAPI(title="fake-adk")
+
+    monkeypatch.setattr(investment_chat_adk, "get_fast_api_app", fake_get_fast_api_app)
+    monkeypatch.setattr(investment_chat_adk, "_mount_adk_static", lambda app, url_prefix: None)
+
+    app = investment_chat_adk.build_investment_chat_adk_app(
+        repo=_DummyRepo(),
+        settings_for_tenant=lambda tenant: load_settings(),
+        get_default_registry=lambda tenant: ToolRegistry([]),
+        default_tenant="local",
+        auth_enabled=True,
+        current_user=lambda request: {"email": "user@example.com"},
+    )
+    request = Request(
+        {
+            "type": "http",
+            "http_version": "1.1",
+            "method": "GET",
+            "scheme": "http",
+            "path": "/dev-ui/",
+            "raw_path": b"/dev-ui/",
+            "query_string": b"provider=gpt&model=gpt-5.4",
+            "headers": [],
+            "client": ("testclient", 50000),
+            "server": ("testserver", 80),
+            "session": {},
+        },
+        receive=lambda: {"type": "http.request", "body": b"", "more_body": False},
+    )
+
+    async def passthrough(_request: Request):
+        return JSONResponse(
+            {
+                "provider": REQUEST_PROVIDER.get(),
+                "model": REQUEST_MODEL.get(),
+                "session_provider": _request.session.get("investment_chat_provider"),
+                "session_model": _request.session.get("investment_chat_model"),
+            }
+        )
+
+    dispatch = app.user_middleware[0].kwargs["dispatch"]
+    response = asyncio.run(dispatch(request, passthrough))
+
+    assert response.status_code == 200
+    payload = json.loads(response.body)
+    assert payload["provider"] == "gpt"
+    assert payload["model"] == "gpt-5.4"
+    assert payload["session_provider"] == "gpt"
+    assert payload["session_model"] == "gpt-5.4"
+
+
+def test_investment_chat_adk_auth_middleware_blocks_stale_run_body_app(monkeypatch) -> None:
+    import asyncio
+
+    from arena.ui import investment_chat_adk
+
+    def fake_get_fast_api_app(**kwargs):
+        _ = kwargs
+        return FastAPI(title="fake-adk")
+
+    monkeypatch.setattr(investment_chat_adk, "get_fast_api_app", fake_get_fast_api_app)
+    monkeypatch.setattr(investment_chat_adk, "_mount_adk_static", lambda app, url_prefix: None)
+
+    app = investment_chat_adk.build_investment_chat_adk_app(
+        repo=_DummyRepo(),
+        settings_for_tenant=lambda tenant: load_settings(),
+        get_default_registry=lambda tenant: ToolRegistry([]),
+        default_tenant="local",
+        auth_enabled=True,
+        current_user=lambda request: {"email": "user@example.com"},
+    )
+    body = json.dumps(
+        {
+            "app_name": "investment_chat__local__gemini__m_Z2VtaW5pLTMuMS1mbGFzaC1wcmV2aWV3",
+            "user_id": "user",
+            "session_id": "s1",
+        }
+    ).encode("utf-8")
+
+    async def receive_body():
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    request = Request(
+        {
+            "type": "http",
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "http",
+            "path": "/run_sse",
+            "raw_path": b"/run_sse",
+            "query_string": b"",
+            "headers": [(b"content-type", b"application/json")],
+            "client": ("testclient", 50000),
+            "server": ("testserver", 80),
+            "session": {
+                "investment_chat_tenant_id": "local",
+                "investment_chat_provider": "gpt",
+                "investment_chat_model": "gpt-5.4",
+            },
+        },
+        receive=receive_body,
+    )
+
+    async def passthrough(_request: Request):
+        return JSONResponse({"status": "unexpected"})
+
+    dispatch = app.user_middleware[0].kwargs["dispatch"]
+    response = asyncio.run(dispatch(request, passthrough))
+
+    assert response.status_code == 409
+    payload = json.loads(response.body)
+    assert payload["error"] == "stale adk app_name provider"
+    assert payload["provider"] == "gpt"
+    assert payload["app_name_provider"] == "gemini"
 
 
 def test_investment_chat_adk_rejects_stale_path_app_name_tenant() -> None:

@@ -15,7 +15,7 @@ from arena.agents.investment_chat.config_tools import (
 )
 from arena.agents.investment_chat.drafts import load_draft
 from arena.agents.investment_chat.order_tools import build_order_bridge_tool_entries
-from arena.agents.investment_chat.selection import tenant_default_chat_selection
+from arena.agents.investment_chat.selection import normalize_chat_model_selection, tenant_default_chat_selection
 from arena.providers.registry import canonical_provider, default_model_for_provider, list_adk_provider_specs
 from arena.ui.investment_chat_providers import tenant_available_provider_specs
 from arena.ui.routes.viewer import ViewerRouteDeps
@@ -24,9 +24,8 @@ from arena.ui.templating import render_ui_template
 
 _CHAT_MODEL_PRESETS: dict[str, list[str]] = {
     "gemini": [
-        "gemini-3.1-flash-preview",
-        "gemini-3.1-pro-preview",
         "gemini-3-flash-preview",
+        "gemini-3.1-pro-preview",
         "gemini-3-pro-preview",
         "gemini-2.5-flash",
         "gemini-2.5-pro",
@@ -63,6 +62,8 @@ def _next_path(tenant_id: str = "", provider: str = "", model: str = "") -> str:
 
 
 def _adk_iframe_src(tenant_id: str, provider: str, model: str) -> str:
+    provider = canonical_provider(provider) or str(provider or "").strip().lower()
+    model = normalize_chat_model_selection(provider, model)
     query = urlencode(
         {
             key: value
@@ -88,10 +89,11 @@ def _provider_options(repo=None, tenant_id: str = "") -> list[dict[str, str]]:
 
 
 def _model_options(provider: str, default_model: str, current_model: str = "") -> list[str]:
+    provider_token = canonical_provider(provider) or str(provider or "").strip().lower()
     seen: set[str] = set()
     out: list[str] = []
-    for token in [current_model, default_model, *_CHAT_MODEL_PRESETS.get(provider, [])]:
-        value = str(token or "").strip()
+    for token in [current_model, default_model, *_CHAT_MODEL_PRESETS.get(provider_token, [])]:
+        value = normalize_chat_model_selection(provider_token, token)
         if value and value not in seen:
             seen.add(value)
             out.append(value)
@@ -244,23 +246,29 @@ def register_investment_chat_routes(app: FastAPI, *, deps: ViewerRouteDeps) -> N
         default_model = default_model_for_provider(tenant_settings, provider_token) if provider_token else ""
         if provider_token and provider_token == tenant_default_provider and tenant_default_model:
             default_model = tenant_default_model
+        default_model = normalize_chat_model_selection(provider_token, default_model)
         model_token = str(model or "").strip() if provider_token and requested_provider == provider_token else ""
+        model_token = normalize_chat_model_selection(provider_token, model_token)
         stored_provider = canonical_provider(chat_config.get("provider")) or str(chat_config.get("provider") or "").strip().lower()
         if not model_token and stored_provider == provider_token:
-            model_token = str(chat_config.get("model") or "").strip()
+            model_token = normalize_chat_model_selection(provider_token, chat_config.get("model"))
         if not model_token and session_tenant == tenant:
             try:
                 session_provider = canonical_provider(request.session.get("investment_chat_provider")) or str(
                     request.session.get("investment_chat_provider") or ""
                 ).strip().lower()
                 if session_provider == provider_token:
-                    model_token = str(request.session.get("investment_chat_model") or "").strip()
+                    model_token = normalize_chat_model_selection(
+                        provider_token,
+                        request.session.get("investment_chat_model"),
+                    )
             except Exception:
                 model_token = ""
         if not model_token and provider_token == tenant_default_provider:
             model_token = tenant_default_model
         if not model_token:
             model_token = default_model
+        model_token = normalize_chat_model_selection(provider_token, model_token)
         try:
             request.session["investment_chat_tenant_id"] = tenant
             request.session["investment_chat_provider"] = provider_token

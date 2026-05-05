@@ -29,7 +29,7 @@ from arena.agents.investment_chat.context import (
     normalize_tenant,
 )
 from arena.agents.investment_chat.config_tools import load_chat_agent_config
-from arena.agents.investment_chat.selection import tenant_default_chat_selection
+from arena.agents.investment_chat.selection import normalize_chat_model_selection, tenant_default_chat_selection
 from arena.config import Settings
 from arena.providers.registry import (
     canonical_provider,
@@ -132,6 +132,7 @@ def _decode_model_id(encoded: str) -> str:
 def _chat_app_name(tenant_id: str, provider: str = "", model_id: str = "") -> str:
     tenant = re.sub(r"[^a-z0-9_-]+", "-", normalize_tenant(tenant_id)).strip("-_") or "local"
     provider_token = re.sub(r"[^a-z0-9_-]+", "-", str(provider or "").strip().lower()).strip("-_")
+    model_id = normalize_chat_model_selection(provider_token, model_id)
     model_token = _encode_model_id(model_id)
     if provider_token and model_token:
         return f"{APP_NAME}__{tenant}__{provider_token}__m_{model_token}"
@@ -254,12 +255,14 @@ class InvestmentChatAgentLoader(BaseAgentLoader):
         preferred_model = requested_model or encoded_model
         preferred_model_provider = requested_provider or encoded_provider
         model = str(preferred_model if provider == preferred_model_provider else "").strip()
+        model = normalize_chat_model_selection(provider, model)
         if not model and provider == stored_provider:
-            model = str(chat_config.get("model") or "").strip()
+            model = normalize_chat_model_selection(provider, chat_config.get("model"))
         if not model and provider == tenant_provider:
             model = tenant_model
         if not model:
             model = default_model_for_provider(settings, provider)
+        model = normalize_chat_model_selection(provider, model)
         return provider, model
 
     def load_agent(self, agent_name: str):
@@ -634,7 +637,27 @@ def _app_name_from_path(path: str) -> str:
 
 
 async def _app_name_from_request(request: Request) -> str:
-    return _app_name_from_path(str(request.url.path or ""))
+    app_name = _app_name_from_path(str(request.url.path or ""))
+    if app_name:
+        return app_name
+    path = str(request.url.path or "").rstrip("/")
+    if str(getattr(request, "method", "") or "").upper() not in {"POST", "PATCH"}:
+        return ""
+    if not path.endswith(("/run", "/run_sse")):
+        return ""
+    try:
+        body = await request.body()
+    except Exception:
+        return ""
+    if not body:
+        return ""
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except Exception:
+        return ""
+    if not isinstance(payload, dict):
+        return ""
+    return str(payload.get("app_name") or "").strip()
 
 
 async def _stale_app_name_response(
@@ -671,15 +694,16 @@ async def _stale_app_name_response(
             },
             status_code=409,
         )
-    model_token = str(model or "").strip()
-    if app_model and model_token and app_model != model_token:
+    model_token = normalize_chat_model_selection(provider_token or app_provider_token, model)
+    app_model_token = normalize_chat_model_selection(app_provider_token or provider_token, app_model)
+    if app_model_token and model_token and app_model_token != model_token:
         return JSONResponse(
             {
                 "error": "stale adk app_name model",
                 "tenant_id": tenant,
                 "model": model_token,
                 "app_name": app_name,
-                "app_name_model": app_model,
+                "app_name_model": app_model_token,
             },
             status_code=409,
         )
@@ -730,21 +754,22 @@ def _install_auth_gate(
                 model = str(request.session.get("investment_chat_model") or "").strip()
             except Exception:
                 model = ""
-        if not auth_enabled:
-            query_provider = str(request.query_params.get("provider") or "").strip().lower()
-            query_model = str(request.query_params.get("model") or "").strip()
-            if query_provider:
-                provider = query_provider
-                try:
-                    request.session["investment_chat_provider"] = provider
-                except Exception:
-                    pass
-            if query_model:
-                model = query_model
-                try:
-                    request.session["investment_chat_model"] = model
-                except Exception:
-                    pass
+        query_provider = str(request.query_params.get("provider") or "").strip().lower()
+        query_model = str(request.query_params.get("model") or "").strip()
+        if query_provider:
+            provider = canonical_provider(query_provider) or query_provider
+            try:
+                request.session["investment_chat_provider"] = provider
+            except Exception:
+                pass
+        if query_model:
+            model = normalize_chat_model_selection(provider, query_model)
+            try:
+                request.session["investment_chat_model"] = model
+            except Exception:
+                pass
+        provider = canonical_provider(provider) or str(provider or "").strip().lower()
+        model = normalize_chat_model_selection(provider, model)
         tenant_token = REQUEST_TENANT.set(tenant)
         user_token = REQUEST_USER_EMAIL.set(user_email)
         provider_token = REQUEST_PROVIDER.set(provider)

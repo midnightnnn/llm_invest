@@ -21,7 +21,7 @@ from arena.agents.investment_chat.config_tools import load_chat_agent_config
 from arena.agents.investment_chat.constants import AGENT_ID, APP_NAME
 from arena.agents.investment_chat.context import normalize_tenant
 from arena.agents.investment_chat.registry import build_chat_registry
-from arena.agents.investment_chat.selection import tenant_default_chat_selection
+from arena.agents.investment_chat.selection import normalize_chat_model_selection, tenant_default_chat_selection
 from arena.agents.investment_chat.utils import repo_tenant_scope
 from arena.config import Settings
 from arena.memory.store import MemoryStore
@@ -107,6 +107,7 @@ def build_investment_chat_agent(
     model_id = str(model_override or chat_config.get("model") or os.getenv("ARENA_CHAT_MODEL") or "").strip()
     if not model_id and provider_token == tenant_provider:
         model_id = tenant_model
+    model_id = normalize_chat_model_selection(provider_token, model_id)
     llm_params = chat_config.get("llm_params") if isinstance(chat_config.get("llm_params"), dict) else {}
     max_tool_events = resolve_max_tool_events(settings)
     chat_registry = build_chat_registry(repo=repo, settings=settings, tenant_id=tenant, registry=registry)
