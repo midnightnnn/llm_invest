@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from arena.config import apply_runtime_overrides
 from arena.data.bigquery.runtime_store import RuntimeStore
 from tests.helpers.bigquery import FakeBigQuerySession
@@ -196,14 +198,33 @@ def test_runtime_repo_list_runtime_tenants_normalizes_tokens() -> None:
     assert out == ["tenant-a", "local"]
 
 
-def test_apply_runtime_overrides_applies_kis_target_market() -> None:
-    settings = make_test_settings()
-    settings.kis_target_market = "nasdaq"
+@pytest.mark.parametrize(
+    ("field", "initial", "config_key", "config_value", "expected"),
+    [
+        ("kis_target_market", "nasdaq", "kis_target_market", "kospi", "kospi"),
+        ("universe_run_top_n", 400, "universe_run_top_n", "120", 120),
+        ("universe_per_exchange_cap", 200, "universe_per_exchange_cap", "80", 80),
+        ("forecast_mode", "all", "forecast_mode", "base", "base"),
+        ("reddit_sentiment_enabled", False, "reddit_sentiment_enabled", "true", True),
+        ("research_max_tickers", 5, "research_max_tickers", "9", 9),
+        ("research_mover_top_n", 3, "research_mover_top_n", "6", 6),
+        ("research_earnings_lookahead_days", 7, "research_earnings_lookahead_days", "14", 14),
+        ("real_trading_approved", False, "real_trading_approved", "true", True),
+    ],
+)
+def test_apply_runtime_overrides_applies_scalar_runtime_knobs(
+    field: str,
+    initial: object,
+    config_key: str,
+    config_value: str,
+    expected: object,
+) -> None:
+    settings = make_test_settings(**{field: initial})
+    repo = FakeRuntimeConfigRepo({config_key: config_value})
 
-    repo = FakeRuntimeConfigRepo({"kis_target_market": "kospi"})
-    out = apply_runtime_overrides(settings, repo, tenant_id="tenant-kr")
+    out = apply_runtime_overrides(settings, repo, tenant_id="tenant-a")
 
-    assert out.kis_target_market == "kospi"
+    assert getattr(out, field) == expected
 
 
 def test_apply_runtime_overrides_keeps_market_when_not_set() -> None:
@@ -235,39 +256,6 @@ def test_apply_runtime_overrides_merges_reconcile_excluded_tickers() -> None:
     out = apply_runtime_overrides(settings, repo, tenant_id="tenant-us")
 
     assert out.reconcile_excluded_tickers == ["PLTD", "TSLL"]
-
-
-def test_apply_runtime_overrides_applies_runtime_strategy_knobs() -> None:
-    settings = make_test_settings()
-    settings.universe_run_top_n = 400
-    settings.universe_per_exchange_cap = 200
-    settings.forecast_mode = "all"
-    settings.reddit_sentiment_enabled = False
-    settings.research_max_tickers = 5
-    settings.research_mover_top_n = 3
-    settings.research_earnings_lookahead_days = 7
-
-    repo = FakeRuntimeConfigRepo(
-        {
-            "universe_run_top_n": "120",
-            "universe_per_exchange_cap": "80",
-            "forecast_mode": "base",
-            "reddit_sentiment_enabled": "true",
-            "research_max_tickers": "9",
-            "research_mover_top_n": "6",
-            "research_earnings_lookahead_days": "14",
-        }
-    )
-
-    out = apply_runtime_overrides(settings, repo, tenant_id="tenant-a")
-
-    assert out.universe_run_top_n == 120
-    assert out.universe_per_exchange_cap == 80
-    assert out.forecast_mode == "base"
-    assert out.reddit_sentiment_enabled is True
-    assert out.research_max_tickers == 9
-    assert out.research_mover_top_n == 6
-    assert out.research_earnings_lookahead_days == 14
 
 
 def test_apply_runtime_overrides_applies_agent_autonomy_config() -> None:
@@ -340,12 +328,3 @@ def test_apply_runtime_overrides_applies_kis_account_selection() -> None:
     assert out.kis_account_product_code == "01"
     assert out.kis_account_key_suffix == "MIDNIGHTNNN"
 
-
-def test_apply_runtime_overrides_applies_real_trading_approval() -> None:
-    settings = make_test_settings()
-    settings.real_trading_approved = False
-
-    repo = FakeRuntimeConfigRepo({"real_trading_approved": "true"})
-    out = apply_runtime_overrides(settings, repo, tenant_id="tenant-a")
-
-    assert out.real_trading_approved is True
