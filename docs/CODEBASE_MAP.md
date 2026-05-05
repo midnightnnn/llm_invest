@@ -206,7 +206,7 @@ ADK `FunctionTool`은 함수 signature, type hint, docstring, helper metadata를
 | Local DuckDB | `tests/test_init_local_cli.py`, `tests/test_clone_bq_local.py`, `tests/test_duckdb_schema.py`, `tests/test_local_repository.py` |
 | Memory | `tests/test_memory_*.py`, `tests/test_semantic_relation_*.py` |
 | Execution/reconcile | `tests/test_execution_reconcile.py`, `tests/test_reconciliation.py`, `tests/test_risk.py` |
-| Pipeline/CLI | `tests/test_cli_multi_tenant.py`, `tests/test_repo_or_exit_default.py`, 관련 `tests/test_cli_*.py` |
+| Pipeline/CLI | `tests/cli/`, `tests/test_repo_or_exit_default.py`, 관련 `tests/test_cli_*.py` |
 
 문서만 바꾼 경우에는 `git diff --check`와 markdown fence 균형 정도면 충분하다. 코드 동작을 바꾸면 해당 영역 테스트를 같이 실행한다.
 
