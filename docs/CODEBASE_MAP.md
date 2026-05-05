@@ -159,7 +159,7 @@ ADK `FunctionTool`은 함수 signature, type hint, docstring, helper metadata를
 - `arena/ui/routes/settings_admin.py`
 - `arena/data/bigquery/runtime_store.py`
 - `arena/data/local/config_store.py`
-- `tests/test_agents_config.py`
+- `tests/config/test_agents_config_*.py`
 - `tests/ui/test_*_routes.py`
 - `tests/test_runtime_config.py`
 
@@ -202,7 +202,7 @@ ADK `FunctionTool`은 함수 signature, type hint, docstring, helper metadata를
 | --- | --- |
 | Investment Chat UI/approval | `tests/ui/test_investment_chat_*.py` |
 | ADK agent/tool schema | `tests/test_adk_agents.py`, `tests/test_new_tools.py`, `tests/test_tool_registry.py` |
-| Agent/admin config | `tests/test_agents_config.py`, `tests/ui/test_settings_routes.py`, `tests/ui/test_admin_agent_routes.py`, `tests/test_runtime_config.py` |
+| Agent/admin config | `tests/config/test_agents_config_*.py`, `tests/ui/test_settings_routes.py`, `tests/ui/test_admin_agent_routes.py`, `tests/test_runtime_config.py` |
 | Local DuckDB | `tests/data/test_init_local_cli.py`, `tests/data/test_clone_bq_local.py`, `tests/data/test_duckdb_schema.py`, `tests/data/test_local_repository.py` |
 | Memory | `tests/memory/test_memory_*.py`, `tests/memory/test_semantic_relation_*.py` |
 | Execution/reconcile | `tests/trading/test_execution_reconcile.py`, `tests/trading/test_reconciliation_*.py`, `tests/trading/test_risk.py` |
