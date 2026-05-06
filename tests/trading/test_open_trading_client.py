@@ -318,6 +318,27 @@ def test_search_overseas_stocks_returns_rows(monkeypatch) -> None:
     assert rows[0]["symb"] == "AAPL"
 
 
+def test_domestic_market_cap_ranking_follows_tr_cont_pagination(monkeypatch) -> None:
+    client = OpenTradingClient(_settings())
+    calls: list[str] = []
+
+    def _fake_request(*, method, path, tr_id, params=None, tr_cont="", retry_on_401=True):
+        _ = (method, params, retry_on_401)
+        assert path == "/uapi/domestic-stock/v1/ranking/market-cap"
+        assert tr_id == "FHPST01740000"
+        calls.append(tr_cont)
+        if len(calls) == 1:
+            return {"rt_cd": "0", "output": [{"mksc_shrn_iscd": "005930"}]}, {"tr_cont": "M"}
+        return {"rt_cd": "0", "output": [{"mksc_shrn_iscd": "000660"}]}, {"tr_cont": ""}
+
+    monkeypatch.setattr(client, "_request", _fake_request)
+
+    rows = client.get_domestic_market_cap_ranking(market_scope="0001", max_pages=3)
+
+    assert calls == ["", "N"]
+    assert [row["mksc_shrn_iscd"] for row in rows] == ["005930", "000660"]
+
+
 def test_get_overseas_period_rights_logs_structured_pagination_stop(monkeypatch, caplog) -> None:
     client = OpenTradingClient(_settings())
     calls = {"count": 0}

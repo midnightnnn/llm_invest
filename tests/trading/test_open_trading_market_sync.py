@@ -23,18 +23,52 @@ def test_market_sync_nasdaq_builds_rows() -> None:
     service = MarketDataSyncService(settings=settings, repo=repo, client=FakeClient())
     result = service.sync_market_features()
 
-    # Discovery returns AAPL from NAS + benchmarks SPY/QQQ/DIA = 4 tickers
-    assert result.attempted_tickers == 4
-    assert result.inserted_rows == 24
-    assert len(repo.rows) == 24
-    assert {"AAPL", "SPY", "QQQ", "DIA"} <= {r["ticker"] for r in repo.rows}
+    # Discovery returns AAPL from NAS + benchmarks + representative asset ETFs.
+    assert result.attempted_tickers == 9
+    assert result.inserted_rows == 54
+    assert len(repo.rows) == 54
+    assert {"AAPL", "SPY", "QQQ", "DIA", "GLD", "SLV", "USO", "TLT", "UUP"} <= {r["ticker"] for r in repo.rows}
     assert repo.rows[-1]["close_price_krw"] > 0
     aapl_rows = [r for r in repo.rows if r["ticker"] == "AAPL"]
     assert aapl_rows[-1]["close_price_native"] == pytest.approx(120.0)
     assert aapl_rows[-1]["quote_currency"] == "USD"
     assert aapl_rows[-1]["fx_rate_used"] == pytest.approx(1306.0)
     assert aapl_rows[-1]["close_price_krw"] == pytest.approx(120.0 * 1306.0)
-    assert repo.latest_instrument_map_calls == [["AAPL", "SPY", "QQQ", "DIA"]]
+    assert repo.latest_instrument_map_calls == [["AAPL", "SPY", "QQQ", "DIA", "GLD", "SLV", "USO", "TLT", "UUP"]]
+    rank_meta = repo.rebuild_universe_calls[-1]["universe_rank_metadata"]
+    assert rank_meta["AAPL"]["source"] == "market_cap"
+    assert rank_meta["AAPL"]["market_cap_rank"] == 1
+    assert rank_meta["SPY"]["source"] == "benchmark"
+    assert rank_meta["QQQ"]["source"] == "benchmark"
+    assert rank_meta["DIA"]["source"] == "benchmark"
+    assert rank_meta["GLD"]["source"] == "asset_benchmark"
+    assert rank_meta["GLD"]["asset_class"] == "gold"
+    assert rank_meta["UUP"]["source"] == "asset_benchmark"
+    assert rank_meta["UUP"]["asset_class"] == "usd_currency"
+
+
+def test_discover_us_symbols_uses_us_specific_cap_override() -> None:
+    class WideUsClient(FakeClient):
+        def search_overseas_stocks(self, *, excd="NAS", max_pages=1, **kwargs):
+            _ = (max_pages, kwargs)
+            prefix = "N" if excd == "NAS" else "Y"
+            return [
+                {"symb": f"{prefix}{idx}", "valx": str(1_000_000 - idx)}
+                for idx in range(1, 5)
+            ]
+
+    repo = FakeRepo()
+    settings = _settings("us", [])
+    settings.universe_per_exchange_cap = 500
+    settings.us_universe_per_exchange_cap = 2
+    service = MarketDataSyncService(settings=settings, repo=repo, client=WideUsClient())
+
+    symbols = service._discover_us_symbols()
+
+    discovered = [row["ticker"] for row in symbols]
+    assert discovered[:4] == ["N1", "N2", "Y1", "Y2"]
+    assert "N3" not in discovered
+    assert "Y3" not in discovered
 
 
 def test_market_sync_nasdaq_fails_without_live_fx() -> None:
@@ -52,18 +86,39 @@ def test_market_sync_nasdaq_fails_without_live_fx() -> None:
 def test_market_sync_kospi_builds_rows() -> None:
     repo = FakeRepo()
     settings = _settings("kospi", ["005930"])
-    settings.universe_per_exchange_cap = 5
+    settings.universe_per_exchange_cap = 10
     client = FakeClient()
     service = MarketDataSyncService(settings=settings, repo=repo, client=client)
     result = service.sync_market_features()
 
-    assert result.attempted_tickers == 5
-    assert result.inserted_rows == 30
-    assert {r["ticker"] for r in repo.rows} == {"005930", "000660", "003280", "069500", "373220"}
+    assert result.attempted_tickers == 10
+    assert result.inserted_rows == 60
+    assert {r["ticker"] for r in repo.rows} == {
+        "005930",
+        "000660",
+        "003280",
+        "069500",
+        "373220",
+        "132030",
+        "144600",
+        "261220",
+        "304660",
+        "261240",
+    }
     assert repo.rows[-1]["source"] == "open_trading_kospi"
     assert repo.rows[-1]["quote_currency"] == "KRW"
     assert repo.rows[-1]["fx_rate_used"] == pytest.approx(1.0)
     assert client.domestic_daily_requests
+    rank_meta = repo.rebuild_universe_calls[-1]["universe_rank_metadata"]
+    assert rank_meta["005930"]["source"] == "default"
+    assert rank_meta["000660"]["source"] == "market_cap"
+    assert rank_meta["000660"]["market_cap_rank"] == 2
+    assert rank_meta["003280"]["source"] == "volume_rank"
+    assert rank_meta["069500"]["source"] == "benchmark"
+    assert rank_meta["132030"]["source"] == "asset_benchmark"
+    assert rank_meta["132030"]["asset_class"] == "gold"
+    assert rank_meta["261240"]["source"] == "asset_benchmark"
+    assert rank_meta["261240"]["asset_class"] == "usd_currency"
 
 
 def test_discover_kospi_symbols_backfills_name_for_already_seen_ticker() -> None:
@@ -85,18 +140,84 @@ def test_discover_kospi_symbols_backfills_name_for_already_seen_ticker() -> None
     assert service._kospi_ticker_names["005930"] == "삼성전자"
 
 
-def test_discover_kospi_symbols_uses_static_sector_map_to_reach_cap() -> None:
+def test_discover_kospi_symbols_does_not_use_static_sector_map_to_reach_cap() -> None:
     repo = FakeRepo()
     settings = _settings("kospi", ["005930"])
-    settings.universe_per_exchange_cap = 8
+    settings.universe_per_exchange_cap = 12
     service = MarketDataSyncService(settings=settings, repo=repo, client=FakeClient())
 
     symbols = service._discover_kospi_symbols()
 
     tickers = [symbol["ticker"] for symbol in symbols]
-    assert len(tickers) == 8
-    assert {"005930", "000660", "003280", "069500", "373220"} <= set(tickers)
+    assert tickers == [
+        "005930",
+        "069500",
+        "132030",
+        "144600",
+        "261220",
+        "304660",
+        "261240",
+        "000660",
+        "373220",
+        "003280",
+    ]
     assert all(ticker.isdigit() and len(ticker) == 6 for ticker in tickers)
+
+
+def test_discover_kospi_symbols_uses_official_master_to_fill_market_cap_cap() -> None:
+    class MasterClient(FakeClient):
+        def get_domestic_kospi_master_rows(self):
+            return [
+                {
+                    "ticker": f"{100000 + idx:06d}",
+                    "name": f"시총{idx}",
+                    "market_cap": float(1_000_000 - idx),
+                    "volume": float(10_000 + idx),
+                }
+                for idx in range(1, 20)
+            ]
+
+        def get_domestic_market_cap_ranking(self, *, market_scope="0001", div_cls_code="0"):
+            _ = (market_scope, div_cls_code)
+            return []
+
+        def get_domestic_top_interest_stock(self, *, market_scope="0001"):
+            _ = (market_scope,)
+            return []
+
+        def get_domestic_volume_rank(self, *, market_scope="0001"):
+            _ = (market_scope,)
+            return []
+
+    repo = FakeRepo()
+    settings = _settings("kospi", [])
+    settings.universe_per_exchange_cap = 12
+    service = MarketDataSyncService(settings=settings, repo=repo, client=MasterClient())
+
+    symbols = service._discover_kospi_symbols()
+
+    tickers = [symbol["ticker"] for symbol in symbols]
+    assert tickers == [
+        "069500",
+        "132030",
+        "144600",
+        "261220",
+        "304660",
+        "261240",
+        "100001",
+        "100002",
+        "100003",
+        "100004",
+        "100005",
+        "100006",
+    ]
+    rank_meta = service._universe_rank_metadata
+    assert rank_meta["100001"]["source"] == "market_cap"
+    assert rank_meta["100001"]["market_cap_rank"] == 1
+    assert rank_meta["100001"]["market_cap_value"] == pytest.approx(999999.0)
+    assert rank_meta["100001"]["volume_value"] == pytest.approx(10001.0)
+    assert rank_meta["100006"]["market_cap_rank"] == 6
+    assert service._kospi_ticker_names["100001"] == "시총1"
 
 
 def test_market_sync_kospi_requests_long_history_for_forecast_bootstrap() -> None:
@@ -132,7 +253,7 @@ def test_market_sync_kospi_forces_backfill_when_existing_history_is_too_shallow(
 
     result = service.sync_market_features()
 
-    assert result.inserted_rows == 30
+    assert result.inserted_rows == 42
     assert client.domestic_daily_requests
     assert len([r for r in repo.rows if r["ticker"] == "005930"]) == 6
 
@@ -154,7 +275,7 @@ def test_market_sync_us_forces_backfill_when_existing_history_is_too_shallow() -
 
     result = service.sync_market_features()
 
-    assert result.inserted_rows == 24
+    assert result.inserted_rows == 54
     assert client.overseas_daily_requests
     assert len([r for r in repo.rows if r["ticker"] == "AAPL"]) == 6
 
@@ -212,8 +333,8 @@ def test_market_sync_us_includes_existing_tickers_missing_daily_features() -> No
 
     result = service.sync_market_features()
 
-    assert result.attempted_tickers == 5
-    assert result.inserted_rows == 125
+    assert result.attempted_tickers == 10
+    assert result.inserted_rows == 250
     miss_rows = [row for row in repo.rows if row["ticker"] == "MISS"]
     assert miss_rows
     assert miss_rows[-1]["ret_5d"] is not None
@@ -229,7 +350,7 @@ def test_quote_sync_us_rows_include_native_price_and_fx() -> None:
 
     result = service.sync_market_quotes()
 
-    assert result.inserted_rows == 4
+    assert result.inserted_rows == 9
     aapl_rows = [r for r in repo.rows if r["ticker"] == "AAPL"]
     assert aapl_rows
     assert aapl_rows[-1]["close_price_native"] == pytest.approx(100.0)
@@ -260,7 +381,7 @@ def test_quote_sync_us_skips_quote_rows_when_daily_features_are_missing() -> Non
     result = service.sync_market_quotes()
 
     assert result.inserted_rows == 0
-    assert sorted(result.failed_tickers) == ["AAPL", "DIA", "QQQ", "SPY"]
+    assert sorted(result.failed_tickers) == ["AAPL", "DIA", "GLD", "QQQ", "SLV", "SPY", "TLT", "USO", "UUP"]
     assert client.overseas_daily_requests == []
     assert repo.rows == []
 
@@ -282,7 +403,7 @@ def test_quote_sync_us_skips_quote_rows_when_daily_features_are_stale() -> None:
     result = service.sync_market_quotes()
 
     assert result.inserted_rows == 0
-    assert sorted(result.failed_tickers) == ["AAPL", "DIA", "QQQ", "SPY"]
+    assert sorted(result.failed_tickers) == ["AAPL", "DIA", "GLD", "QQQ", "SLV", "SPY", "TLT", "USO", "UUP"]
     assert repo.rows == []
 
 

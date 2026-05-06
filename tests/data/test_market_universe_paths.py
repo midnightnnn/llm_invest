@@ -128,7 +128,7 @@ def test_rebuild_universe_candidates_skips_rows_without_daily_history_features()
     assert written == {"ZERO", "GOOD"}
 
 
-def test_rebuild_universe_candidates_supplements_allowed_tickers_from_latest_market_features() -> None:
+def test_rebuild_universe_candidates_does_not_supplement_allowed_tickers_from_latest_market_features() -> None:
     def row(ticker: str, ret_20d: float) -> dict[str, object]:
         return {
             "as_of_ts": "2026-01-01T00:00:00+00:00",
@@ -152,11 +152,126 @@ def test_rebuild_universe_candidates_supplements_allowed_tickers_from_latest_mar
 
     out = store.rebuild_universe_candidates(top_n=3, per_exchange_cap=3, allowed_tickers=["ALLOW"])
 
-    assert out["count"] == 3
+    assert out["count"] == 1
     written = {row["ticker"] for row in session.client.payloads}
-    assert written == {"ALLOW", "EXTRA1", "EXTRA2"}
+    assert written == {"ALLOW"}
     assert session.call_pairs[0][1]["tickers"] == ["ALLOW"]
-    assert "tickers" not in session.call_pairs[1][1]
+    assert len(session.call_pairs) == 1
+
+
+def test_rebuild_universe_candidates_uses_discovery_rank_over_return_momentum() -> None:
+    def row(ticker: str, ret_20d: float) -> dict[str, object]:
+        return {
+            "as_of_ts": "2026-01-01T00:00:00+00:00",
+            "ticker": ticker,
+            "exchange_code": "NASD",
+            "instrument_id": f"NASD:{ticker}",
+            "ret_20d": ret_20d,
+            "ret_5d": ret_20d / 2,
+            "volatility_20d": 0.12,
+            "sentiment_score": 0.0,
+        }
+
+    session = _FakeSession(
+        responses=[
+            [row("SMALLMO", 0.80), row("MEGACAP", -0.05)],
+            [],
+        ],
+        client=_InsertClient(),
+    )
+    store = MarketStore(session)
+
+    out = store.rebuild_universe_candidates(
+        top_n=2,
+        per_exchange_cap=2,
+        allowed_tickers=["SMALLMO", "MEGACAP"],
+        universe_rank_metadata={
+            "MEGACAP": {"source": "market_cap", "market_cap_rank": 1, "market_cap_value": 3_000_000.0},
+            "SMALLMO": {"source": "market_cap", "market_cap_rank": 99, "market_cap_value": 10_000.0},
+        },
+    )
+
+    assert out["count"] == 2
+    payloads = session.client.payloads
+    assert [row["ticker"] for row in payloads] == ["MEGACAP", "SMALLMO"]
+    assert payloads[0]["rank"] == 1
+    assert "source=market_cap" in payloads[0]["reasons"]
+    assert "market_cap_rank=1" in payloads[0]["reasons"]
+
+
+def test_rebuild_universe_candidates_prioritizes_benchmark_core_tickers() -> None:
+    def row(ticker: str) -> dict[str, object]:
+        return {
+            "as_of_ts": "2026-01-01T00:00:00+00:00",
+            "ticker": ticker,
+            "exchange_code": "NASD",
+            "instrument_id": f"NASD:{ticker}",
+            "ret_20d": 0.01,
+            "ret_5d": 0.0,
+            "volatility_20d": 0.10,
+            "sentiment_score": 0.0,
+        }
+
+    session = _FakeSession(
+        responses=[
+            [row("MEGACAP"), row("SPY")],
+            [],
+        ],
+        client=_InsertClient(),
+    )
+    store = MarketStore(session)
+
+    out = store.rebuild_universe_candidates(
+        top_n=1,
+        per_exchange_cap=1,
+        allowed_tickers=["MEGACAP", "SPY"],
+        universe_rank_metadata={
+            "MEGACAP": {"source": "market_cap", "market_cap_rank": 1},
+            "SPY": {"source": "benchmark", "core_rank": 1},
+        },
+    )
+
+    assert out["count"] == 1
+    assert session.client.payloads[0]["ticker"] == "SPY"
+    assert "source=benchmark" in session.client.payloads[0]["reasons"]
+
+
+def test_rebuild_universe_candidates_prioritizes_asset_benchmark_before_market_cap() -> None:
+    def row(ticker: str) -> dict[str, object]:
+        return {
+            "as_of_ts": "2026-01-01T00:00:00+00:00",
+            "ticker": ticker,
+            "exchange_code": "NASD",
+            "instrument_id": f"NASD:{ticker}",
+            "ret_20d": 0.01,
+            "ret_5d": 0.0,
+            "volatility_20d": 0.10,
+            "sentiment_score": 0.0,
+        }
+
+    session = _FakeSession(
+        responses=[
+            [row("NVDA"), row("GLD")],
+            [],
+        ],
+        client=_InsertClient(),
+    )
+    store = MarketStore(session)
+
+    out = store.rebuild_universe_candidates(
+        top_n=1,
+        per_exchange_cap=1,
+        allowed_tickers=["NVDA", "GLD"],
+        universe_rank_metadata={
+            "NVDA": {"source": "market_cap", "market_cap_rank": 1},
+            "GLD": {"source": "asset_benchmark", "core_rank": 1, "asset_class": "gold"},
+        },
+    )
+
+    assert out["count"] == 1
+    assert session.client.payloads[0]["ticker"] == "GLD"
+    assert "source=asset_benchmark" in session.client.payloads[0]["reasons"]
+    assert "asset_class=gold" in session.client.payloads[0]["reasons"]
 
 
 def test_latest_universe_candidate_tickers_scopes_latest_run_by_market() -> None:

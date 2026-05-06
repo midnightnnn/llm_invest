@@ -382,14 +382,11 @@ def _same_day_quote_rows_present(
     trading_date: Any,
 ) -> tuple[bool, dict[str, Any]]:
     """Checks whether same-day intraday quote rows already exist in
-    market_features for this market. Fails closed: any query error is
-    reported as 'may be tainted' so slow prep refuses rather than quietly
-    training on partial intraday data.
+    market_features for this market.
 
     Returns (tainted, info_dict). ``tainted=True`` means a quote row for
-    today's trading_date already landed in market_features, which would be
-    picked up by refresh_signal_daily_values (latest as_of_ts wins per date)
-    and drift the ranker off prior-EOD.
+    today's trading_date already landed in market_features. Ranker prep now
+    filters to daily sources, so this is observability rather than a blocker.
     """
     canonical = _canonical_market_key(market)
     sources = _QUOTE_SOURCE_BY_MARKET.get(canonical, ())
@@ -575,12 +572,10 @@ def cmd_run_shared_prep(
     ----------------------------------------
     Market quotes reach market_features ONLY via _batch_market_sync (inside the
     'all' and 'fast' paths of this command). The ranker consumes
-    signal_daily_values, which derives from market_features by picking the
-    latest as_of_ts per (ticker, date). Because slow runs without
-    _batch_market_sync, no intraday row lands in market_features during slow,
-    so signal_daily_values has no partition for today and the ranker stays
-    anchored on the prior EOD. The fast stage then adds fresh intraday quotes
-    but does NOT re-run the ranker, so the dispatched agent sees:
+    signal_daily_values from daily market sources only. Because slow runs
+    without _batch_market_sync, its ML artifacts stay anchored on EOD rows.
+    The fast stage then adds fresh intraday quotes but does NOT re-run the
+    ranker, so the dispatched agent sees:
       - ranker/forecast outputs anchored on prior-day dailies (stable),
       - plus fresh intraday prices in context.market_rows (volatile).
     If a future change lets another path write to market_features (e.g. an
@@ -802,12 +797,10 @@ def cmd_run_shared_prep(
         # dispatch guard below.
         session_status = "ok"
         if run_ml_prep:
-            # Taint guard applies ONLY to stage='slow'. Rationale:
-            #   - stage='slow' runs without _batch_market_sync, so any same-day
-            #     intraday quote row present in market_features must have been
-            #     written by another path (manual sync-market-quotes, sidecar,
-            #     a prior fast run). That drifts ranker off prior-EOD, so
-            #     refuse.
+            # Quote rows should not feed signal/ranker prep because the ranker
+            # refresh narrows sources to daily history. Keep this warning to
+            # surface manual fast/quote runs that may affect context rows, but
+            # do not block backfill or post-close slow prep.
             #   - stage='all' runs sync BEFORE ML by design; the same-day
             #     quote rows visible here are the ones this invocation just
             #     wrote, which is the legacy single-shot semantics. Running
@@ -819,17 +812,16 @@ def cmd_run_shared_prep(
                     trading_date=trading_date,
                 )
                 if tainted:
-                    logger.error(
-                        "[red]Slow prep refused: same-day intraday quote rows present[/red] info=%s",
+                    logger.warning(
+                        "[yellow]Slow prep saw same-day intraday quote rows; continuing with daily signal sources[/yellow] info=%s",
                         taint_info,
                         extra=event_extra(
-                            "shared_prep_ml_abort_tainted",
+                            "shared_prep_ml_quote_rows_ignored",
                             stage=stage_norm,
                             market=market_override or "all",
                             taint_info=taint_info,
                         ),
                     )
-                    raise SystemExit(4)
 
             # Daily EOD sync MUST run before ML (slow only). Rationale:
             #   - Live scheduler phases never hit 'general', so there is no

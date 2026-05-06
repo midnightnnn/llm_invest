@@ -11,6 +11,7 @@ from typing import Any
 
 import pandas as pd
 
+from arena.asset_benchmarks import ASSET_BENCHMARK_SOURCE, KOSPI_ASSET_BENCHMARKS, US_ASSET_BENCHMARKS
 from arena.config import Settings
 from arena.data.bq import BigQueryRepository
 from arena.logging_utils import event_extra, failure_extra
@@ -222,8 +223,60 @@ class MarketDataSyncService:
         self._usd_krw_daily_fx_range: tuple[date, date] | None = None
         self._usd_krw_latest_fx: float | None = None
         self._known_us_quote_exchange_cache: dict[str, str] = {}
+        self._universe_rank_metadata: dict[str, dict[str, Any]] = {}
 
     _US_MARKETS: set[str] = {"nasdaq", "nyse", "amex", "us"}
+    _UNIVERSE_SOURCE_PRIORITY: dict[str, int] = {
+        "default": 0,
+        "held": 0,
+        "benchmark": 1,
+        ASSET_BENCHMARK_SOURCE: 2,
+        "market_cap": 10,
+        "top_interest": 20,
+        "volume_rank": 21,
+        "missing_daily_feature": 60,
+        "static": 70,
+        "fallback": 90,
+    }
+
+    def _rank_source_key(self, meta: dict[str, Any]) -> tuple[int, int]:
+        source = str(meta.get("source") or "fallback").strip().lower()
+        priority = self._UNIVERSE_SOURCE_PRIORITY.get(source, self._UNIVERSE_SOURCE_PRIORITY["fallback"])
+        for key in ("core_rank", "market_cap_rank", "liquidity_rank", "fallback_rank", "source_rank"):
+            try:
+                value = int(meta.get(key) or 0)
+            except (TypeError, ValueError):
+                value = 0
+            if value > 0:
+                return priority, value
+        return priority, 1_000_000_000
+
+    def _record_universe_rank_metadata(self, ticker: object, source: str, **values: Any) -> None:
+        token = str(ticker or "").strip().upper()
+        if not token:
+            return
+        meta: dict[str, Any] = {"source": str(source or "fallback").strip().lower() or "fallback"}
+        for key, value in values.items():
+            if value is None:
+                continue
+            if key.endswith("_rank") or key == "source_rank":
+                try:
+                    parsed = int(value)
+                except (TypeError, ValueError):
+                    continue
+                if parsed <= 0:
+                    continue
+                meta[key] = parsed
+                continue
+            if key in {"market_cap_value", "volume_value"}:
+                parsed_float = _finite_float_or_none(value)
+                if parsed_float is not None:
+                    meta[key] = parsed_float
+                continue
+            meta[key] = value
+        current = self._universe_rank_metadata.get(token)
+        if current is None or self._rank_source_key(meta) < self._rank_source_key(current):
+            self._universe_rank_metadata[token] = meta
 
     def _parsed_markets(self) -> set[str]:
         return {m.strip() for m in str(self.settings.kis_target_market or "").split(",") if m.strip()}
@@ -276,7 +329,17 @@ class MarketDataSyncService:
         call.  To reach the per-exchange cap we issue multiple calls with
         non-overlapping price bands so the result sets are disjoint.
         """
-        cap = max(1, int(self.settings.universe_per_exchange_cap))
+        cap = max(
+            1,
+            int(
+                getattr(
+                    self.settings,
+                    "us_universe_per_exchange_cap",
+                    self.settings.universe_per_exchange_cap,
+                )
+                or self.settings.universe_per_exchange_cap
+            ),
+        )
         exchanges = [("NAS", "NAS"), ("NYS", "NYS")]
         # Price bands (USD) — disjoint ranges to maximise unique tickers.
         _PRICE_BANDS: list[tuple[float | None, float | None]] = [
@@ -288,9 +351,28 @@ class MarketDataSyncService:
         all_rows: list[dict[str, str]] = []
         existing: set[str] = set()
 
-        def add_symbol(ticker: object, quote_excd: str = "") -> None:
+        def add_symbol(
+            ticker: object,
+            quote_excd: str = "",
+            *,
+            source: str = "fallback",
+            market_cap_rank: int | None = None,
+            market_cap_value: float | None = None,
+            core_rank: int | None = None,
+            asset_class: str | None = None,
+        ) -> None:
             token = str(ticker or "").strip().upper()
-            if not token or token in existing or token[:1].isdigit():
+            if not token or token[:1].isdigit():
+                return
+            self._record_universe_rank_metadata(
+                token,
+                source,
+                market_cap_rank=market_cap_rank,
+                market_cap_value=market_cap_value,
+                core_rank=core_rank,
+                asset_class=asset_class,
+            )
+            if token in existing:
                 return
             normalized_excd = str(quote_excd or "").strip().upper()
             if not normalized_excd:
@@ -338,7 +420,13 @@ class MarketDataSyncService:
                     ticker = str(row.get("symb") or row.get("rsym") or "").strip().upper()
                     if not ticker or ticker in excd_seen or ticker in existing:
                         continue
-                    add_symbol(ticker, quote_excd=quote_excd)
+                    add_symbol(
+                        ticker,
+                        quote_excd=quote_excd,
+                        source="market_cap",
+                        market_cap_rank=len(excd_seen) + 1,
+                        market_cap_value=_finite_float_or_none(row.get("valx")),
+                    )
                     excd_seen.add(ticker)
             logger.info(
                 "[cyan]US discovery[/cyan] excd=%s api_rows=%d unique=%d cap=%d",
@@ -346,15 +434,25 @@ class MarketDataSyncService:
             )
 
         # Always include benchmark ETFs
-        for bench in ("SPY", "QQQ", "DIA"):
-            add_symbol(bench, quote_excd="NAS")
+        for idx, bench in enumerate(("SPY", "QQQ", "DIA"), start=1):
+            add_symbol(bench, quote_excd="NAS", source="benchmark", core_rank=idx)
+
+        # Always include representative non-equity asset ETFs.
+        for idx, bench in enumerate(US_ASSET_BENCHMARKS, start=1):
+            add_symbol(
+                bench.ticker,
+                quote_excd=bench.quote_excd,
+                source=ASSET_BENCHMARK_SOURCE,
+                core_rank=idx,
+                asset_class=bench.asset_class,
+            )
 
         # Always include currently held tickers
         if hasattr(self.repo, "get_all_held_tickers"):
             try:
                 held = self.repo.get_all_held_tickers()
-                for t in held:
-                    add_symbol(t)
+                for idx, t in enumerate(held, start=1):
+                    add_symbol(t, source="held", core_rank=idx)
             except Exception:
                 pass
 
@@ -368,31 +466,99 @@ class MarketDataSyncService:
         # ticker → Korean name mapping (populated from ranking API responses)
         self._kospi_ticker_names: dict[str, str] = getattr(self, "_kospi_ticker_names", {})
 
-        def add_symbol(ticker: object, name: str = "") -> None:
+        def add_symbol(
+            ticker: object,
+            name: str = "",
+            *,
+            source: str = "fallback",
+            market_cap_rank: int | None = None,
+            liquidity_rank: int | None = None,
+            core_rank: int | None = None,
+            fallback_rank: int | None = None,
+            asset_class: str | None = None,
+            market_cap_value: float | None = None,
+            volume_value: float | None = None,
+        ) -> None:
             token = str(ticker or "").strip().upper()
             if not self._is_kospi_ticker(token):
                 return
             if name:
                 self._kospi_ticker_names[token] = name
+            self._record_universe_rank_metadata(
+                token,
+                source,
+                market_cap_rank=market_cap_rank,
+                liquidity_rank=liquidity_rank,
+                core_rank=core_rank,
+                fallback_rank=fallback_rank,
+                asset_class=asset_class,
+                market_cap_value=market_cap_value,
+                volume_value=volume_value,
+            )
             if token in seen:
                 return
             all_rows.append({"ticker": token, "quote_excd": "KRX"})
             seen.add(token)
 
         # Explicit KR tickers in default_universe should always be honored.
-        for ticker in self.settings.default_universe:
-            add_symbol(ticker)
+        for idx, ticker in enumerate(self.settings.default_universe, start=1):
+            add_symbol(ticker, source="default", core_rank=idx)
 
         # Always keep the KOSPI 200 ETF benchmark available.
-        add_symbol("069500")
+        add_symbol("069500", source="benchmark", core_rank=1)
+
+        # Always include representative non-equity asset ETFs.
+        for idx, bench in enumerate(KOSPI_ASSET_BENCHMARKS, start=1):
+            add_symbol(
+                bench.ticker,
+                bench.display_name,
+                source=ASSET_BENCHMARK_SOURCE,
+                core_rank=idx,
+                asset_class=bench.asset_class,
+            )
 
         # Always include currently held domestic tickers.
         if hasattr(self.repo, "get_all_held_tickers"):
             try:
-                for ticker in self.repo.get_all_held_tickers():
-                    add_symbol(ticker)
+                for idx, ticker in enumerate(self.repo.get_all_held_tickers(), start=1):
+                    add_symbol(ticker, source="held", core_rank=idx)
             except Exception:
                 pass
+
+        master_loader = getattr(self.client, "get_domestic_kospi_master_rows", None)
+        if callable(master_loader):
+            try:
+                master_rows = master_loader()
+            except Exception as exc:
+                logger.warning(
+                    "[yellow]KOSPI official master discovery failed[/yellow] err=%s",
+                    str(exc),
+                    extra=failure_extra(
+                        "kospi_official_master_discovery_failed",
+                        exc,
+                    ),
+                )
+            else:
+                before = len(seen)
+                for rank_idx, row in enumerate(master_rows, start=1):
+                    add_symbol(
+                        row.get("ticker"),
+                        str(row.get("name") or ""),
+                        source="market_cap",
+                        market_cap_rank=rank_idx,
+                        market_cap_value=_finite_float_or_none(row.get("market_cap")),
+                        volume_value=_finite_float_or_none(row.get("volume")),
+                    )
+                    if len(seen) >= cap:
+                        break
+                logger.info(
+                    "[cyan]KOSPI discovery[/cyan] source=official_master api_rows=%d unique_added=%d cap=%d",
+                    len(master_rows),
+                    max(0, len(seen) - before),
+                    cap,
+                )
+                if len(seen) >= cap:
+                    return all_rows
 
         discovery_specs: list[tuple[str, Any]] = [
             ("market_cap", self.client.get_domestic_market_cap_ranking),
@@ -415,10 +581,15 @@ class MarketDataSyncService:
                 )
                 continue
             before = len(seen)
-            for row in raw:
+            for rank_idx, row in enumerate(raw, start=1):
                 sym = row.get("mksc_shrn_iscd") or row.get("stck_shrn_iscd") or row.get("pdno")
                 name = str(row.get("hts_kor_isnm") or row.get("kor_isnm") or "").strip()
-                add_symbol(sym, name)
+                add_kwargs: dict[str, Any] = {"source": label}
+                if label == "market_cap":
+                    add_kwargs["market_cap_rank"] = rank_idx
+                else:
+                    add_kwargs["liquidity_rank"] = rank_idx
+                add_symbol(sym, name, **add_kwargs)
                 if len(seen) >= cap:
                     break
             logger.info(
@@ -432,29 +603,17 @@ class MarketDataSyncService:
                 break
 
         if len(seen) < cap:
-            before = len(seen)
-            try:
-                from arena.tools.sector_map import SECTOR_BY_TICKER
-            except Exception as exc:
-                logger.warning(
-                    "[yellow]KOSPI static universe fallback skipped[/yellow] err=%s",
-                    str(exc),
-                    extra=failure_extra(
-                        "kospi_static_universe_fallback_skipped",
-                        exc,
-                    ),
-                )
-            else:
-                for ticker in SECTOR_BY_TICKER:
-                    add_symbol(ticker)
-                    if len(seen) >= cap:
-                        break
-                logger.info(
-                    "[cyan]KOSPI static universe fallback[/cyan] unique_added=%d total=%d cap=%d",
-                    max(0, len(seen) - before),
-                    len(seen),
-                    cap,
-                )
+            logger.warning(
+                "[yellow]KOSPI discovery below cap[/yellow] total=%d cap=%d static_fallback=disabled",
+                len(seen),
+                cap,
+                extra=event_extra(
+                    "kospi_discovery_below_cap",
+                    total=len(seen),
+                    cap=cap,
+                    static_fallback="disabled",
+                ),
+            )
 
         return all_rows
 
@@ -523,6 +682,7 @@ class MarketDataSyncService:
             if self._is_kospi_ticker(ticker):
                 if not self._has_kospi_market():
                     continue
+                self._record_universe_rank_metadata(ticker, "missing_daily_feature", fallback_rank=len(out) + 1)
                 out.append({"ticker": ticker, "quote_excd": "KRX"})
             else:
                 if not self._has_us_market() or ticker[:1].isdigit():
@@ -533,6 +693,7 @@ class MarketDataSyncService:
                     quote_excd = self._known_us_quote_exchange(ticker)
                 if not quote_excd:
                     quote_excd = str(self.settings.kis_overseas_quote_excd or "NAS").strip().upper() or "NAS"
+                self._record_universe_rank_metadata(ticker, "missing_daily_feature", fallback_rank=len(out) + 1)
                 out.append({"ticker": ticker, "quote_excd": quote_excd})
             seen.add(ticker)
             added += 1
@@ -1162,12 +1323,18 @@ class MarketDataSyncService:
 
         if hasattr(self.repo, "rebuild_universe_candidates"):
             try:
+                universe_rank_metadata = {
+                    ticker: dict(self._universe_rank_metadata.get(ticker) or {})
+                    for ticker in tickers
+                    if self._universe_rank_metadata.get(ticker)
+                }
                 universe_result = self.repo.rebuild_universe_candidates(
                     top_n=max(1, int(self.settings.universe_run_top_n)),
                     per_exchange_cap=max(1, int(self.settings.universe_per_exchange_cap)),
                     sources=self._all_sources(),
                     allowed_tickers=tickers,
                     ticker_names=getattr(self, "_kospi_ticker_names", {}),
+                    universe_rank_metadata=universe_rank_metadata,
                 )
                 exchange_counts = universe_result.get("exchange_counts") or {}
                 logger.info(
@@ -1330,6 +1497,7 @@ class MarketDataSyncService:
 
     def sync_market_features(self) -> MarketSyncResult:
         """Fetches market data and writes feature rows into BigQuery."""
+        self._universe_rank_metadata = {}
         symbols = self._include_missing_daily_feature_symbols(self._target_symbols())
         if not symbols:
             logger.warning(
@@ -1515,6 +1683,7 @@ class MarketDataSyncService:
 
     def sync_market_quotes(self) -> MarketSyncResult:
         """Fetches intraday quotes and writes them as hourly feature rows."""
+        self._universe_rank_metadata = {}
         symbols = self._target_symbols()
         if not symbols:
             logger.warning(

@@ -14,6 +14,7 @@ import requests
 
 from arena.config import Settings
 from arena.logging_utils import event_extra, failure_extra
+from arena.open_trading.domestic_master import fetch_kospi_master_rows
 from arena.open_trading.exchange_codes import normalize_us_order_exchange, target_market_default_us_order_exchange
 from arena.security.credential_store_env import load_local_secret_payload
 
@@ -1394,17 +1395,55 @@ class OpenTradingClient:
             rows = [rows]
         return [dict(row) for row in rows if isinstance(row, dict)]
 
+    def _request_output_pages(
+        self,
+        *,
+        method: str,
+        path: str,
+        tr_id: str,
+        params: dict[str, Any],
+        output_key: str = "output",
+        max_pages: int = 20,
+    ) -> list[dict[str, Any]]:
+        """Collects KIS paginated output rows using the common tr_cont header pattern."""
+        if max_pages <= 0:
+            raise ValueError("max_pages must be positive")
+
+        rows: list[dict[str, Any]] = []
+        tr_cont = ""
+        for _ in range(max(1, int(max_pages))):
+            body, headers = self._request(
+                method=method,
+                path=path,
+                tr_id=tr_id,
+                tr_cont=tr_cont,
+                params=params,
+            )
+            page_rows = body.get(output_key) or []
+            if isinstance(page_rows, dict):
+                page_rows = [page_rows]
+            rows.extend(dict(row) for row in page_rows if isinstance(row, dict))
+
+            next_flag = (headers.get("tr_cont") or "").upper()
+            if next_flag not in {"M", "F"}:
+                break
+            tr_cont = "N"
+
+        return rows
+
     def get_domestic_market_cap_ranking(
         self,
         *,
         market_scope: str = "0001",
         div_cls_code: str = "0",
+        max_pages: int = 20,
     ) -> list[dict[str, Any]]:
         """Returns domestic market-cap ranking rows for KRX equities."""
-        body, _ = self._request(
+        return self._request_output_pages(
             method="GET",
             path="/uapi/domestic-stock/v1/ranking/market-cap",
             tr_id="FHPST01740000",
+            max_pages=max_pages,
             params={
                 "fid_input_price_2": "",
                 "fid_cond_mrkt_div_code": "J",
@@ -1417,21 +1456,23 @@ class OpenTradingClient:
                 "fid_vol_cnt": "",
             },
         )
-        rows = body.get("output") or []
-        if isinstance(rows, dict):
-            rows = [rows]
-        return [dict(row) for row in rows if isinstance(row, dict)]
+
+    def get_domestic_kospi_master_rows(self) -> list[dict[str, Any]]:
+        """Returns official KIS KOSPI master rows sorted by market cap."""
+        return fetch_kospi_master_rows(session=self.session, timeout=self.timeout_seconds)
 
     def get_domestic_top_interest_stock(
         self,
         *,
         market_scope: str = "0001",
+        max_pages: int = 20,
     ) -> list[dict[str, Any]]:
         """Returns domestic top-interest ranking rows for KRX equities."""
-        body, _ = self._request(
+        return self._request_output_pages(
             method="GET",
             path="/uapi/domestic-stock/v1/ranking/top-interest-stock",
             tr_id="FHPST01800000",
+            max_pages=max_pages,
             params={
                 "fid_input_iscd_2": "000000",
                 "fid_cond_mrkt_div_code": "J",
@@ -1446,21 +1487,19 @@ class OpenTradingClient:
                 "fid_input_cnt_1": "1",
             },
         )
-        rows = body.get("output") or []
-        if isinstance(rows, dict):
-            rows = [rows]
-        return [dict(row) for row in rows if isinstance(row, dict)]
 
     def get_domestic_volume_rank(
         self,
         *,
         market_scope: str = "0001",
+        max_pages: int = 20,
     ) -> list[dict[str, Any]]:
         """Returns domestic volume ranking rows for KRX equities."""
-        body, _ = self._request(
+        return self._request_output_pages(
             method="GET",
             path="/uapi/domestic-stock/v1/quotations/volume-rank",
             tr_id="FHPST01710000",
+            max_pages=max_pages,
             params={
                 "FID_COND_MRKT_DIV_CODE": "J",
                 "FID_COND_SCR_DIV_CODE": "20171",
@@ -1475,10 +1514,6 @@ class OpenTradingClient:
                 "FID_INPUT_DATE_1": "",
             },
         )
-        rows = body.get("output") or []
-        if isinstance(rows, dict):
-            rows = [rows]
-        return [dict(row) for row in rows if isinstance(row, dict)]
 
     def place_domestic_cash_order(
         self,

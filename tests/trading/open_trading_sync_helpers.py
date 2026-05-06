@@ -15,6 +15,7 @@ class FakeRepo:
         self._spans = {}
         self.latest_instrument_map_calls = []
         self.latest_market_features_calls = []
+        self.rebuild_universe_calls = []
 
     def insert_market_features(self, rows):
         self.rows.extend(rows)
@@ -64,6 +65,28 @@ class FakeRepo:
     def latest_missing_daily_feature_tickers(self, *, sources=None, limit=1000):
         _ = (sources, limit)
         return []
+
+    def rebuild_universe_candidates(
+        self,
+        *,
+        top_n=400,
+        per_exchange_cap=200,
+        sources=None,
+        allowed_tickers=None,
+        ticker_names=None,
+        universe_rank_metadata=None,
+    ):
+        self.rebuild_universe_calls.append(
+            {
+                "top_n": top_n,
+                "per_exchange_cap": per_exchange_cap,
+                "sources": list(sources or []),
+                "allowed_tickers": list(allowed_tickers or []),
+                "ticker_names": dict(ticker_names or {}),
+                "universe_rank_metadata": dict(universe_rank_metadata or {}),
+            }
+        )
+        return {"run_id": "uv_test", "count": len(allowed_tickers or []), "exchange_counts": {}}
 
 
 class FakeClient:

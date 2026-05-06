@@ -259,6 +259,7 @@ def test_forecast_returns_defaults_to_ranker_buckets_plus_holdings() -> None:
 
     rows = qt.forecast_returns()
 
+    assert all(call.get("tickers") == settings.default_universe for call in repo.ranker_calls)
     assert [call["buckets"] for call in repo.ranker_calls if call.get("buckets")] == [
         ["momentum"],
         ["pullback"],
@@ -280,4 +281,3 @@ def test_forecast_returns_defaults_to_ranker_buckets_plus_holdings() -> None:
     )
     assert not ({f"X{i:02d}" for i in range(10)} & set(repo.last_forecast_tickers))
     assert {row["ticker"] for row in rows} == set(repo.last_forecast_tickers)
-

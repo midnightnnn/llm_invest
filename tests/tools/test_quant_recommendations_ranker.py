@@ -60,6 +60,7 @@ def test_recommend_opportunities_uses_precomputed_learned_scores() -> None:
     assert repo.last_ranker_kwargs["limit"] == 3
     assert repo.last_ranker_kwargs["per_profile_limit"] == 3
     assert repo.last_ranker_kwargs["markets"] == ["us"]
+    assert repo.last_ranker_kwargs["tickers"] == ["AAPL", "MSFT", "TSLA"]
     assert out["diagnostics"]["selection_scope"]["mode"] == "ranked_union"
     assert out["diagnostics"]["selection_scope"]["global_limit"] == 3
     assert out["diagnostics"]["selection_scope"]["per_profile_limit"] == 3

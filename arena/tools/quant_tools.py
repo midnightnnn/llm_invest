@@ -653,7 +653,8 @@ class QuantTools:
         top_per_bucket = max(1, int(getattr(self.settings, "forecast_ranker_top_per_bucket", 10) or 10))
         max_age_hours = max(1, int(getattr(self.settings, "forecast_ranker_max_age_hours", 24 * 14) or (24 * 14)))
         market_filter = self._scope().row_market_filter()
-        allowed = set(self._target_universe())
+        universe = self._target_universe()
+        allowed = set(universe)
 
         out: list[str] = []
         for bucket in FORECAST_RANKER_BUCKETS:
@@ -661,6 +662,7 @@ class QuantTools:
                 rows = loader(
                     limit=top_per_bucket,
                     max_age_hours=max_age_hours,
+                    tickers=universe or None,
                     buckets=[bucket],
                     markets=market_filter or None,
                 ) or []
@@ -680,6 +682,7 @@ class QuantTools:
                 rows = loader(
                     limit=top_per_bucket,
                     max_age_hours=max_age_hours,
+                    tickers=universe or None,
                     profiles=[profile],
                     markets=market_filter or None,
                 ) or []
@@ -1431,6 +1434,21 @@ class QuantTools:
             **filter_diagnostics,
             "markets": market_filter,
         }
+        universe = self._target_universe()
+        universe_allowed = set(universe)
+        diagnostics["selection_scope"]["universe_size"] = len(universe)
+        if not universe:
+            diagnostics["warnings"].append("runtime universe is empty")
+            return {
+                "status": "unusable",
+                "error": "runtime universe is empty; refresh universe_candidates before running recommend_opportunities",
+                "recommendations": [],
+                "rows": [],
+                "by_profile": {},
+                "optimizer": {},
+                "ranker": {"score_source": "missing"},
+                "diagnostics": diagnostics,
+            }
         learned_rows: list[dict[str, Any]] = []
         loader = getattr(self.repo, "latest_opportunity_ranker_scores", None)
         if callable(loader):
@@ -1438,6 +1456,7 @@ class QuantTools:
                 learned_rows = loader(
                     limit=global_limit,
                     max_age_hours=lookup_max_age_hours,
+                    tickers=universe,
                     buckets=bucket_tokens or None,
                     profiles=profile_tokens or None,
                     markets=market_filter or None,
@@ -1451,6 +1470,7 @@ class QuantTools:
                     learned_rows = loader(
                         limit=global_limit,
                         max_age_hours=lookup_max_age_hours,
+                        tickers=universe,
                         buckets=None,
                         profiles=None,
                         markets=market_filter or None,
@@ -1466,6 +1486,13 @@ class QuantTools:
         else:
             diagnostics["warnings"].append("latest_opportunity_ranker_scores unavailable")
         diagnostics["selection_scope"]["loaded_rows"] = len(learned_rows)
+        if learned_rows:
+            learned_rows = [
+                row
+                for row in learned_rows
+                if str(row.get("ticker") or "").strip().upper() in universe_allowed
+            ]
+            diagnostics["selection_scope"]["loaded_rows_after_universe_filter"] = len(learned_rows)
 
         if learned_rows:
             freshness = _opportunity_ranker_freshness(

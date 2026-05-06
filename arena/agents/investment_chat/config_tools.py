@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Any, Literal, Optional
+from typing import Any, Callable, Literal, Optional
 from uuid import uuid4
+
+from google.adk.tools.tool_context import ToolContext
 
 from arena.agents.investment_chat.audit import append_chat_audit, config_set
 from arena.agents.investment_chat.context import normalize_tenant
@@ -54,6 +56,38 @@ _CHAT_AGENT_ALLOWED_FIELDS = {
 }
 ConfigChangeAction = Literal["update", "upsert", "add", "remove"]
 CapitalAllocationMode = Literal["unchanged", "fixed_krw", "account_percent", "whole_account"]
+
+
+def _confirmation_state_key(tool_context: ToolContext) -> str:
+    function_call_id = str(getattr(tool_context, "function_call_id", "") or "").strip()
+    return f"investment_chat.config_confirmation.{function_call_id or 'unknown'}"
+
+
+def _confirmation_payload(draft: dict[str, Any]) -> dict[str, Any]:
+    diffs = draft.get("diffs") if isinstance(draft.get("diffs"), list) else []
+    return {
+        "action": "apply_config_change",
+        "scope": draft.get("scope") or "",
+        "config_action": draft.get("action") or "",
+        "summary": draft.get("summary") or "",
+        "diff_count": len(diffs),
+        "diffs": diffs[:20],
+    }
+
+
+def _confirmation_hint(draft: dict[str, Any]) -> str:
+    payload = _confirmation_payload(draft)
+    scope = str(payload.get("scope") or "").strip().lower()
+    scope_label = {
+        "agent": "투자 에이전트",
+        "chat_agent": "투자챗봇",
+        "tenant": "테넌트",
+    }.get(scope, "설정")
+    summary = str(payload.get("summary") or "").strip()
+    return (
+        f"{scope_label} 설정 변경을 적용할까요? {summary} "
+        "ADK Web 확인창에서 Confirmed 체크박스를 체크한 뒤 Submit을 눌러야 승인됩니다."
+    )
 
 
 def load_chat_agent_config(repo: Any, *, tenant_id: str) -> dict[str, Any]:
@@ -453,6 +487,8 @@ def recent_config_drafts(repo: Any, *, tenant_id: str, limit: int = 5) -> list[d
         seen.add(token)
         draft = load_config_draft(repo, tenant_id=tenant, token=token)
         if isinstance(draft, dict):
+            if str(draft.get("approval_channel") or "").strip().lower() == "adk_tool_confirmation":
+                continue
             out.append(config_draft_status_row(token, draft))
         if len(out) >= max(1, min(int(limit or 5), 20)):
             break
@@ -522,12 +558,19 @@ def _apply_tenant_config(
     return {"config_keys": keys}
 
 
-def build_config_tool_entries(*, repo: Any, settings: Settings, tenant_id: str) -> list[ToolEntry]:
+def build_config_tool_entries(
+    *,
+    repo: Any,
+    settings: Settings,
+    tenant_id: str,
+    invalidate_tenant_cache: Callable[..., Any] | None = None,
+) -> list[ToolEntry]:
     return _build_config_tool_entries(
         repo=repo,
         settings=settings,
         tenant_id=tenant_id,
         include_internal_bridge=False,
+        invalidate_tenant_cache=invalidate_tenant_cache,
     )
 
 
@@ -537,6 +580,7 @@ def build_config_bridge_tool_entries(*, repo: Any, settings: Settings, tenant_id
         settings=settings,
         tenant_id=tenant_id,
         include_internal_bridge=True,
+        invalidate_tenant_cache=None,
     )[-1:]
 
 
@@ -546,6 +590,7 @@ def _build_config_tool_entries(
     settings: Settings,
     tenant_id: str,
     include_internal_bridge: bool,
+    invalidate_tenant_cache: Callable[..., Any] | None,
 ) -> list[ToolEntry]:
     tenant = normalize_tenant(tenant_id)
 
@@ -607,6 +652,107 @@ def _build_config_tool_entries(
             "message": "설정 변경 초안이 생성되었습니다. UI 승인 버튼을 눌러야 적용됩니다.",
         }
 
+    def _propose_config_change_with_confirmation(
+        change: dict[str, Any],
+        *,
+        rationale: str = "",
+        tool_context: ToolContext | None = None,
+    ) -> dict[str, Any]:
+        if tool_context is None:
+            return _create_config_change_draft(change, rationale=rationale)
+
+        state_key = _confirmation_state_key(tool_context)
+        confirmation = getattr(tool_context, "tool_confirmation", None)
+        state = getattr(tool_context, "state", None)
+        if confirmation is not None:
+            token = ""
+            if state is not None:
+                token = str(state.get(state_key) or "").strip()
+            if not bool(getattr(confirmation, "confirmed", False)):
+                confirmation_payload = getattr(confirmation, "payload", None)
+                reason = "confirmed_checkbox_unchecked" if confirmation_payload is not None else "not_confirmed"
+                if token:
+                    draft = load_config_draft(repo, tenant_id=tenant, token=token)
+                    if isinstance(draft, dict) and str(draft.get("status") or "").strip().lower() == "draft":
+                        draft["status"] = "rejected"
+                        draft["rejected_at"] = utc_iso()
+                        draft["rejection_reason"] = reason
+                        save_config_draft(repo, tenant_id=tenant, token=token, draft=draft)
+                    append_chat_audit(
+                        repo,
+                        tenant_id=tenant,
+                        action=CONFIG_CHANGE_APPLY_ACTION,
+                        status="blocked",
+                        detail={
+                            "approval_token": token,
+                            "stage": "adk_tool_confirmation",
+                            "reason": reason,
+                        },
+                        user_email=chat_actor_email(),
+                    )
+                return {
+                    "status": "rejected",
+                    "tenant_id": tenant,
+                    "reason": reason,
+                    "apply_status": "not_applied",
+                    "message": (
+                        "ADK Web에서 confirmed=false가 반환되어 설정 변경을 적용하지 않았습니다. "
+                        "승인하려면 ADK Web 확인창에서 Confirmed 체크박스를 체크한 뒤 Submit을 눌러야 합니다."
+                        if reason == "confirmed_checkbox_unchecked"
+                        else "ADK Web에서 설정 변경이 확인되지 않아 적용하지 않았습니다."
+                    ),
+                }
+            if not token:
+                return {
+                    "status": "blocked",
+                    "tenant_id": tenant,
+                    "error": "ADK tool confirmation state was missing; config change was not applied.",
+                    "apply_status": "not_applied",
+                }
+            result = apply_approved_config_change(approval_token=token, confirmation_text=f"CONFIRM {token}")
+            if callable(invalidate_tenant_cache) and result.get("status") in {"applied", "already_applied"}:
+                try:
+                    invalidate_tenant_cache(tenant, "runtime", "memory", "portfolio")
+                except Exception:
+                    logger.warning("[yellow]Investment chat config cache invalidation failed[/yellow] tenant=%s", tenant)
+            result["approval_ui"] = "adk_tool_confirmation"
+            return result
+
+        draft_result = _create_config_change_draft(change, rationale=rationale)
+        if str(draft_result.get("status") or "").strip().lower() != "ok":
+            return draft_result
+        token = str(draft_result.get("approval_token") or "").strip()
+        draft = load_config_draft(repo, tenant_id=tenant, token=token)
+        if not isinstance(draft, dict):
+            return {
+                "status": "blocked",
+                "tenant_id": tenant,
+                "error": "config change draft could not be loaded; config change was not applied.",
+                "apply_status": "not_applied",
+            }
+        draft["approval_channel"] = "adk_tool_confirmation"
+        save_config_draft(repo, tenant_id=tenant, token=token, draft=draft)
+        if state is not None:
+            state[state_key] = token
+        tool_context.request_confirmation(
+            hint=_confirmation_hint(draft),
+            payload=_confirmation_payload(draft),
+        )
+        tool_context.actions.skip_summarization = True
+        return {
+            "status": "waiting_for_confirmation",
+            "tenant_id": tenant,
+            "approval_required": True,
+            "approval_ui": "adk_tool_confirmation",
+            "apply_status": "not_applied",
+            "expires_at": draft.get("expires_at") or "",
+            "scope": draft.get("scope") or "",
+            "action": draft.get("action") or "",
+            "summary": draft.get("summary") or "",
+            "diffs": draft.get("diffs") or [],
+            "message": "ADK tool confirmation is required before this config change can be applied.",
+        }
+
     def propose_agent_config_change(
         agent_id: str,
         action: ConfigChangeAction = "update",
@@ -623,8 +769,9 @@ def _build_config_tool_entries(
         llm_params_json: str = "",
         memory_compaction_model: str = "",
         rationale: str = "",
+        tool_context: ToolContext | None = None,
     ) -> dict[str, Any]:
-        """Creates an investment-agent settings draft. The UI approval button must be clicked before it applies."""
+        """Creates an investment-agent settings draft and asks for ADK confirmation before it applies."""
         fields: dict[str, Any] = {}
         for key, value in {
             "provider": provider,
@@ -667,7 +814,7 @@ def _build_config_tool_entries(
             "agent_id": str(agent_id or "").strip().lower(),
             "fields": fields,
         }
-        return _create_config_change_draft(change, rationale=rationale)
+        return _propose_config_change_with_confirmation(change, rationale=rationale, tool_context=tool_context)
 
     def propose_chat_agent_config_change(
         provider: str = "",
@@ -677,8 +824,9 @@ def _build_config_tool_entries(
         memory_compaction_model: str = "",
         account_markets: str = "",
         rationale: str = "",
+        tool_context: ToolContext | None = None,
     ) -> dict[str, Any]:
-        """Creates an investment-chat-agent settings draft. The UI approval button must be clicked before it applies."""
+        """Creates an investment-chat-agent settings draft and asks for ADK confirmation before it applies."""
         fields: dict[str, Any] = {}
         for key, value in {
             "provider": provider,
@@ -697,9 +845,10 @@ def _build_config_tool_entries(
             return {"status": "error", "tenant_id": tenant, "error": str(exc)}
         if llm_params:
             fields["llm_params"] = llm_params
-        return _create_config_change_draft(
+        return _propose_config_change_with_confirmation(
             {"scope": "chat_agent", "action": "update", "fields": fields},
             rationale=rationale,
+            tool_context=tool_context,
         )
 
     def propose_tenant_config_change(
@@ -716,8 +865,9 @@ def _build_config_tool_entries(
         mcp_servers_json: str = "",
         memory_policy_json: str = "",
         rationale: str = "",
+        tool_context: ToolContext | None = None,
     ) -> dict[str, Any]:
-        """Creates a tenant-level settings draft. The UI approval button must be clicked before it applies."""
+        """Creates a tenant-level settings draft and asks for ADK confirmation before it applies."""
         fields: dict[str, Any] = {}
         for key, value in {
             "system_prompt": system_prompt,
@@ -750,9 +900,10 @@ def _build_config_tool_entries(
                     fields[key] = parsed
         except Exception as exc:
             return {"status": "error", "tenant_id": tenant, "error": str(exc)}
-        return _create_config_change_draft(
+        return _propose_config_change_with_confirmation(
             {"scope": "tenant", "action": "update", "fields": fields},
             rationale=rationale,
+            tool_context=tool_context,
         )
 
     def get_config_change_status(approval_token: str = "", limit: int = 5) -> dict[str, Any]:
@@ -867,8 +1018,8 @@ def _build_config_tool_entries(
             name="propose_agent_config_change",
             description=(
                 "Creates an investment agent settings change draft. The tool never applies settings directly; "
-                "the UI approval button is required. Use capital_allocation_mode for fixed_krw, account_percent, "
-                "or whole_account sleeve assignment."
+                "ADK tool confirmation is required before it applies. Use capital_allocation_mode for fixed_krw, "
+                "account_percent, or whole_account sleeve assignment."
             ),
             category="admin",
             callable=propose_agent_config_change,
@@ -881,7 +1032,7 @@ def _build_config_tool_entries(
             name="propose_chat_agent_config_change",
             description=(
                 "Creates an investment chat agent settings change draft for model/provider/tool/memory settings. "
-                "The tool never applies settings directly; the UI approval button is required."
+                "The tool never applies settings directly; ADK tool confirmation is required before it applies."
             ),
             category="admin",
             callable=propose_chat_agent_config_change,
@@ -894,7 +1045,7 @@ def _build_config_tool_entries(
             name="propose_tenant_config_change",
             description=(
                 "Creates a tenant-level settings change draft for allowed runtime config keys. The tool never "
-                "applies settings directly; the UI approval button is required."
+                "applies settings directly; ADK tool confirmation is required before it applies."
             ),
             category="admin",
             callable=propose_tenant_config_change,

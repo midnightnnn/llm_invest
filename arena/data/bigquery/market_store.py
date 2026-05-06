@@ -12,6 +12,7 @@ import uuid
 from datetime import date, datetime
 from typing import TYPE_CHECKING, Any
 
+from arena.asset_benchmarks import ASSET_BENCHMARK_SOURCE
 from arena.logging_utils import event_extra, failure_extra
 from arena.models import utc_now
 
@@ -52,6 +53,18 @@ _FORECAST_MODE_ALIASES: dict[str, tuple[str, ...]] = {
     "avg": ("avg", "average", "simple_average", "equal_weight", "ensemble_avg"),
     "base": ("base", "base_model", "base_models"),
 }
+_UNIVERSE_SOURCE_PRIORITY: dict[str, int] = {
+    "default": 0,
+    "held": 0,
+    "benchmark": 1,
+    ASSET_BENCHMARK_SOURCE: 2,
+    "market_cap": 10,
+    "top_interest": 20,
+    "volume_rank": 21,
+    "missing_daily_feature": 60,
+    "static": 70,
+    "fallback": 90,
+}
 
 
 def _finite_float_or_none(value: object) -> float | None:
@@ -67,6 +80,81 @@ def _finite_float_or_none(value: object) -> float | None:
     if not math.isfinite(parsed):
         return None
     return float(parsed)
+
+
+def _positive_int_or_none(value: object) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _normalize_universe_rank_metadata(raw: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    out: dict[str, dict[str, Any]] = {}
+    for ticker, meta_raw in (raw or {}).items():
+        token = str(ticker or "").strip().upper()
+        if not token or not isinstance(meta_raw, dict):
+            continue
+        source = str(meta_raw.get("source") or "fallback").strip().lower() or "fallback"
+        meta: dict[str, Any] = {"source": source}
+        for key in ("core_rank", "market_cap_rank", "liquidity_rank", "fallback_rank", "source_rank"):
+            parsed = _positive_int_or_none(meta_raw.get(key))
+            if parsed is not None:
+                meta[key] = parsed
+        market_cap_value = _finite_float_or_none(meta_raw.get("market_cap_value"))
+        if market_cap_value is not None:
+            meta["market_cap_value"] = market_cap_value
+        volume_value = _finite_float_or_none(meta_raw.get("volume_value"))
+        if volume_value is not None:
+            meta["volume_value"] = volume_value
+        asset_class = str(meta_raw.get("asset_class") or "").strip().lower()
+        if asset_class:
+            meta["asset_class"] = asset_class
+        out[token] = meta
+    return out
+
+
+def _universe_rank_key(meta: dict[str, Any], *, fallback_rank: int) -> tuple[int, int, int, str]:
+    source = str(meta.get("source") or "fallback").strip().lower() or "fallback"
+    priority = _UNIVERSE_SOURCE_PRIORITY.get(source, _UNIVERSE_SOURCE_PRIORITY["fallback"])
+    rank = (
+        _positive_int_or_none(meta.get("core_rank"))
+        or _positive_int_or_none(meta.get("market_cap_rank"))
+        or _positive_int_or_none(meta.get("liquidity_rank"))
+        or _positive_int_or_none(meta.get("fallback_rank"))
+        or _positive_int_or_none(meta.get("source_rank"))
+        or max(1, int(fallback_rank))
+    )
+    missing_rank_penalty = 0 if meta else 1
+    return priority, rank, missing_rank_penalty, source
+
+
+def _universe_priority_score(rank_key: tuple[int, int, int, str]) -> float:
+    priority, rank, missing_rank_penalty, _source = rank_key
+    return float(1_000_000 - priority * 10_000 - rank - missing_rank_penalty * 1_000)
+
+
+def _universe_reason(meta: dict[str, Any], *, ret_20d: float, ret_5d: float, vol: float, sentiment: float) -> str:
+    parts = [f"source={str(meta.get('source') or 'fallback').strip().lower() or 'fallback'}"]
+    for key in ("core_rank", "market_cap_rank", "liquidity_rank", "fallback_rank"):
+        value = _positive_int_or_none(meta.get(key))
+        if value is not None:
+            parts.append(f"{key}={value}")
+    market_cap_value = _finite_float_or_none(meta.get("market_cap_value"))
+    if market_cap_value is not None:
+        parts.append(f"market_cap_value={market_cap_value:.0f}")
+    volume_value = _finite_float_or_none(meta.get("volume_value"))
+    if volume_value is not None:
+        parts.append(f"volume_value={volume_value:.0f}")
+    asset_class = str(meta.get("asset_class") or "").strip().lower()
+    if asset_class:
+        parts.append(f"asset_class={asset_class}")
+    parts.append(f"ret20={ret_20d:+.4f}")
+    parts.append(f"ret5={ret_5d:+.4f}")
+    parts.append(f"vol20={vol:.4f}")
+    parts.append(f"sentiment={sentiment:+.4f}")
+    return ", ".join(parts)
 
 
 def _normalize_universe_markets(markets: Any) -> list[str]:
@@ -2429,34 +2517,16 @@ class MarketStore:
         sources: list[str] | None = None,
         allowed_tickers: list[str] | None = None,
         ticker_names: dict[str, str] | None = None,
+        universe_rank_metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Builds a ranked universe from latest snapshots and writes one run."""
+        rank_metadata = _normalize_universe_rank_metadata(universe_rank_metadata)
         lim = max(50, min(max(top_n * 6, 600), 8_000))
         rows = self.latest_market_features(
             tickers=allowed_tickers or [],
             limit=lim,
             sources=sources,
         )
-        if allowed_tickers is not None:
-            seen = {
-                str(row.get("ticker") or "").strip().upper()
-                for row in rows
-                if str(row.get("ticker") or "").strip()
-            }
-            if len(rows) < lim:
-                supplemental = self.latest_market_features(
-                    tickers=[],
-                    limit=lim,
-                    sources=sources,
-                )
-                for row in supplemental:
-                    ticker = str(row.get("ticker") or "").strip().upper()
-                    if not ticker or ticker in seen:
-                        continue
-                    rows.append(row)
-                    seen.add(ticker)
-                    if len(rows) >= lim:
-                        break
         if not rows and allowed_tickers is None:
             rows = self.latest_market_features(
                 tickers=[],
@@ -2467,7 +2537,7 @@ class MarketStore:
             return {"run_id": "", "count": 0}
 
         ranked: list[dict[str, Any]] = []
-        for row in rows:
+        for fallback_rank, row in enumerate(rows, start=1):
             ticker = str(row.get("ticker", "")).strip().upper()
             if not ticker:
                 continue
@@ -2479,8 +2549,9 @@ class MarketStore:
             sentiment = _finite_float_or_none(row.get("sentiment_score"))
             if sentiment is None:
                 sentiment = 0.0
-            quality = max(0.0, 1.0 - min(max(vol, 0.0), 1.5) / 1.5)
-            score = (0.60 * ret_20d) + (0.20 * ret_5d) + (0.15 * sentiment) + (0.05 * quality)
+            meta = rank_metadata.get(ticker) or {"source": "fallback", "fallback_rank": fallback_rank}
+            rank_key = _universe_rank_key(meta, fallback_rank=fallback_rank)
+            score = _universe_priority_score(rank_key)
 
             name_map = ticker_names or {}
             ranked.append(
@@ -2491,18 +2562,22 @@ class MarketStore:
                     "instrument_id": str(row.get("instrument_id", "")).strip(),
                     "as_of_ts": row.get("as_of_ts"),
                     "score": float(score),
-                    "reasons": (
-                        f"ret20={ret_20d:+.4f}, ret5={ret_5d:+.4f}, vol20={vol:.4f}, sentiment={sentiment:+.4f}"
+                    "reasons": _universe_reason(
+                        meta,
+                        ret_20d=ret_20d,
+                        ret_5d=ret_5d,
+                        vol=vol,
+                        sentiment=sentiment,
                     ),
+                    "_rank_key": rank_key,
                 }
             )
 
         ranked.sort(
             key=lambda r: (
-                float(r.get("score") or 0.0),
-                str(r.get("as_of_ts") or ""),
-            ),
-            reverse=True,
+                r.get("_rank_key") or (999, 999_999_999, 1, "fallback"),
+                str(r.get("ticker") or ""),
+            )
         )
 
         cap = max(1, min(int(per_exchange_cap), max(1, int(top_n))))
@@ -2535,6 +2610,7 @@ class MarketStore:
                     "score": row.get("score"),
                     "instrument_id": row.get("instrument_id"),
                     "ticker": row.get("ticker"),
+                    "ticker_name": row.get("ticker_name"),
                     "exchange_code": row.get("exchange_code"),
                     "reasons": row.get("reasons"),
                 }

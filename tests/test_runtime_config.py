@@ -204,6 +204,7 @@ def test_runtime_repo_list_runtime_tenants_normalizes_tokens() -> None:
         ("kis_target_market", "nasdaq", "kis_target_market", "kospi", "kospi"),
         ("universe_run_top_n", 400, "universe_run_top_n", "120", 120),
         ("universe_per_exchange_cap", 200, "universe_per_exchange_cap", "80", 80),
+        ("us_universe_per_exchange_cap", 385, "us_universe_per_exchange_cap", "320", 320),
         ("forecast_mode", "all", "forecast_mode", "base", "base"),
         ("reddit_sentiment_enabled", False, "reddit_sentiment_enabled", "true", True),
         ("research_max_tickers", 5, "research_max_tickers", "9", 9),
@@ -327,4 +328,3 @@ def test_apply_runtime_overrides_applies_kis_account_selection() -> None:
     assert out.kis_account_no == "6431760301"
     assert out.kis_account_product_code == "01"
     assert out.kis_account_key_suffix == "MIDNIGHTNNN"
-

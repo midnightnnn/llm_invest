@@ -30,6 +30,7 @@ from typing import Any
 import numpy as np
 
 from arena.config import Settings
+from arena.market_feature_normalization import daily_history_sources
 from arena.market_sources import live_market_sources_for_markets, parse_markets
 from arena.recommendation.signals import (
     ALL_SIGNALS,
@@ -364,7 +365,9 @@ def build_and_store_opportunity_ranker(
     """
     now = _utc_now()
     run_id = "ranker_" + uuid.uuid4().hex[:24]
-    sources = live_market_sources_for_markets(parse_markets(settings.kis_target_market)) or None
+    sources = daily_history_sources(
+        live_market_sources_for_markets(parse_markets(settings.kis_target_market))
+    ) or None
     market = str(settings.kis_target_market or "").strip().lower()
     examples_refreshed = 0
 

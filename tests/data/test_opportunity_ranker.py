@@ -80,9 +80,11 @@ class _FakeICRepo:
         self.score_rows: list[dict] = []
         self.run_rows: list[dict] = []
         self.refreshes: dict[str, int] = {}
+        self.refresh_value_calls: list[dict[str, object]] = []
 
-    def refresh_signal_daily_values(self, **_: object) -> int:
+    def refresh_signal_daily_values(self, **kwargs: object) -> int:
         self.refreshes["values"] = self.refreshes.get("values", 0) + 1
+        self.refresh_value_calls.append(dict(kwargs))
         return 0
 
     def refresh_signal_daily_ic(self, **_: object) -> int:
@@ -267,6 +269,32 @@ def test_build_and_store_opportunity_ranker_writes_ic_scores() -> None:
     detail = repo.run_rows[-1]["detail_json"]
     assert "per_signal_oos_accuracy" in detail
     assert "predicted_ic" in detail
+
+
+def test_build_and_store_opportunity_ranker_refreshes_daily_sources_only() -> None:
+    ic_rows, regime_rows, scoring_rows = _synthetic_ic_rows(days=120)
+    repo = _FakeICRepo(ic_rows=ic_rows, regime_rows=regime_rows, scoring_rows=scoring_rows)
+    settings = load_settings()
+    settings.kis_target_market = "us"
+
+    result = build_and_store_opportunity_ranker(
+        repo,
+        settings,
+        lookback_days=200,
+        horizon_days=20,
+        min_ic_dates=60,
+        max_scoring_rows=10,
+    )
+
+    assert result.status == "ok"
+    assert repo.refresh_value_calls
+    sources = repo.refresh_value_calls[-1]["sources"]
+    assert sources == [
+        "open_trading_us",
+        "open_trading_nasdaq",
+        "open_trading_nyse",
+        "open_trading_amex",
+    ]
 
 
 def test_ranker_returns_unusable_when_ic_history_is_short() -> None:

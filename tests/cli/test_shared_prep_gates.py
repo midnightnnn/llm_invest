@@ -149,7 +149,7 @@ def test_cmd_run_shared_prep_fast_without_dispatch_still_runs_gate(monkeypatch) 
     assert not any(c[0] == "marker" for c in calls)
 
 
-def test_cmd_run_shared_prep_slow_aborts_on_same_day_intraday_quote(monkeypatch) -> None:
+def test_cmd_run_shared_prep_slow_warns_on_same_day_intraday_quote(monkeypatch) -> None:
     settings = load_settings()
     settings.google_cloud_project = "proj-x"
     settings.bq_dataset = "ds"
@@ -174,17 +174,14 @@ def test_cmd_run_shared_prep_slow_aborts_on_same_day_intraday_quote(monkeypatch)
         lambda *args, **kwargs: (True, {"count": 1, "market": "us"}),
     )
 
-    with pytest.raises(SystemExit) as exc_info:
-        cli.cmd_run_shared_prep(
-            live=True, market_override="us", dispatch_job="", stage="slow"
-        )
+    cli.cmd_run_shared_prep(
+        live=True, market_override="us", dispatch_job="", stage="slow"
+    )
 
-    assert exc_info.value.code == 4
     stages = [c[0] for c in calls]
-    # ML must not run, no marker must be recorded.
-    assert "forecast" not in stages, "slow must not run forecast when intraday quote is present"
-    assert "ranker" not in stages
-    assert not any(c[0] == "marker" for c in calls)
+    assert "forecast" in stages
+    assert "ranker" in stages
+    assert ("marker", "slow", "ok") in calls
 
 
 def test_cmd_run_shared_prep_rejects_multi_market_config(monkeypatch) -> None:

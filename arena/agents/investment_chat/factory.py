@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any
+from typing import Any, Callable
 
 from google.adk import Agent
 
@@ -93,6 +93,7 @@ def build_investment_chat_agent(
     registry: ToolRegistry | None = None,
     provider: str | None = None,
     model_override: str | None = None,
+    invalidate_tenant_cache: Callable[..., Any] | None = None,
 ) -> Agent:
     tenant = normalize_tenant(tenant_id)
     chat_config = load_chat_agent_config(repo, tenant_id=tenant)
@@ -110,7 +111,13 @@ def build_investment_chat_agent(
     model_id = normalize_chat_model_selection(provider_token, model_id)
     llm_params = chat_config.get("llm_params") if isinstance(chat_config.get("llm_params"), dict) else {}
     max_tool_events = resolve_max_tool_events(settings)
-    chat_registry = build_chat_registry(repo=repo, settings=settings, tenant_id=tenant, registry=registry)
+    chat_registry = build_chat_registry(
+        repo=repo,
+        settings=settings,
+        tenant_id=tenant,
+        registry=registry,
+        invalidate_tenant_cache=invalidate_tenant_cache,
+    )
     tools = _wrapped_tools(chat_registry, repo=repo, settings=settings, tenant_id=tenant)
     model = _resolve_model(provider_token, settings, model_override=model_id, llm_params=llm_params)
     return Agent(

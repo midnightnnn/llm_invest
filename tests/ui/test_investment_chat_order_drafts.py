@@ -155,6 +155,46 @@ def test_investment_chat_order_draft_api_hides_adk_confirmation_drafts(monkeypat
     assert listed.json()["drafts"] == []
 
 
+def test_investment_chat_config_draft_api_hides_adk_confirmation_drafts(monkeypatch) -> None:
+    import arena.ui.app as ui_app
+    from arena.agents.investment_chat.registry import build_chat_registry
+
+    monkeypatch.setenv("ARENA_UI_AUTH_ENABLED", "false")
+    monkeypatch.setattr(
+        ui_app,
+        "build_investment_chat_adk_app",
+        lambda **kwargs: FastAPI(title="stub-adk"),
+    )
+    settings = load_settings()
+    repo = _ChatOrderRepo()
+    repo.set_config(
+        "local",
+        "agents_config",
+        json.dumps([{"id": "gpt", "provider": "gpt", "model": "gpt-5.2", "capital_krw": 1_000_000}]),
+        "seed",
+    )
+    repo.recent_runtime_audit_logs = lambda limit=50: list(reversed(repo.audit_logs[-limit:]))  # type: ignore[method-assign]
+    registry = build_chat_registry(repo=repo, settings=settings, tenant_id="local", registry=None)
+    propose = registry.get("propose_agent_config_change").callable
+
+    waiting = propose(
+        agent_id="gpt",
+        action="update",
+        provider="gpt",
+        model="gpt-5.5",
+        rationale="ADK confirmation should not create host config approval card",
+        tool_context=_FakeToolContext(function_call_id="fc-config-route"),
+    )
+    app = _build_app(repo=repo, settings=settings)
+    client = DirectRouteClient(app)
+
+    listed = client.get("/investment-chat/config-drafts", params={"tenant_id": "local"})
+
+    assert waiting["status"] == "waiting_for_confirmation"
+    assert listed.status_code == 200
+    assert listed.json()["drafts"] == []
+
+
 def test_investment_chat_order_draft_api_surfaces_broker_error_message(monkeypatch) -> None:
     import arena.ui.app as ui_app
     from arena.agents.investment_chat import order_tools

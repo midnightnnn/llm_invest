@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
 from arena.agents.adk_context_tools import _ContextTools
 from arena.agents.adk_tool_config import _load_disabled_tool_ids
@@ -20,6 +20,7 @@ def build_chat_registry(
     settings: Settings,
     tenant_id: str,
     registry: ToolRegistry | None,
+    invalidate_tenant_cache: Callable[..., Any] | None = None,
 ) -> ToolRegistry:
     tenant = normalize_tenant(tenant_id)
     tool_settings = account_scope_settings(repo, tenant_id=tenant, settings=settings)
@@ -48,7 +49,14 @@ def build_chat_registry(
         if any(marker in token for marker in WRITE_TOOL_MARKERS):
             continue
         entries.append(entry)
-    entries.extend(build_chat_tool_entries(repo=repo, settings=tool_settings, tenant_id=tenant))
+    entries.extend(
+        build_chat_tool_entries(
+            repo=repo,
+            settings=tool_settings,
+            tenant_id=tenant,
+            invalidate_tenant_cache=invalidate_tenant_cache,
+        )
+    )
     return ToolRegistry(
         [entry for entry in entries if str(entry.tool_id or "").strip().lower() not in disabled]
     )

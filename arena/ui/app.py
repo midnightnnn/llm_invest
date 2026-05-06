@@ -518,6 +518,7 @@ def _build_app(*, repo: BigQueryRepository, settings: Settings) -> FastAPI:
             url_prefix="/investment-chat/adk",
             auth_enabled=auth_enabled,
             current_user=_current_user,
+            invalidate_tenant_cache=_invalidate_tenant_cache,
         ),
     )
 

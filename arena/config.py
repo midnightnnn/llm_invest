@@ -185,6 +185,7 @@ class Settings:
     adk_max_tool_events: int = 120
     universe_run_top_n: int = 1000
     universe_per_exchange_cap: int = 500
+    us_universe_per_exchange_cap: int = 385
     us_quote_exchanges: list[str] = field(default_factory=lambda: ["NAS", "NYS"])
     reddit_sentiment_enabled: bool = False
     forecast_mode: str = "all"
@@ -642,6 +643,7 @@ def load_settings() -> Settings:
         adk_max_tool_events=_to_int(os.getenv("ARENA_ADK_MAX_TOOL_EVENTS"), 60),
         universe_run_top_n=_to_int(os.getenv("ARENA_UNIVERSE_RUN_TOP_N"), 1000),
         universe_per_exchange_cap=_to_int(os.getenv("ARENA_UNIVERSE_PER_EXCHANGE_CAP"), 500),
+        us_universe_per_exchange_cap=_to_int(os.getenv("ARENA_US_UNIVERSE_PER_EXCHANGE_CAP"), 385),
         us_quote_exchanges=[
             str(x).strip().upper()
             for x in _csv(os.getenv("ARENA_US_QUOTE_EXCHANGES"), ["NAS", "NYS"])
@@ -755,6 +757,7 @@ def apply_runtime_overrides(settings: Settings, repo: Any, tenant_id: str) -> Se
         "reconcile_excluded_tickers",
         "universe_run_top_n",
         "universe_per_exchange_cap",
+        "us_universe_per_exchange_cap",
         "opportunity_ranker_max_scoring_rows",
         "forecast_ranker_top_per_bucket",
         "forecast_max_tickers",
@@ -904,6 +907,19 @@ def apply_runtime_overrides(settings: Settings, repo: Any, tenant_id: str) -> Se
                 "[yellow]Runtime universe override skipped[/yellow] tenant=%s key=universe_per_exchange_cap value=%s",
                 tenant,
                 universe_per_exchange_cap_raw,
+            )
+
+    us_universe_per_exchange_cap_raw = str(values.get("us_universe_per_exchange_cap") or "").strip()
+    if us_universe_per_exchange_cap_raw:
+        try:
+            parsed = int(float(us_universe_per_exchange_cap_raw))
+            if parsed > 0:
+                settings.us_universe_per_exchange_cap = parsed
+        except ValueError:
+            logger.warning(
+                "[yellow]Runtime universe override skipped[/yellow] tenant=%s key=us_universe_per_exchange_cap value=%s",
+                tenant,
+                us_universe_per_exchange_cap_raw,
             )
 
     ranker_scoring_rows_raw = str(values.get("opportunity_ranker_max_scoring_rows") or "").strip()
@@ -1234,6 +1250,8 @@ def validate_settings(
             errors.append("ARENA_UNIVERSE_RUN_TOP_N must be >= 1")
         if int(settings.universe_per_exchange_cap) <= 0:
             errors.append("ARENA_UNIVERSE_PER_EXCHANGE_CAP must be >= 1")
+        if int(settings.us_universe_per_exchange_cap) <= 0:
+            errors.append("ARENA_US_UNIVERSE_PER_EXCHANGE_CAP must be >= 1")
         if int(settings.opportunity_ranker_max_scoring_rows) <= 0:
             errors.append("ARENA_OPPORTUNITY_RANKER_MAX_SCORING_ROWS must be >= 1")
         if int(settings.forecast_ranker_top_per_bucket) <= 0:
