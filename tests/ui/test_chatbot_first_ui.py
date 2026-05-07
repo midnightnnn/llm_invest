@@ -138,3 +138,17 @@ def test_chat_model_post_invalid_provider_rejects(monkeypatch) -> None:
         data={"tenant_id": "local", "provider": "no-such-provider", "model": "x"},
     )
     assert resp.status_code in (400, 422)
+
+
+def test_investment_chat_page_has_no_selector_form(monkeypatch) -> None:
+    client = _client(monkeypatch)
+    body = client.get("/investment-chat").text
+    # Selector form removed.
+    assert "data-chat-selector-form" not in body
+    assert "data-chat-provider" not in body
+    assert "data-chat-model" not in body
+    # iframe still present.
+    assert "data-adk-chat-frame" in body
+    # Approval toast panels still present.
+    assert "data-order-draft-panel" in body
+    assert "data-config-draft-panel" in body

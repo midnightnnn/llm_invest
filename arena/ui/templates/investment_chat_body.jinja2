@@ -9,14 +9,6 @@
     min-width: 0;
     min-height: 0;
   }
-  @media (max-width: 767px) {
-    .investment-chat-selector { padding: 6px 8px !important; gap: 6px !important; }
-    .investment-chat-selector select,
-    .investment-chat-selector button {
-      height: 36px !important;
-      font-size: 12px !important;
-    }
-  }
   @media (min-width: 768px) {
     .investment-chat-shell {
       height: 100vh;
@@ -25,34 +17,7 @@
   }
 </style>
 <section class="investment-chat-shell flex flex-col overflow-hidden bg-white">
-  {% if provider_options %}
-  <form method="get" action="/investment-chat" class="investment-chat-selector flex min-h-[54px] shrink-0 flex-wrap items-center gap-2 border-b border-ink-200/70 bg-white/90 px-3 py-2 backdrop-blur" data-chat-selector-form>
-    <input type="hidden" name="tenant_id" value="{{ tenant }}" />
-    <select
-      name="provider"
-      class="h-9 rounded-md border border-ink-200 bg-white px-2 text-xs font-semibold text-ink-700 outline-none focus:border-brand-500"
-      aria-label="Provider"
-      data-chat-provider
-    >
-      {% for item in provider_options %}
-      <option value="{{ item.value }}" {{ 'selected' if item.value == provider else '' }}>{{ item.label }}</option>
-      {% endfor %}
-    </select>
-    <select
-      name="model"
-      class="h-9 min-w-0 flex-1 rounded-md border border-ink-200 bg-white px-2 font-mono text-xs text-ink-700 outline-none focus:border-brand-500 sm:max-w-[460px]"
-      aria-label="Model"
-      data-chat-model
-    >
-      {% for option in model_options %}
-      <option value="{{ option }}" {{ 'selected' if option == model else '' }}>{{ option }}</option>
-      {% endfor %}
-    </select>
-    <button
-      type="submit"
-      class="h-9 rounded-md bg-ink-900 px-3 text-xs font-semibold text-white hover:bg-ink-800"
-    >Apply</button>
-  </form>
+  {% if iframe_src %}
   <iframe
     src="{{ iframe_src }}"
     title="투자챗봇"
@@ -117,42 +82,12 @@
   {% else %}
   <div class="flex flex-1 items-center justify-center px-6">
     <div class="max-w-md rounded-lg border border-amber-200 bg-amber-50 p-5 text-sm leading-relaxed text-amber-900">
-      등록된 LLM API key가 없습니다. 설정에서 이 tenant의 OpenAI, Gemini, Claude 중 하나 이상의 API key를 등록한 뒤 투자챗봇을 사용할 수 있습니다.
+      등록된 LLM API key가 없거나 챗봇 모델이 설정되지 않았습니다. 환경설정 → 에이전트 탭에서 모델을 지정해주세요.
     </div>
   </div>
   {% endif %}
 </section>
-<script type="application/json" id="investment-chat-model-map">{{ model_presets | tojson }}</script>
-<script>
-  (function() {
-    var provider = document.querySelector('[data-chat-provider]');
-    var model = document.querySelector('[data-chat-model]');
-    var form = document.querySelector('[data-chat-selector-form]');
-    var raw = document.getElementById('investment-chat-model-map');
-    if (!provider || !model || !raw) return;
-    var presets = {};
-    try { presets = JSON.parse(raw.textContent || '{}') || {}; } catch (_err) { presets = {}; }
-    function submitSelection() {
-      if (!form) return;
-      if (typeof form.requestSubmit === 'function') form.requestSubmit();
-      else form.submit();
-    }
-    provider.addEventListener('change', function() {
-      var values = presets[provider.value] || [];
-      model.innerHTML = '';
-      values.forEach(function(value) {
-        var option = document.createElement('option');
-        option.value = value;
-        option.textContent = value;
-        model.appendChild(option);
-      });
-      if (values.length) model.value = values[0];
-      submitSelection();
-    });
-    model.addEventListener('change', submitSelection);
-  })();
-</script>
-{% if provider_options %}
+{% if iframe_src %}
 <script>
   (function() {
     var tenant = {{ tenant | tojson }};

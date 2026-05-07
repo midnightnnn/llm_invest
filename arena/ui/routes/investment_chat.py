@@ -22,31 +22,6 @@ from arena.ui.routes.viewer import ViewerRouteDeps
 from arena.ui.templating import render_ui_template
 
 
-_CHAT_MODEL_PRESETS: dict[str, list[str]] = {
-    "gemini": [
-        "gemini-3-flash-preview",
-        "gemini-3.1-pro-preview",
-        "gemini-3-pro-preview",
-        "gemini-2.5-flash",
-        "gemini-2.5-pro",
-    ],
-    "gpt": [
-        "gpt-5.5",
-        "gpt-5.2",
-        "gpt-5.4",
-        "gpt-5.4-mini",
-        "gpt-5.3-codex",
-    ],
-    "claude": [
-        "claude-haiku-4-5-20251001",
-        "claude-sonnet-4-6",
-        "claude-opus-4-7",
-        "claude-opus-4-5",
-        "claude-sonnet-4-5",
-    ],
-}
-
-
 def _next_path(tenant_id: str = "", provider: str = "", model: str = "") -> str:
     query = urlencode(
         {
@@ -87,34 +62,6 @@ def _provider_options(repo=None, tenant_id: str = "") -> list[dict[str, str]]:
         {"value": spec.provider_id, "label": spec.label}
         for spec in specs
     ]
-
-
-def _model_options(provider: str, default_model: str, current_model: str = "") -> list[str]:
-    provider_token = canonical_provider(provider) or str(provider or "").strip().lower()
-    seen: set[str] = set()
-    out: list[str] = []
-    for token in [current_model, default_model, *_CHAT_MODEL_PRESETS.get(provider_token, [])]:
-        value = normalize_chat_model_selection(provider_token, token)
-        if value and value not in seen:
-            seen.add(value)
-            out.append(value)
-    return out
-
-
-def _model_preset_map(settings, provider_options: list[dict[str, str]] | None = None) -> dict[str, list[str]]:
-    provider_ids = {str(item.get("value") or "").strip() for item in (provider_options or []) if str(item.get("value") or "").strip()}
-    specs = [
-        spec
-        for spec in list_adk_provider_specs()
-        if not provider_ids or spec.provider_id in provider_ids
-    ]
-    return {
-        spec.provider_id: _model_options(
-            spec.provider_id,
-            default_model_for_provider(settings, spec.provider_id),
-        )
-        for spec in specs
-    }
 
 
 def _parse_audit_detail(row: dict) -> dict:
@@ -281,11 +228,6 @@ def register_investment_chat_routes(app: FastAPI, *, deps: ViewerRouteDeps) -> N
             "investment_chat_body.jinja2",
             iframe_src=_adk_iframe_src(tenant, provider_token, model_token) if provider_token and model_token else "",
             tenant=html.escape(tenant),
-            provider=provider_token,
-            model=model_token,
-            provider_options=provider_options,
-            model_options=_model_options(provider_token, default_model, model_token),
-            model_presets=_model_preset_map(tenant_settings, provider_options),
         )
         return deps.html_response(
             deps.tailwind_layout(

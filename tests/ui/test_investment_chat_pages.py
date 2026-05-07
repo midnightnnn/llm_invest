@@ -57,11 +57,15 @@ def test_ui_registers_investment_chat_page_and_adk_mount(monkeypatch) -> None:
     assert client.session["investment_chat_tenant_id"] == "local"
     assert client.session["investment_chat_provider"] == "gpt"
     assert client.session["investment_chat_model"] == "gpt-5.2"
-    assert 'name="provider"' in response.text
-    assert "data-chat-selector-form" in response.text
-    assert '<select\n      name="model"' in response.text
-    assert "requestSubmit" in response.text
-    assert "model.addEventListener('change', submitSelection)" in response.text
+    # Selector form has been removed (provider/model now selected in /settings).
+    assert "data-chat-selector-form" not in response.text
+    assert "data-chat-provider" not in response.text
+    assert "data-chat-model" not in response.text
+    assert 'list="investment-chat-model-presets"' not in response.text
+    assert "investment-chat-model-map" not in response.text
+    assert "model.addEventListener('change', submitSelection)" not in response.text
+    # Iframe + approval toast wiring still present.
+    assert "data-adk-chat-frame" in response.text
     assert "submitResultMessage" in response.text
     assert "execution_report.message" in response.text
     assert "deliverOrderResultToChat" in response.text
@@ -73,12 +77,6 @@ def test_ui_registers_investment_chat_page_and_adk_mount(monkeypatch) -> None:
     assert "mat-progress-bar" in response.text
     assert "textarea.chat-input-box" in response.text
     assert "button.send-message-btn" in response.text
-    assert 'list="investment-chat-model-presets"' not in response.text
-    assert 'value="gpt-5.2"' in response.text
-    assert "gpt-5.5" in response.text
-    assert "gemini-3-flash-preview" in response.text
-    assert "gemini-3.1-flash-preview" not in response.text
-    assert "gemini-3.1-pro-preview" in response.text
     assert 'data-active="investment_chat"' in response.text
     assert "investment-chat-shell" in response.text
     assert "calc(100dvh - var(--mobile-topbar-h))" in response.text
@@ -133,12 +131,17 @@ def test_investment_chat_model_select_renders_all_provider_presets(monkeypatch) 
         params={"tenant_id": "local", "provider": "claude", "model": "claude-sonnet-4-6"},
     )
 
+    # Selector form moved to /settings; the chat page just renders the iframe
+    # against the resolved provider/model and saves the choice in the session.
     assert response.status_code == 200
-    assert '<select\n      name="model"' in response.text
-    assert '<option value="claude-sonnet-4-6" selected>claude-sonnet-4-6</option>' in response.text
-    assert 'value="claude-opus-4-7"' in response.text
-    assert 'value="claude-opus-4-5"' in response.text
-    assert 'value="claude-sonnet-4-5"' in response.text
+    assert '<select\n      name="model"' not in response.text
+    assert "data-chat-selector-form" not in response.text
+    assert (
+        "/investment-chat/adk/dev-ui/?tenant_id=local&amp;provider=claude&amp;model=claude-sonnet-4-6"
+        in response.text
+    )
+    assert client.session["investment_chat_provider"] == "claude"
+    assert client.session["investment_chat_model"] == "claude-sonnet-4-6"
 
 
 def test_investment_chat_provider_options_come_from_adk_provider_registry(monkeypatch) -> None:
@@ -159,11 +162,14 @@ def test_investment_chat_provider_options_come_from_adk_provider_registry(monkey
         params={"tenant_id": "local", "provider": "deepseek", "model": "deepseek-reasoner"},
     )
 
+    # Selector form is gone; the route still recognizes provider tokens registered
+    # in the ADK provider registry and resolves them into the iframe URL + session.
     assert response.status_code == 200
-    assert '<option value="deepseek" selected>DeepSeek</option>' in response.text
-    assert '<option value="gpt"' in response.text
-    assert '<option value="gemini"' in response.text
-    assert '<option value="claude"' in response.text
+    assert "data-chat-selector-form" not in response.text
+    assert (
+        "/investment-chat/adk/dev-ui/?tenant_id=local&amp;provider=deepseek&amp;model=deepseek-reasoner"
+        in response.text
+    )
     assert client.session["investment_chat_provider"] == "deepseek"
     assert client.session["investment_chat_model"] == "deepseek-reasoner"
 
@@ -190,8 +196,7 @@ def test_investment_chat_page_defaults_to_stored_chat_agent_config(monkeypatch) 
     response = client.get("/investment-chat", params={"tenant_id": "local"})
 
     assert response.status_code == 200
-    assert '<option value="claude" selected>Anthropic Claude</option>' in response.text
-    assert '<option value="claude-opus-4-7" selected>claude-opus-4-7</option>' in response.text
+    assert "data-chat-selector-form" not in response.text
     assert "/investment-chat/adk/dev-ui/?tenant_id=local&amp;provider=claude&amp;model=claude-opus-4-7" in response.text
     assert client.session["investment_chat_provider"] == "claude"
     assert client.session["investment_chat_model"] == "claude-opus-4-7"
@@ -221,8 +226,7 @@ def test_investment_chat_page_defaults_to_tenant_agent_model(monkeypatch) -> Non
     response = client.get("/investment-chat", params={"tenant_id": "cxznms"})
 
     assert response.status_code == 200
-    assert '<option value="claude" selected>Anthropic Claude</option>' in response.text
-    assert '<option value="claude-sonnet-4-6" selected>claude-sonnet-4-6</option>' in response.text
+    assert "data-chat-selector-form" not in response.text
     assert "/investment-chat/adk/dev-ui/?tenant_id=cxznms&amp;provider=claude&amp;model=claude-sonnet-4-6" in response.text
     assert client.session["investment_chat_provider"] == "claude"
     assert client.session["investment_chat_model"] == "claude-sonnet-4-6"
@@ -255,7 +259,7 @@ def test_investment_chat_page_ignores_stale_session_provider_for_new_tenant(monk
     response = client.get("/investment-chat", params={"tenant_id": "cxznms"})
 
     assert response.status_code == 200
-    assert '<option value="claude" selected>Anthropic Claude</option>' in response.text
+    assert "data-chat-selector-form" not in response.text
     assert "/investment-chat/adk/dev-ui/?tenant_id=cxznms&amp;provider=claude&amp;model=claude-sonnet-4-6" in response.text
     assert client.session["investment_chat_tenant_id"] == "cxznms"
     assert client.session["investment_chat_provider"] == "claude"
@@ -287,10 +291,10 @@ def test_investment_chat_provider_options_are_limited_to_tenant_model_keys(monke
         params={"tenant_id": "czxnms", "provider": "gemini", "model": "gemini-3-flash-preview"},
     )
 
+    # Even without a selector UI, the route still filters provider tokens against
+    # tenant credentials and falls back to the only available provider (claude).
     assert response.status_code == 200
-    assert '<option value="claude" selected>Anthropic Claude</option>' in response.text
-    assert '<option value="gemini"' not in response.text
-    assert '<option value="gpt"' not in response.text
+    assert "data-chat-selector-form" not in response.text
     assert "/investment-chat/adk/dev-ui/?tenant_id=czxnms&amp;provider=claude" in response.text
     assert "gemini-3-flash-preview" not in response.text
     assert client.session["investment_chat_provider"] == "claude"
@@ -320,5 +324,7 @@ def test_investment_chat_provider_options_show_no_iframe_when_no_tenant_model_ke
     response = client.get("/investment-chat", params={"tenant_id": "czxnms"})
 
     assert response.status_code == 200
-    assert "등록된 LLM API key가 없습니다" in response.text
+    # Empty-state message now points to /settings (provider/model selector moved there).
+    assert "등록된 LLM API key가 없거나 챗봇 모델이 설정되지 않았습니다" in response.text
+    assert "환경설정" in response.text
     assert "<iframe" not in response.text
