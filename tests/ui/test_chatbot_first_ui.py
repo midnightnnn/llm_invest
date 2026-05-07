@@ -74,3 +74,17 @@ def test_adk_readonly_mount_exists(monkeypatch) -> None:
     paths = {getattr(route, "path", "") for route in client.app.routes}
     # FastAPI's app.mount creates a Mount route whose path is the prefix.
     assert "/investment-chat/adk-readonly" in paths
+
+
+def test_settings_page_shows_chatbot_banner(monkeypatch) -> None:
+    client = _client(monkeypatch)
+    resp = client.get("/settings", params={"tab": "agents"})
+    body = resp.text
+    assert "투자챗봇으로 변경 가능합니다" in body
+
+
+def test_settings_banner_appears_on_all_tabs(monkeypatch) -> None:
+    client = _client(monkeypatch)
+    for tab in ("agents", "capital", "mcp", "memory"):
+        resp = client.get("/settings", params={"tab": tab})
+        assert "투자챗봇으로 변경 가능합니다" in resp.text, f"missing banner on tab={tab}"
