@@ -127,20 +127,20 @@ def _post_ts_iso(row: dict[str, object]) -> str:
 
 
 def register_showcase_routes(app: FastAPI, *, deps: ShowcaseRouteDeps) -> None:
-    # ── Redirect /showcase → /showcase/{tenant}/board ──
+    # ── Redirect /showcase → /showcase/{tenant}/investment-chat ──
     @app.get("/showcase", response_class=HTMLResponse)
     def showcase_index(request: Request) -> HTMLResponse:
         tenant = _allowed_showcase_tenant()
         if not tenant:
             return HTMLResponse("Showcase not configured", status_code=404)
-        return HTMLResponse(status_code=302, headers={"Location": f"/showcase/{tenant}/board"})
+        return HTMLResponse(status_code=302, headers={"Location": f"/showcase/{tenant}/investment-chat"})
 
     @app.get("/showcase/{tenant}", response_class=HTMLResponse)
-    def showcase_tenant_index(tenant: str) -> HTMLResponse:
+    def showcase_tenant_index(request: Request, tenant: str) -> HTMLResponse:
         t = _validate_tenant(tenant)
         if not t:
             return HTMLResponse("Not found", status_code=404)
-        return HTMLResponse(status_code=302, headers={"Location": f"/showcase/{t}/board"})
+        return HTMLResponse(status_code=302, headers={"Location": f"/showcase/{t}/investment-chat"})
 
     # ── Board ──
     @app.get("/showcase/{tenant}/board", response_class=HTMLResponse)

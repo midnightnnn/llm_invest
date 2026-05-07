@@ -168,3 +168,19 @@ def test_showcase_investment_chat_page_renders(monkeypatch) -> None:
     assert "data-config-draft-panel" not in body
     # Showcase sidebar with chat first.
     assert "투자챗봇" in body
+
+
+def test_showcase_entry_redirects_to_investment_chat(monkeypatch) -> None:
+    monkeypatch.setenv("ARENA_SHOWCASE_TENANT", "midnightnnn")
+    client = _client(monkeypatch)
+    resp = client.get("/showcase/midnightnnn")
+    assert resp.status_code == 302
+    assert resp.headers["location"].endswith("/showcase/midnightnnn/investment-chat")
+
+
+def test_showcase_root_redirects_to_investment_chat(monkeypatch) -> None:
+    monkeypatch.setenv("ARENA_SHOWCASE_TENANT", "midnightnnn")
+    client = _client(monkeypatch)
+    resp = client.get("/showcase")
+    assert resp.status_code == 302
+    assert resp.headers["location"].endswith("/showcase/midnightnnn/investment-chat")
