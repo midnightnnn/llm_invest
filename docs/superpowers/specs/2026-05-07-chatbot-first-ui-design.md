@@ -18,7 +18,6 @@
 - 챗봇 화면에서 별도의 chrome(상단 provider/model selector form, 페이지 헤더)을 제거한다.
 - provider/model 선택은 **환경설정 → 에이전트 탭**으로 이전한다.
 - 환경설정 페이지 상단에 "투자챗봇으로 변경 가능합니다" 한 줄 안내를 추가한다.
-- showcase 모드(`/showcase/{tenant}`)도 진입 시 챗봇(보기 전용)을 메인으로 띄운다.
 - ADK dev UI는 그대로 유지한다 (iframe 콘텐츠).
 
 ### 비목표(Non-goals)
@@ -28,7 +27,7 @@
 - 챗봇으로 provider/model을 자연어 변경하는 기능.
 - 컨텍스트별 모델 자동 오버라이드(투자 상담 = 고급 / 설정·설명 = 저렴).
 - ADK iframe 내부의 색감/타이포를 바깥 frame과 통일하는 CSS 주입.
-- showcase 챗봇의 정교한 read-only UX(이번엔 write 도구 차단만).
+- **showcase 모드(`/showcase/{tenant}`)에 챗봇을 보기 전용으로 통합** — 본 스펙 §5에서 사유 설명. 별도 후속 스펙으로 분리.
 - 환경설정 자체 구조 개편(현행 4탭 유지).
 
 ## 2. 정보 구조 (IA)
@@ -137,46 +136,36 @@
 
 - 변경 없음. 안내 배너만 상단 공통으로 노출.
 
-## 5. Showcase 모드
+## 5. Showcase 모드 — 본 스펙 범위 밖
 
-### 라우팅 변경
+### 결정
 
-- `GET /showcase/{tenant}` → `302 → /showcase/{tenant}/investment-chat` (현행 `…/board`에서 변경).
-- `GET /showcase/{tenant}` 무 trailing-slash 경로도 동일.
-- `GET /showcase/{tenant}/investment-chat` (신설) — 챗봇 보기 전용 페이지.
+이번 스펙에서는 showcase 모드에 챗봇을 통합하지 **않는다**. 현행 동작 유지:
 
-### 사이드바 (showcase)
+- `GET /showcase/{tenant}` → `302 → /showcase/{tenant}/board` (현행 그대로).
+- showcase 사이드바도 현행 6개 항목(게시판/운용성과/에이전트/자본관리/도구관리/기억관리) 그대로.
 
-```
-LLM INVEST
-• 투자챗봇 (active)
-• 게시판
-• 운용성과
-• 에이전트
-• 자본관리
-• 도구관리
-• 기억관리
-```
+### 사유
 
-- showcase는 환경설정이 4탭으로 분리되어 있는 현행 구조 유지(이번 작업 범위 밖).
-- 투자챗봇만 최상단으로 추가.
+브레인스토밍 중 사용자는 "showcase에도 챗봇 담기(보기 전용)"를 선호 옵션으로 골랐으나, 셀프 리뷰에서 **read-only를 실제로 강제할 메커니즘이 비싸다**는 점이 드러났다:
 
-### Read-only 정의
+- ADK는 `/investment-chat/adk/...`에 마운트되어 있어 `/showcase/` prefix의 POST 가드(403)가 ADK 호출에 적용되지 않는다.
+- 따라서 단순히 "showcase 페이지에서 ADK iframe을 임베드"하는 것만으로는 visitor가 write 도구(주문 제출, 설정 변경 적용)를 그대로 호출할 수 있다.
+- 진짜 강제하려면 다음 둘 중 하나가 필요하다:
+  - showcase 전용 ADK 마운트/세션에 write 도구가 제거된 도구 레지스트리 주입.
+  - 도구 레벨에서 "showcase 컨텍스트면 차단" 가드 신설.
+- 둘 다 본 스펙(owner UI chrome 단순화)의 범위를 크게 벗어나고, 보안에 직결된 설계라 별도 스펙에서 정밀하게 다뤄야 한다.
 
-- 방문자는 자기 세션의 챗에 메시지를 보낼 수 있고 도구 호출도 가능하다.
-- 단, **write 계열 도구(주문 제출, 설정 변경 적용)는 차단**된다.
-- 차단 메커니즘: `/showcase/` prefix의 모든 POST가 이미 403을 반환하고 있어 그 가드에 의존한다(현행).
-- 추가로, showcase 챗봇 페이지가 사용하는 ADK iframe 세션은 별도 세션 ID를 사용해 owner 세션과 격리한다.
-- write 도구가 호출돼도 ADK 측 도구 실행이 `/showcase/` POST 가드를 만나 403으로 실패하도록 한다.
-- 주문/설정 승인 토스트 패널은 showcase 페이지에서는 렌더하지 않는다(어차피 승인 자체가 불가).
+### 후속 스펙으로 분리
+
+§10 향후 작업에 명시 — "showcase 챗봇 통합 (보기 전용)" 별도 스펙으로 다룬다.
 
 ## 6. 적용 범위 (touch list)
 
 | 파일 | 변경 |
 | --- | --- |
 | `arena/ui/app.py` | `_root_redirect` 대상을 `/board` → `/investment-chat`로 변경 |
-| `arena/ui/layout.py` | `nav_items`를 4개로 축소(투자챗봇 최상단). showcase용 nav도 투자챗봇 최상단으로 |
-| `arena/ui/routes/showcase.py` | `/showcase/{tenant}` 리다이렉트 변경, `/showcase/{tenant}/investment-chat` 신설(보기 전용 챗봇) |
+| `arena/ui/layout.py` | owner용 `nav_items`를 4개로 축소(투자챗봇 최상단). **showcase용 nav는 변경하지 않음** |
 | `arena/ui/templates/investment_chat_body.jinja2` | provider/model selector form 블록 + 관련 `<script>` 제거. iframe + 두 토스트 패널만 남김 |
 | `arena/ui/routes/investment_chat.py` | selector 관련 헬퍼 일부를 settings 라우트로 이전(공유), 챗 페이지 렌더 단순화 |
 | `arena/ui/templates/settings_body.jinja2` | 페이지 헤더와 탭 사이에 안내 배너 추가 |
@@ -209,8 +198,7 @@ LLM INVEST
   - `GET /settings?tab=agents` 응답에 Chat Provider/Model 카드가 있고, 옵션이 tenant credential에 따라 정확히 필터링됨.
   - `POST /settings/chat-model` 유효 입력 → 302, `chat_agent_config`에 저장.
   - `POST /settings/chat-model` 무효 입력(미허용 provider/model) → 400 또는 검증 실패 응답.
-  - `GET /showcase/{tenant}` → 302 → `/showcase/{tenant}/investment-chat`.
-  - showcase 챗봇 페이지에서 write 도구 트리거 시 `/showcase/` POST 가드에 의해 403.
+  - **showcase 라우트는 변경하지 않으므로 관련 신규 테스트 없음** — 기존 showcase 테스트 그대로 통과해야 함.
 - 안내 배너: 모든 settings 탭(`agents|capital|mcp|memory`)에서 배너 마크업이 렌더되는지 확인.
 
 ### 수동 검증
@@ -219,11 +207,11 @@ LLM INVEST
 - 모바일: 사이드바 drawer 동작, 챗 active일 때 backdrop 투명 처리.
 - 주문/설정 승인 토스트 정상 출현.
 - 환경설정에서 모델 변경 → 챗 페이지 진입 시 iframe URL이 변경된 모델로 빌드되는지 확인.
-- showcase 모드 진입 시 챗봇 화면이 뜨고, write 도구는 실패하는지 확인.
+- showcase는 현행 그대로 동작하는지(`/showcase/{t}` → board 리다이렉트, 사이드바 6개 메뉴 그대로) 회귀 확인.
 
 ## 10. 향후 작업 (이번 스펙 밖)
 
 - 챗봇으로 provider/model을 자연어 변경(별도 스펙).
 - 컨텍스트별 모델 자동 오버라이드(투자 상담 = 고급 / 설정·설명 = 저렴).
 - ADK iframe 내부 색감/타이포 통일을 위한 CSS 주입.
-- showcase 챗봇의 정교한 read-only UX(전용 도구 화이트리스트, 승인 패널 대체 표시 등).
+- **showcase 챗봇 통합 (보기 전용)** — read-only를 강제할 메커니즘(전용 ADK 마운트/세션 또는 도구 레벨 가드) 설계가 필요하므로 별도 스펙으로 다룬다.
