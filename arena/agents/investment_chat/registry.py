@@ -21,6 +21,7 @@ def build_chat_registry(
     tenant_id: str,
     registry: ToolRegistry | None,
     invalidate_tenant_cache: Callable[..., Any] | None = None,
+    read_only: bool = False,
 ) -> ToolRegistry:
     tenant = normalize_tenant(tenant_id)
     tool_settings = account_scope_settings(repo, tenant_id=tenant, settings=settings)
@@ -55,6 +56,7 @@ def build_chat_registry(
             settings=tool_settings,
             tenant_id=tenant,
             invalidate_tenant_cache=invalidate_tenant_cache,
+            read_only=read_only,
         )
     )
     return ToolRegistry(

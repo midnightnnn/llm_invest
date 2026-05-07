@@ -58,3 +58,23 @@ def test_build_chat_tool_entries_read_only_strips_order_and_config() -> None:
     assert "submit_approved_order" not in names
     assert not any("approve_config" in n.lower() for n in names)
     assert not any("apply_config" in n.lower() for n in names)
+
+
+def test_build_chat_registry_read_only_strips_order_and_config() -> None:
+    from arena.agents.investment_chat.registry import build_chat_registry
+    from arena.config import load_settings
+    from tests.ui.helpers import _DummyRepo
+
+    settings = load_settings()
+    repo = _DummyRepo()
+    registry = build_chat_registry(
+        repo=repo,
+        settings=settings,
+        tenant_id="local",
+        registry=None,
+        read_only=True,
+    )
+    tool_ids = {str(entry.tool_id or "").lower() for entry in registry.list_entries()}
+    assert "submit_approved_order" not in tool_ids
+    assert not any("approve_config" in tid for tid in tool_ids)
+    assert not any("apply_config" in tid for tid in tool_ids)
