@@ -100,10 +100,11 @@ class PromptPack:
         provider: str = "",
         model_id: str = "",
         utility_agent_name: str = "investment_chat_utility",
+        read_only: bool = False,
     ) -> str:
         _ = provider, model_id
         tenant = str(tenant_id or "").strip().lower() or "local"
-        return render_prompt_text(
+        text = render_prompt_text(
             "investment_chat",
             "advisor_prompt.txt",
             values={
@@ -113,6 +114,14 @@ class PromptPack:
                 "utility_agent_name": utility_agent_name,
             },
         )
+        if read_only:
+            text = (
+                text
+                + "\n\n[showcase 보기 전용 세션] "
+                "주문 제출과 설정 변경 도구는 이 세션에서 사용할 수 없습니다. "
+                "조회/분석 도구만 사용해 답하세요."
+            )
+        return text
 
     @staticmethod
     def render_investment_chat_router_instruction(
