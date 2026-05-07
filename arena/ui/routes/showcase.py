@@ -558,6 +558,56 @@ def register_showcase_routes(app: FastAPI, *, deps: ShowcaseRouteDeps) -> None:
             max_age=60,
         )
 
+    # ── Investment Chat (read-only) ──
+    @app.get("/showcase/{tenant}/investment-chat", response_class=HTMLResponse)
+    def showcase_investment_chat(request: Request, tenant: str) -> HTMLResponse:
+        from arena.agents.investment_chat.config_tools import load_chat_agent_config
+        from arena.agents.investment_chat.selection import (
+            normalize_chat_model_selection,
+            tenant_default_chat_selection,
+        )
+        from arena.providers.registry import canonical_provider, default_model_for_provider
+
+        t = _validate_tenant(tenant)
+        if not t:
+            return HTMLResponse("Not found", status_code=404)
+
+        tenant_settings = deps.settings_for_tenant(t)
+        chat_config = load_chat_agent_config(deps.repo, tenant_id=t)
+        tenant_provider, tenant_model = tenant_default_chat_selection(tenant_settings)
+        provider_token = (
+            canonical_provider(chat_config.get("provider"))
+            or tenant_provider
+            or "gemini"
+        )
+        model_token = normalize_chat_model_selection(
+            provider_token,
+            chat_config.get("model")
+            or default_model_for_provider(tenant_settings, provider_token)
+            or tenant_model,
+        )
+        iframe_src = ""
+        if provider_token and model_token:
+            qs = urlencode({"tenant_id": t, "provider": provider_token, "model": model_token})
+            iframe_src = f"/investment-chat/adk-readonly/dev-ui/?{qs}"
+        body = render_ui_template(
+            "investment_chat_showcase_body.jinja2",
+            iframe_src=iframe_src,
+        )
+        return deps.html_response(
+            deps.tailwind_layout(
+                "투자챗봇",
+                body,
+                active="investment_chat",
+                tenant=t,
+                max_width_class="max-w-none",
+                hide_page_header=True,
+                main_class="flex-1 min-w-0 w-full p-0 box-border",
+                showcase=True,
+            ),
+            max_age=0,
+        )
+
     # ── Catch-all POST → 403 ──
     @app.post("/showcase/{tenant}/{path:path}")
     def showcase_block_post(tenant: str, path: str) -> JSONResponse:

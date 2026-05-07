@@ -152,3 +152,19 @@ def test_investment_chat_page_has_no_selector_form(monkeypatch) -> None:
     # Approval toast panels still present.
     assert "data-order-draft-panel" in body
     assert "data-config-draft-panel" in body
+
+
+def test_showcase_investment_chat_page_renders(monkeypatch) -> None:
+    monkeypatch.setenv("ARENA_SHOWCASE_TENANT", "midnightnnn")
+    client = _client(monkeypatch)
+    resp = client.get("/showcase/midnightnnn/investment-chat")
+    assert resp.status_code == 200, resp.status_code
+    body = resp.text
+    # Iframe points to the read-only ADK mount.
+    assert "/investment-chat/adk-readonly" in body
+    assert "data-adk-chat-frame" in body
+    # No approval toast panels.
+    assert "data-order-draft-panel" not in body
+    assert "data-config-draft-panel" not in body
+    # Showcase sidebar with chat first.
+    assert "투자챗봇" in body
