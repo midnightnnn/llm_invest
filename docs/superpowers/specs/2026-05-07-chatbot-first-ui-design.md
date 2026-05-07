@@ -17,6 +17,7 @@
 - 사이드바는 **4개**로 압축한다: 투자챗봇 / 게시판 / 운용성과 / 환경설정.
 - 챗봇 화면에서 별도의 chrome(상단 provider/model selector form, 페이지 헤더)을 제거한다.
 - provider/model 선택은 **환경설정 → 에이전트 탭**으로 이전한다.
+- showcase 모드(`/showcase/{tenant}`) 진입 시에도 read-only 챗봇이 메인으로 뜬다. write 도구는 에이전트 도구 단계에서 제거되어 visitor가 호출 자체를 할 수 없다.
 - 환경설정 페이지 상단에 "투자챗봇으로 변경 가능합니다" 한 줄 안내를 추가한다.
 - ADK dev UI는 그대로 유지한다 (iframe 콘텐츠).
 
@@ -27,8 +28,8 @@
 - 챗봇으로 provider/model을 자연어 변경하는 기능.
 - 컨텍스트별 모델 자동 오버라이드(투자 상담 = 고급 / 설정·설명 = 저렴).
 - ADK iframe 내부의 색감/타이포를 바깥 frame과 통일하는 CSS 주입.
-- **showcase 모드(`/showcase/{tenant}`)에 챗봇을 보기 전용으로 통합** — 본 스펙 §5에서 사유 설명. 별도 후속 스펙으로 분리.
 - 환경설정 자체 구조 개편(현행 4탭 유지).
+- showcase 챗봇의 정교한 UX(예: "이 모드에선 주문 불가" 사용자 안내 문구를 ADK iframe 내부에 주입). write 도구가 비어있으니 에이전트가 자연스럽게 거부하는 데서 끝.
 
 ## 2. 정보 구조 (IA)
 
@@ -45,6 +46,8 @@
 - 기존 `/investment-chat`, `/board`, `/nav`, `/settings?tab=…` URL은 그대로 유지(외부 북마크 호환).
 - 기존 `/investment-chat?tenant_id=&provider=&model=` 쿼리 호환도 유지. 단 selector UI는 없으므로
   직접 링크로 들어오는 경우 서버측 우선순위 로직(쿼리 → 챗 config → 세션 → tenant default)이 그대로 적용된다.
+- showcase: `GET /showcase/{tenant}` 리다이렉트 대상을 `…/board` → `…/investment-chat`으로 변경. `GET /showcase/{tenant}/investment-chat`는 신설(read-only iframe 페이지).
+- showcase ADK 마운트 신설: `app.mount("/investment-chat/adk-readonly", build_investment_chat_adk_app(... read_only=True ...))`.
 
 **세션:** 기존 세션 키 `investment_chat_provider/model/tenant_id`는 그대로 사용한다.
 
@@ -136,37 +139,80 @@
 
 - 변경 없음. 안내 배너만 상단 공통으로 노출.
 
-## 5. Showcase 모드 — 본 스펙 범위 밖
+## 5. Showcase 모드 — 챗봇 통합(보기 전용)
 
-### 결정
+### 라우팅 변경
 
-이번 스펙에서는 showcase 모드에 챗봇을 통합하지 **않는다**. 현행 동작 유지:
+- `GET /showcase/{tenant}` → `302 → /showcase/{tenant}/investment-chat` (현행 `…/board`에서 변경).
+- `GET /showcase/{tenant}/investment-chat` (신설) — showcase 챗봇 페이지.
+- 기존 `/showcase/{tenant}/{board|nav|trades|sleeves|settings}` 모두 그대로 유지.
 
-- `GET /showcase/{tenant}` → `302 → /showcase/{tenant}/board` (현행 그대로).
-- showcase 사이드바도 현행 6개 항목(게시판/운용성과/에이전트/자본관리/도구관리/기억관리) 그대로.
+### 사이드바 (showcase)
 
-### 사유
+```
+LLM INVEST
+• 투자챗봇 (active)
+• 게시판
+• 운용성과
+• 에이전트
+• 자본관리
+• 도구관리
+• 기억관리
+```
 
-브레인스토밍 중 사용자는 "showcase에도 챗봇 담기(보기 전용)"를 선호 옵션으로 골랐으나, 셀프 리뷰에서 **read-only를 실제로 강제할 메커니즘이 비싸다**는 점이 드러났다:
+- showcase는 환경설정이 4탭 분리 구조 그대로(이번 작업 범위 밖).
+- 투자챗봇 항목만 최상단에 추가.
 
-- ADK는 `/investment-chat/adk/...`에 마운트되어 있어 `/showcase/` prefix의 POST 가드(403)가 ADK 호출에 적용되지 않는다.
-- 따라서 단순히 "showcase 페이지에서 ADK iframe을 임베드"하는 것만으로는 visitor가 write 도구(주문 제출, 설정 변경 적용)를 그대로 호출할 수 있다.
-- 진짜 강제하려면 다음 둘 중 하나가 필요하다:
-  - showcase 전용 ADK 마운트/세션에 write 도구가 제거된 도구 레지스트리 주입.
-  - 도구 레벨에서 "showcase 컨텍스트면 차단" 가드 신설.
-- 둘 다 본 스펙(owner UI chrome 단순화)의 범위를 크게 벗어나고, 보안에 직결된 설계라 별도 스펙에서 정밀하게 다뤄야 한다.
+### Read-only 강제 메커니즘 — 도구 단계 가드
 
-### 후속 스펙으로 분리
+**핵심 결정:** read-only는 ADK 마운트 분리 + 에이전트 도구 화이트리스트 두 단계로 강제한다. URL prefix 가드(`/showcase/` POST 403)에 의존하지 않는다 — 그 가드는 ADK 호출(`/investment-chat/adk/...`)을 커버하지 않기 때문.
 
-§10 향후 작업에 명시 — "showcase 챗봇 통합 (보기 전용)" 별도 스펙으로 다룬다.
+**1) 별도 ADK 마운트:**
+
+- 신규 마운트 경로: `/investment-chat/adk-readonly`.
+- `arena/ui/app.py`에서 `app.mount(...)`를 한 번 더 호출, `build_investment_chat_adk_app(... read_only=True ...)`로 빌드.
+- 인증 게이트(`_install_auth_gate`)는 owner 마운트와 분리 — showcase 마운트는 인증 비활성(visitor 진입 가능).
+
+**2) 에이전트 도구 화이트리스트:**
+
+- `arena/agents/investment_chat/factory.py`의 `build_investment_chat_agent`에 `read_only: bool = False` 인자 추가.
+- `arena/agents/investment_chat/registry.py`의 `build_chat_registry`에도 같은 인자 전파.
+- `read_only=True`이면 `build_chat_tool_entries` 호출 시 `build_order_tool_entries` / `build_config_tool_entries`를 **스킵** — order/config 관련 도구가 도구셋에 아예 들어가지 않는다.
+- account_tools / history_tools 및 분석 도구(`CHAT_ANALYSIS_TOOL_IDS`)는 그대로 노출 → 방문자는 NAV/포트/매매 이력 조회 등 조회는 가능.
+- 분석 도구의 `WRITE_TOOL_MARKERS` 기반 필터링은 그대로 동작(이중 가드).
+
+**3) 에이전트 인스트럭션 보강:**
+
+- `read_only=True`로 만든 에이전트의 instruction에 한 줄 추가: "이 세션은 보기 전용입니다. 주문/설정 변경 도구는 사용할 수 없습니다."
+- `PromptPack.render_investment_chat_instruction`에 `read_only` 플래그 받아 분기.
+
+**4) UI 단순화:**
+
+- showcase 챗봇 페이지는 owner 챗봇 페이지와 거의 동일하지만:
+  - 상단 provider/model selector 없음(owner와 동일하게 제거).
+  - 하단 두 토스트 패널(주문/설정 승인) **렌더하지 않음** — 어차피 승인 자체가 발생하지 않음.
+  - 주문/설정 승인 폴링 JS 제거.
+- iframe `src`: `/investment-chat/adk-readonly/dev-ui/?tenant_id={t}&provider={p}&model={m}` — provider/model은 owner가 환경설정에서 저장한 값(tenant default)을 그대로 사용.
+
+### Loader 동작
+
+- showcase ADK 마운트가 사용하는 `InvestmentChatAgentLoader`는 `build_investment_chat_agent(... read_only=True ...)`를 호출해 에이전트를 빌드.
+- 캐시 키에 `read_only` 플래그 포함하여 owner 캐시와 격리.
 
 ## 6. 적용 범위 (touch list)
 
 | 파일 | 변경 |
 | --- | --- |
-| `arena/ui/app.py` | `_root_redirect` 대상을 `/board` → `/investment-chat`로 변경 |
-| `arena/ui/layout.py` | owner용 `nav_items`를 4개로 축소(투자챗봇 최상단). **showcase용 nav는 변경하지 않음** |
+| `arena/ui/app.py` | `_root_redirect` 대상을 `/board` → `/investment-chat`로 변경. `/investment-chat/adk-readonly` 마운트 추가(showcase ADK, `read_only=True`) |
+| `arena/ui/layout.py` | owner용 `nav_items`를 4개로 축소(투자챗봇 최상단). showcase용 nav에 투자챗봇 항목 최상단 추가 |
+| `arena/ui/routes/showcase.py` | `/showcase/{tenant}` 리다이렉트를 `…/investment-chat`로 변경. `/showcase/{tenant}/investment-chat` 라우트 신설(read-only iframe 페이지). `/showcase/{tenant}` trailing-slash 케이스 동일 처리 |
 | `arena/ui/templates/investment_chat_body.jinja2` | provider/model selector form 블록 + 관련 `<script>` 제거. iframe + 두 토스트 패널만 남김 |
+| `arena/ui/templates/investment_chat_showcase_body.jinja2` (신설) | iframe만 남긴 read-only용 템플릿. 토스트 패널/폴링 JS 없음 |
+| `arena/agents/investment_chat/factory.py` | `build_investment_chat_agent`에 `read_only: bool = False` 인자 추가, `build_chat_registry` 호출 시 전파, `PromptPack.render_investment_chat_instruction` 호출에도 전파 |
+| `arena/agents/investment_chat/registry.py` | `build_chat_registry`에 `read_only` 전파, `read_only=True`이면 `build_chat_tool_entries`에 그대로 넘김 |
+| `arena/agents/investment_chat/tools.py` | `build_chat_tool_entries`에 `read_only` 인자 추가. `read_only=True`이면 `build_order_tool_entries` / `build_config_tool_entries` 호출을 스킵 |
+| `arena/prompts/prompt_pack.py` | `PromptPack.render_investment_chat_instruction`에 `read_only` 인자 추가, read-only 안내 한 줄 분기 |
+| `arena/ui/investment_chat_adk.py` | `build_investment_chat_adk_app`에 `read_only=False` 인자 추가, `InvestmentChatAgentLoader`에 전파, 캐시 키에 포함 |
 | `arena/ui/routes/investment_chat.py` | selector 관련 헬퍼 일부를 settings 라우트로 이전(공유), 챗 페이지 렌더 단순화 |
 | `arena/ui/templates/settings_body.jinja2` | 페이지 헤더와 탭 사이에 안내 배너 추가 |
 | `arena/ui/templates/settings_agents_panel.jinja2` | 상단에 Chat Provider/Model 카드 추가 |
@@ -179,6 +225,8 @@
 - `/investment-chat?tenant_id=…&provider=…&model=…` 쿼리도 그대로 유지. 단 selector UI는 없으므로,
   직접 링크는 환경설정 값을 일시 오버라이드하는 효과만 갖는다(서버측 우선순위 로직 그대로).
 - 세션 키 `investment_chat_provider/model/tenant_id` 그대로 유지.
+- 기존 `/investment-chat/adk` owner 마운트는 그대로. 신규 `/investment-chat/adk-readonly`는 추가 마운트로 충돌 없음.
+- showcase의 기존 read 라우트(`/showcase/{t}/{board|nav|trades|...}`)는 모두 살아 있음. 변경된 것은 `/showcase/{tenant}` 자체의 진입 리다이렉트 대상뿐.
 
 ## 8. 롤백 전략
 
@@ -198,7 +246,10 @@
   - `GET /settings?tab=agents` 응답에 Chat Provider/Model 카드가 있고, 옵션이 tenant credential에 따라 정확히 필터링됨.
   - `POST /settings/chat-model` 유효 입력 → 302, `chat_agent_config`에 저장.
   - `POST /settings/chat-model` 무효 입력(미허용 provider/model) → 400 또는 검증 실패 응답.
-  - **showcase 라우트는 변경하지 않으므로 관련 신규 테스트 없음** — 기존 showcase 테스트 그대로 통과해야 함.
+  - `GET /showcase/{tenant}` → 302 → `/showcase/{tenant}/investment-chat`.
+  - `GET /showcase/{tenant}/investment-chat` 응답에 read-only iframe(`/investment-chat/adk-readonly/...`)이 들어 있고, 주문/설정 승인 토스트 패널 마크업이 없음.
+  - `build_chat_registry(... read_only=True)` 호출 결과 도구셋에 order/config 관련 ToolEntry가 0개임을 단위 테스트로 확인.
+  - `build_investment_chat_agent(... read_only=True)` 결과 에이전트의 `tools`에 write 도구가 없음 + instruction에 read-only 안내 문구가 포함됨.
 - 안내 배너: 모든 settings 탭(`agents|capital|mcp|memory`)에서 배너 마크업이 렌더되는지 확인.
 
 ### 수동 검증
@@ -207,11 +258,11 @@
 - 모바일: 사이드바 drawer 동작, 챗 active일 때 backdrop 투명 처리.
 - 주문/설정 승인 토스트 정상 출현.
 - 환경설정에서 모델 변경 → 챗 페이지 진입 시 iframe URL이 변경된 모델로 빌드되는지 확인.
-- showcase는 현행 그대로 동작하는지(`/showcase/{t}` → board 리다이렉트, 사이드바 6개 메뉴 그대로) 회귀 확인.
+- showcase 모드 진입 시 챗봇 화면이 뜨고 NAV/포트 조회는 가능하지만, "주문해줘"/"설정 바꿔줘" 요청에 에이전트가 도구 부재로 거부하는지 확인.
 
 ## 10. 향후 작업 (이번 스펙 밖)
 
 - 챗봇으로 provider/model을 자연어 변경(별도 스펙).
 - 컨텍스트별 모델 자동 오버라이드(투자 상담 = 고급 / 설정·설명 = 저렴).
 - ADK iframe 내부 색감/타이포 통일을 위한 CSS 주입.
-- **showcase 챗봇 통합 (보기 전용)** — read-only를 강제할 메커니즘(전용 ADK 마운트/세션 또는 도구 레벨 가드) 설계가 필요하므로 별도 스펙으로 다룬다.
+- showcase 챗봇 UX 향상(예: read-only 안내 배너 iframe 내 주입, 분석 도구 한정 추천 프롬프트 등).
