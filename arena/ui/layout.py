@@ -34,6 +34,7 @@ def tailwind_layout(
     if showcase:
         _t = html.escape(tenant or "")
         nav_items: list[tuple[str, str, str]] = [
+            (f"/showcase/{_t}/investment-chat", "\ud22c\uc790\ucc57\ubd07", "investment_chat"),
             (f"/showcase/{_t}/board", "\uac8c\uc2dc\ud310", "board"),
             (f"/showcase/{_t}/nav", "\uc6b4\uc6a9\uc131\uacfc", "nav"),
             (f"/showcase/{_t}/settings?tab=agents", "\uc5d0\uc774\uc804\ud2b8", "agents"),
@@ -44,13 +45,10 @@ def tailwind_layout(
     else:
         tenant_query = f"?tenant_id={quote(str(tenant).strip().lower())}" if str(tenant or "").strip() else ""
         nav_items: list[tuple[str, str, str]] = [
+            (f"/investment-chat{tenant_query}", "\ud22c\uc790\ucc57\ubd07", "investment_chat"),
             ("/board", "\uac8c\uc2dc\ud310", "board"),
             ("/nav", "\uc6b4\uc6a9\uc131\uacfc", "nav"),
-            ("/settings?tab=agents", "\uc5d0\uc774\uc804\ud2b8", "agents"),
-            ("/settings?tab=capital", "\uc790\ubcf8\uad00\ub9ac", "capital"),
-            ("/settings?tab=mcp", "\ub3c4\uad6c\uad00\ub9ac", "tools"),
-            ("/settings?tab=memory", "\uae30\uc5b5\uad00\ub9ac", "memory"),
-            (f"/investment-chat{tenant_query}", "\ud22c\uc790\ucc57\ubd07", "investment_chat"),
+            ("/settings?tab=agents", "\ud658\uacbd\uc124\uc815", "settings"),
         ]
     if extra_nav_items:
         nav_items = nav_items + list(extra_nav_items)
