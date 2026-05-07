@@ -78,3 +78,41 @@ def test_build_chat_registry_read_only_strips_order_and_config() -> None:
     assert "submit_approved_order" not in tool_ids
     assert not any("approve_config" in tid for tid in tool_ids)
     assert not any("apply_config" in tid for tid in tool_ids)
+
+
+def test_build_investment_chat_agent_read_only_excludes_write_tools(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from arena.agents.investment_chat import factory
+    from arena.config import load_settings
+    from tests.ui.helpers import _DummyRepo
+
+    monkeypatch.setattr(factory, "_resolve_model", lambda *args, **kwargs: "fake-model")
+    monkeypatch.setattr(factory, "Agent", lambda **kwargs: SimpleNamespace(**kwargs))
+
+    settings = load_settings()
+    repo = _DummyRepo()
+    agent = factory.build_investment_chat_agent(
+        repo=repo,
+        settings=settings,
+        tenant_id="local",
+        registry=None,
+        read_only=True,
+    )
+
+    # Top-level agent is the router; sub-agents do the real work.
+    sub_agents = {sub.name: sub for sub in (agent.sub_agents or [])}
+    advisor = sub_agents.get(factory.ADVISOR_AGENT_NAME)
+    utility = sub_agents.get(factory.UTILITY_AGENT_NAME)
+    assert advisor is not None and utility is not None
+
+    advisor_names = {getattr(t, "__name__", "") for t in advisor.tools}
+    assert "submit_approved_order" not in advisor_names
+    assert not any("approve_config" in n.lower() for n in advisor_names)
+    assert not any("apply_config" in n.lower() for n in advisor_names)
+    assert "보기 전용" in advisor.instruction
+
+    utility_names = {getattr(t, "__name__", "") for t in utility.tools}
+    assert "submit_approved_order" not in utility_names
+    assert not any("propose_" in n.lower() and "config_change" in n.lower() for n in utility_names)
+    assert not any("apply_config" in n.lower() for n in utility_names)

@@ -121,12 +121,15 @@ def _mapping_value(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, dict) else {}
 
 
-def _advisor_instruction(*, tenant: str, provider: str, model_id: str) -> str:
+def _advisor_instruction(
+    *, tenant: str, provider: str, model_id: str, read_only: bool = False
+) -> str:
     return PromptPack.render_investment_chat_instruction(
         tenant_id=tenant,
         provider=provider,
         model_id=model_id,
         utility_agent_name=UTILITY_AGENT_NAME,
+        read_only=read_only,
     )
 
 
@@ -148,6 +151,7 @@ def build_investment_chat_agent(
     provider: str | None = None,
     model_override: str | None = None,
     invalidate_tenant_cache: Callable[..., Any] | None = None,
+    read_only: bool = False,
 ) -> Agent:
     tenant = normalize_tenant(tenant_id)
     chat_config = load_chat_agent_config(repo, tenant_id=tenant)
@@ -177,6 +181,7 @@ def build_investment_chat_agent(
         tenant_id=tenant,
         registry=registry,
         invalidate_tenant_cache=invalidate_tenant_cache,
+        read_only=read_only,
     )
     advisor_tools = _wrapped_tools(chat_registry, repo=repo, settings=settings, tenant_id=tenant)
     utility_tools = _wrapped_tools(
@@ -202,7 +207,12 @@ def build_investment_chat_agent(
         name=ADVISOR_AGENT_NAME,
         description="Arena 투자챗봇 투자상담 에이전트",
         model=advisor_model,
-        instruction=_advisor_instruction(tenant=tenant, provider=provider_token, model_id=model_id),
+        instruction=_advisor_instruction(
+            tenant=tenant,
+            provider=provider_token,
+            model_id=model_id,
+            read_only=read_only,
+        ),
         tools=advisor_tools,
         generate_content_config=_build_generate_content_config(
             provider=provider_token,
