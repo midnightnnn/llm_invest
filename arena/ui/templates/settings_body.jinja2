@@ -68,6 +68,24 @@ setTimeout(function(){
 </section>
 {% endif %}
 
+{% set settings_tabs = [
+  ('agents', '에이전트'),
+  ('capital', '자본관리'),
+  ('mcp', '도구관리'),
+  ('memory', '기억관리'),
+] %}
+<nav class="mt-2 reveal flex flex-wrap gap-2" aria-label="환경설정 탭">
+  {% for tab_key, tab_label in settings_tabs %}
+    {% set is_active = initial_tab == tab_key %}
+    <a
+      href="/settings?tenant_id={{ tenant }}&tab={{ tab_key }}"
+      data-settings-tab-link="{{ tab_key }}"
+      class="inline-flex h-9 items-center rounded-md border px-3 text-xs font-semibold transition-colors {% if is_active %}border-ink-900 bg-ink-900 text-white{% else %}border-ink-200 bg-white text-ink-700 hover:bg-ink-50{% endif %}"
+      {% if is_active %}aria-current="page"{% endif %}
+    >{{ tab_label }}</a>
+  {% endfor %}
+</nav>
+
 <section class="mt-2 reveal">
   <div class="min-w-0">
     {# Server-side: only render panels for the active tab #}

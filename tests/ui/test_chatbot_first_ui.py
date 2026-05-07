@@ -90,6 +90,21 @@ def test_settings_banner_appears_on_all_tabs(monkeypatch) -> None:
         assert "투자챗봇으로 변경 가능합니다" in resp.text, f"missing banner on tab={tab}"
 
 
+def test_settings_page_has_internal_tab_links(monkeypatch) -> None:
+    client = _client(monkeypatch)
+    for active_tab in ("agents", "capital", "mcp", "memory"):
+        body = client.get("/settings", params={"tab": active_tab}).text
+        assert 'aria-label="환경설정 탭"' in body
+        for tab, label in (
+            ("agents", "에이전트"),
+            ("capital", "자본관리"),
+            ("mcp", "도구관리"),
+            ("memory", "기억관리"),
+        ):
+            assert f"tab={tab}" in body
+            assert label in body
+
+
 def test_settings_agents_tab_has_chat_provider_card(monkeypatch) -> None:
     client = _client(monkeypatch)
     body = client.get("/settings", params={"tab": "agents"}).text
