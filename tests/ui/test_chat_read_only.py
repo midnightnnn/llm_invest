@@ -116,3 +116,49 @@ def test_build_investment_chat_agent_read_only_excludes_write_tools(monkeypatch)
     assert "submit_approved_order" not in utility_names
     assert not any("propose_" in n.lower() and "config_change" in n.lower() for n in utility_names)
     assert not any("apply_config" in n.lower() for n in utility_names)
+
+
+def test_loader_passes_read_only_to_factory(monkeypatch) -> None:
+    from arena.ui import investment_chat_adk
+
+    captured: dict[str, object] = {}
+
+    def fake_build_agent(**kwargs):
+        captured.update(kwargs)
+        from types import SimpleNamespace
+        return SimpleNamespace(name="fake", instruction="x", tools=[])
+
+    monkeypatch.setattr(investment_chat_adk, "build_investment_chat_agent", fake_build_agent)
+
+    from arena.config import load_settings
+    from tests.ui.helpers import _DummyRepo
+
+    settings = load_settings()
+
+    loader = investment_chat_adk.InvestmentChatAgentLoader(
+        repo=_DummyRepo(),
+        settings_for_tenant=lambda _t: settings,
+        get_default_registry=lambda _t: None,
+        default_tenant="local",
+        read_only=True,
+    )
+    monkeypatch.setattr(loader, "_selection", lambda *a, **k: ("gpt", "gpt-5.5"))
+    loader.load_agent(investment_chat_adk.APP_NAME)
+    assert captured.get("read_only") is True
+
+
+def test_build_investment_chat_adk_app_accepts_read_only() -> None:
+    from arena.ui import investment_chat_adk
+    from arena.config import load_settings
+    from tests.ui.helpers import _DummyRepo
+
+    settings = load_settings()
+    app = investment_chat_adk.build_investment_chat_adk_app(
+        repo=_DummyRepo(),
+        settings_for_tenant=lambda _t: settings,
+        get_default_registry=lambda _t: None,
+        default_tenant="local",
+        url_prefix="/investment-chat/adk-readonly",
+        read_only=True,
+    )
+    assert app is not None

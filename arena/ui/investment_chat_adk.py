@@ -230,12 +230,14 @@ class InvestmentChatAgentLoader(BaseAgentLoader):
         get_default_registry: Callable[[str], ToolRegistry],
         default_tenant: str,
         invalidate_tenant_cache: Callable[..., Any] | None = None,
+        read_only: bool = False,
     ) -> None:
         self.repo = repo
         self.settings_for_tenant = settings_for_tenant
         self.get_default_registry = get_default_registry
         self.default_tenant = normalize_tenant(default_tenant)
         self.invalidate_tenant_cache = invalidate_tenant_cache
+        self.read_only = bool(read_only)
         self._cache: "OrderedDict[str, Any]" = OrderedDict()
 
     def _tenant_id(self, agent_name: str = "") -> str:
@@ -297,7 +299,7 @@ class InvestmentChatAgentLoader(BaseAgentLoader):
             provider=provider,
             model_id=model_id,
         )
-        cache_key = f"{agent_name}:{tenant}:{provider}:{model_id}:{fingerprint}"
+        cache_key = f"{agent_name}:{tenant}:{provider}:{model_id}:{int(self.read_only)}:{fingerprint}"
         cached = self._cache.get(cache_key)
         if cached is not None:
             self._cache.move_to_end(cache_key)
@@ -317,6 +319,7 @@ class InvestmentChatAgentLoader(BaseAgentLoader):
             provider=provider,
             model_override=model_id,
             invalidate_tenant_cache=self.invalidate_tenant_cache,
+            read_only=self.read_only,
         )
         self._cache[cache_key] = agent
         if len(self._cache) > _LOADER_CACHE_MAX_ENTRIES:
@@ -826,6 +829,7 @@ def build_investment_chat_adk_app(
     auth_enabled: bool = False,
     current_user: CurrentUserFn | None = None,
     invalidate_tenant_cache: Callable[..., Any] | None = None,
+    read_only: bool = False,
 ) -> FastAPI:
     loader = InvestmentChatAgentLoader(
         repo=repo,
@@ -833,6 +837,7 @@ def build_investment_chat_adk_app(
         get_default_registry=get_default_registry,
         default_tenant=default_tenant,
         invalidate_tenant_cache=invalidate_tenant_cache,
+        read_only=read_only,
     )
     session_service_uri = _default_session_service_uri()
     artifact_service_uri = str(os.getenv("ARENA_CHAT_ARTIFACT_SERVICE_URI") or "memory://").strip() or "memory://"
