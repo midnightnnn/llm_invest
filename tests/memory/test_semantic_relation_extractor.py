@@ -87,7 +87,7 @@ def test_memory_prompts_are_loaded_from_central_text_templates() -> None:
         ontology_block="ontology_version: test",
     )
 
-    assert "장기기억 정리 담당" in COMPACTION_SYSTEM_INSTRUCTION
+    assert "long-term memory curator" in COMPACTION_SYSTEM_INSTRUCTION
     assert "source-grounded semantic relation triples" in RELATION_EXTRACTOR_SYSTEM_INSTRUCTION
     assert "Extract up to 3 high-signal semantic relation triples." in prompt
     assert "Entity labels are canonical graph node names" in prompt
