@@ -65,3 +65,12 @@ def test_showcase_nav_has_chat_first() -> None:
 
     # Showcase chat link points to /showcase/{tenant}/investment-chat.
     assert "/showcase/acme/investment-chat" in aside
+
+
+def test_adk_readonly_mount_exists(monkeypatch) -> None:
+    from tests.ui.helpers import _client
+
+    client = _client(monkeypatch)
+    paths = {getattr(route, "path", "") for route in client.app.routes}
+    # FastAPI's app.mount creates a Mount route whose path is the prefix.
+    assert "/investment-chat/adk-readonly" in paths

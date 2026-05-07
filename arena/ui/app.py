@@ -523,6 +523,21 @@ def _build_app(*, repo: BigQueryRepository, settings: Settings) -> FastAPI:
         ),
     )
 
+    app.mount(
+        "/investment-chat/adk-readonly",
+        build_investment_chat_adk_app(
+            repo=repo,
+            settings_for_tenant=_settings_for_tenant,
+            get_default_registry=_get_default_registry,
+            default_tenant=_default_investment_chat_tenant(),
+            url_prefix="/investment-chat/adk-readonly",
+            auth_enabled=False,
+            current_user=None,
+            invalidate_tenant_cache=_invalidate_tenant_cache,
+            read_only=True,
+        ),
+    )
+
     register_settings_page_routes(
         app,
         deps=SettingsPageRouteDeps(
