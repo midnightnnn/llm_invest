@@ -334,8 +334,8 @@ class TestDividendSyncService:
         assert row["amount_krw"] == pytest.approx(6.0 * 0.50 * 0.85 * 1450.0)
         assert row["raw_payload_json"]["shares_source"] == "account_snapshot"
 
-    def test_dividend_cash_credit_falls_back_to_agent_holdings_when_snapshot_missing(self):
-        """When broker snapshot history is unavailable, agent holdings sum is used as fallback."""
+    def test_dividend_cash_credit_skips_broker_cash_when_snapshot_missing(self):
+        """Broker-level cash credit requires broker snapshot holdings on ex-date."""
         client = FakeClient(rights_by_ticker={
             "GILD": [{
                 "divi_amt": "0.50",
@@ -361,10 +361,9 @@ class TestDividendSyncService:
 
         result = svc.sync_dividends()
 
-        assert result.broker_cash_events_inserted == 1
-        row = repo.inserted_cash_rows[0]
-        assert row["raw_payload_json"]["shares_source"] == "agent_holdings_fallback"
-        assert row["amount_native"] == pytest.approx(3.0 * 0.50 * 0.85)
+        assert result.events_inserted == 2
+        assert result.broker_cash_events_inserted == 0
+        assert repo.inserted_cash_rows == []
 
     def test_fallback_field_names(self):
         """Parsing handles alternative KIS field names."""

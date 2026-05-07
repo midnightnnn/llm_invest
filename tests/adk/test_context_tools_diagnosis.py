@@ -13,6 +13,23 @@ from tests.adk.context_tools_helpers import (
 )
 
 
+def test_context_portfolio_weights_require_market_price_not_avg_cost() -> None:
+    tool = _ContextTools.__new__(_ContextTools)
+    tool._context = {
+        "portfolio": {
+            "positions": {
+                "AAPL": {"quantity": 10.0, "avg_price_krw": 100.0},
+            },
+        },
+    }
+
+    weights, stock_mv, cash = tool._portfolio_weights()
+
+    assert weights == {}
+    assert stock_mv == 0.0
+    assert cash == 0.0
+
+
 def test_portfolio_diagnosis_returns_derived_fields_not_raw_portfolio_echo() -> None:
     tool = _ContextTools.__new__(_ContextTools)
     tool.repo = _RepoForPortfolioDiagnosis()

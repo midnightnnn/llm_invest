@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import pytest
 
 from arena.config import Settings
+from arena.models import AccountSnapshot
 from arena.open_trading.sync import AccountSyncService, BrokerCashSyncService, BrokerTradeSyncService, MarketDataSyncService
 
 from tests.trading.open_trading_sync_helpers import (
@@ -55,7 +56,16 @@ def test_broker_cash_sync_normalizes_overseas_rows() -> None:
 
 
 def test_broker_cash_sync_skips_us_rows_without_fx() -> None:
-    repo = FakeBrokerCashRepo()
+    class _SnapshotRepo(FakeBrokerCashRepo):
+        def latest_account_snapshot(self):
+            return AccountSnapshot(
+                cash_krw=1_000_000.0,
+                total_equity_krw=1_000_000.0,
+                positions={},
+                usd_krw_rate=1450.0,
+            )
+
+    repo = _SnapshotRepo()
     settings = _settings("us", ["AAPL"])
     client = FakeBrokerTradeClient(
         overseas={

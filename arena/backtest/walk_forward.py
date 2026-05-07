@@ -239,6 +239,8 @@ def walk_forward_backtest(
     nav = 1.0
     nav_parts: list[pd.Series] = []
     alloc_rows: list[dict[str, Any]] = []
+    missing_return_days = 0
+    missing_return_cells = 0
 
     w_prev: dict[str, float] = {}
 
@@ -279,7 +281,7 @@ def walk_forward_backtest(
             # Keep tickers with enough observations.
             valid_cols = train.notna().sum(axis=0) >= min_obs
             train = train.loc[:, valid_cols]
-            train = train.fillna(0.0)
+            train = train.dropna(axis=0, how="any")
 
             tickers = [str(c).strip().upper() for c in train.columns if str(c).strip()]
             if len(tickers) >= 2 and len(train) >= min_obs:
@@ -326,6 +328,10 @@ def walk_forward_backtest(
                 )
 
         # Apply weights across this segment.
+        seg_missing = seg.isna()
+        if bool(seg_missing.to_numpy().any()):
+            missing_return_days += int(seg_missing.any(axis=1).sum())
+            missing_return_cells += int(seg_missing.sum().sum())
         if w_new:
             active_cols = [c for c in seg.columns if str(c).strip().upper() in w_new]
             if active_cols:
@@ -333,7 +339,18 @@ def walk_forward_backtest(
                 w_sum = float(np.sum(w_vec))
                 if w_sum > 0:
                     w_vec = w_vec / w_sum
-                seg_ret = seg[active_cols].fillna(0.0).to_numpy(dtype=float) @ w_vec
+                active_values = seg[active_cols].to_numpy(dtype=float)
+                valid_values = np.isfinite(active_values)
+                seg_ret_rows: list[float] = []
+                for values, valid in zip(active_values, valid_values, strict=False):
+                    row_weights = np.where(valid, w_vec, 0.0)
+                    row_weight_sum = float(np.sum(row_weights))
+                    if row_weight_sum <= 0:
+                        seg_ret_rows.append(0.0)
+                        continue
+                    row_weights = row_weights / row_weight_sum
+                    seg_ret_rows.append(float(np.nansum(np.where(valid, values, 0.0) * row_weights)))
+                seg_ret = np.array(seg_ret_rows, dtype=float)
                 daily_ret = pd.Series(seg_ret, index=seg.index)
             else:
                 daily_ret = pd.Series(0.0, index=seg.index)
@@ -387,6 +404,8 @@ def walk_forward_backtest(
         "rebalance_count": int(len(alloc_df["rebalance_date"].unique())) if not alloc_df.empty else 0,
         "avg_turnover": float(alloc_df["turnover"].mean()) if not alloc_df.empty else 0.0,
         "avg_cost_ratio": float(alloc_df["cost_ratio"].mean()) if not alloc_df.empty else 0.0,
+        "missing_return_days": int(missing_return_days),
+        "missing_return_cells": int(missing_return_cells),
     }
 
     return nav_df, alloc_df, summary

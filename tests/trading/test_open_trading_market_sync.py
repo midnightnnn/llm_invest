@@ -83,6 +83,25 @@ def test_market_sync_nasdaq_fails_without_live_fx() -> None:
     assert not repo.rows
 
 
+def test_market_sync_nasdaq_skips_eod_rows_when_daily_fx_empty() -> None:
+    class EmptyFxClient(FakeClient):
+        def get_usd_krw_daily_chart(self, *, symbol, start_date="", end_date="", market_div_code="X", period="D", max_pages=8):
+            _ = (symbol, start_date, end_date, market_div_code, period, max_pages)
+            return []
+
+    repo = FakeRepo()
+    settings = _settings("nasdaq", ["AAPL"])
+    settings.usd_krw_fx_symbol = "USDKRW"
+    settings.usd_krw_rate = 1450.0
+    service = MarketDataSyncService(settings=settings, repo=repo, client=EmptyFxClient())
+
+    result = service.sync_market_features()
+
+    assert result.inserted_rows == 0
+    assert "AAPL" in result.failed_tickers
+    assert not repo.rows
+
+
 def test_market_sync_kospi_builds_rows() -> None:
     repo = FakeRepo()
     settings = _settings("kospi", ["005930"])

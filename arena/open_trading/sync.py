@@ -925,48 +925,6 @@ class MarketDataSyncService:
                     end_date=end_date.isoformat(),
                 ),
             )
-            # Fallback: KIS daily FX chart returned empty (API shape change or
-            # symbol unsupported). Fill the requested window with the latest
-            # spot rate so slow prep can still materialize US daily rows. The
-            # approximation is OK for ranker/forecast training; the fallback
-            # is logged loudly so ops can restore authoritative daily FX.
-            spot = 0.0
-            try:
-                spot = self._latest_usd_krw_fx_rate()
-            except Exception as spot_exc:
-                logger.warning(
-                    "[yellow]USD/KRW spot fallback unavailable[/yellow] err=%s",
-                    str(spot_exc),
-                )
-            if spot <= 0:
-                spot = float(getattr(self.settings, "usd_krw_rate", 0) or 0.0)
-            if spot <= 0:
-                return self._usd_krw_daily_fx
-
-            from datetime import timedelta as _td
-
-            cursor = start_date
-            filled: dict[date, float] = {}
-            while cursor <= end_date:
-                filled[cursor] = float(spot)
-                cursor = cursor + _td(days=1)
-            self._usd_krw_daily_fx = filled
-            self._usd_krw_daily_fx_range = (start_date, end_date)
-            logger.warning(
-                "[yellow]USD/KRW daily FX using spot fallback[/yellow] spot=%.4f range=%s/%s filled=%d",
-                spot,
-                start_date.isoformat(),
-                end_date.isoformat(),
-                len(filled),
-                extra=event_extra(
-                    "usd_krw_daily_fx_spot_fallback",
-                    symbol=symbol,
-                    spot=spot,
-                    start_date=start_date.isoformat(),
-                    end_date=end_date.isoformat(),
-                    filled_days=len(filled),
-                ),
-            )
             return self._usd_krw_daily_fx
 
         self._usd_krw_daily_fx = {ts.date(): float(px) for ts, px in fx_series if float(px) > 0}
@@ -2332,25 +2290,6 @@ class BrokerTradeSyncService:
         self.repo = repo
         self.client = client or OpenTradingClient(settings)
 
-    def _fallback_fx_rate(self) -> float:
-        """Returns the latest account snapshot FX rate when available."""
-        loader = getattr(self.repo, "latest_account_snapshot", None)
-        if callable(loader):
-            try:
-                snap = loader()
-                if snap is not None and float(getattr(snap, "usd_krw_rate", 0.0) or 0.0) > 0:
-                    return float(snap.usd_krw_rate)
-            except Exception as exc:
-                logger.warning(
-                    "[yellow]broker_trade snapshot fx lookup failed[/yellow] err=%s",
-                    str(exc),
-                    extra=failure_extra(
-                        "broker_trade_snapshot_fx_lookup_failed",
-                        exc,
-                    ),
-                )
-        return 0.0
-
     def _parsed_markets(self) -> set[str]:
         return {m.strip() for m in str(self.settings.kis_target_market or "").split(",") if m.strip()}
 
@@ -2707,7 +2646,7 @@ class BrokerCashSyncService(BrokerTradeSyncService):
             _to_float(row.get("bass_exrt"), default=0.0),
             _to_float(row.get("exrt"), default=0.0),
         )
-        fx_rate = api_fx if api_fx > 0 else self._fallback_fx_rate()
+        fx_rate = api_fx
         if fx_rate <= 0:
             logger.warning(
                 "[yellow]Broker cash skipped (no FX)[/yellow] exchange=%s date=%s",
@@ -2817,7 +2756,7 @@ class BrokerCashSyncService(BrokerTradeSyncService):
             _to_float(row.get("erlm_exrt"), default=0.0),
             _to_float(row.get("bass_exrt"), default=0.0),
         )
-        fx_rate = api_fx if api_fx > 0 else self._fallback_fx_rate()
+        fx_rate = api_fx
         out: list[dict[str, Any]] = []
 
         fee_krw = (
@@ -3380,7 +3319,10 @@ class DividendSyncService:
         """
         lookback = lookback_days or self.settings.dividend_lookback_days
         us_withholding = self.settings.dividend_withholding_rate_us
-        usd_krw = max(usd_krw_override or self.settings.usd_krw_rate, 1.0)
+        try:
+            usd_krw = float(usd_krw_override if usd_krw_override is not None else self.settings.usd_krw_rate)
+        except (TypeError, ValueError):
+            usd_krw = 0.0
         tenant = self.repo.resolve_tenant_id()
         agents = agent_ids or self.settings.agent_ids
 
@@ -3431,6 +3373,20 @@ class DividendSyncService:
                         rrow, "ex_date", "ex_dt", "exdt", "bass_dt", "stdr_dt",
                     )
                 if ex_dt is None:
+                    continue
+
+                if usd_krw <= 0:
+                    logger.warning(
+                        "[yellow]Dividend sync skipped: USD/KRW rate missing[/yellow] ticker=%s ex_date=%s",
+                        ticker,
+                        ex_dt.isoformat(),
+                        extra=event_extra(
+                            "dividend_sync_fx_missing",
+                            ticker=ticker,
+                            tenant_id=tenant,
+                            ex_date=ex_dt.isoformat(),
+                        ),
+                    )
                     continue
 
                 dividends_found += 1
@@ -3544,8 +3500,19 @@ class DividendSyncService:
                                 ),
                             )
                     if total_shares <= 0:
-                        total_shares = sum(float(row.get("shares_held") or 0.0) for row in insert_rows)
-                        quantity_source = "agent_holdings_fallback"
+                        logger.warning(
+                            "[yellow]Dividend broker cash event skipped: broker holding snapshot missing[/yellow] ticker=%s ex_date=%s",
+                            ticker,
+                            ex_dt.isoformat(),
+                            extra=event_extra(
+                                "dividend_broker_cash_holding_snapshot_missing",
+                                ticker=ticker,
+                                tenant_id=tenant,
+                                ex_date=ex_dt.isoformat(),
+                                agent_dividend_events=len(insert_rows),
+                            ),
+                        )
+                        continue
 
                     cash_row = self._broker_dividend_cash_event(
                         tenant=tenant,

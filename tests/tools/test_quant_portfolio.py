@@ -114,11 +114,26 @@ def test_optimize_portfolio_decision_summary_without_context_is_suggestion() -> 
     assert ds["turnover"] == 0.0
 
 
+def test_portfolio_weights_require_market_price_not_avg_cost() -> None:
+    qt = QuantTools(repo=FakeRepo(), settings=_settings())
+    qt.set_context({
+        "target_market": "nasdaq",
+        "portfolio": {"positions": {"TSLA": {"quantity": 1.0, "avg_price_krw": 100.0}}},
+    })
+
+    weights, stock_mv, cash = qt._portfolio_weights()
+
+    assert weights == {}
+    assert stock_mv == 0.0
+    assert cash == 0.0
+
+
 def test_optimize_portfolio_decision_summary_rotate() -> None:
     qt = QuantTools(repo=FakeRepo(), settings=_settings())
     qt.set_context({
         "target_market": "nasdaq",
         "portfolio": {"positions": {"TSLA": {"quantity": 1.0, "avg_price_krw": 100.0}}},
+        "market_features": [{"ticker": "TSLA", "close_price_krw": 100.0}],
     })
     out = qt.optimize_portfolio(["AAPL", "MSFT", "TSLA"], strategy="risk_parity", lookback_days=20)
     ds = out["decision_summary"]
@@ -234,6 +249,10 @@ def test_optimize_portfolio_aligned_portfolio_headline_is_hold() -> None:
     # Now set a portfolio exactly matching the target weights (quantity * avg_price = weight).
     qt.set_context({
         "target_market": "nasdaq",
+        "market_features": [
+            {"ticker": "AAPL", "close_price_krw": 1.0},
+            {"ticker": "MSFT", "close_price_krw": 1.0},
+        ],
         "portfolio": {"positions": {
             "AAPL": {"quantity": target["AAPL"] * 100.0, "avg_price_krw": 1.0},
             "MSFT": {"quantity": target["MSFT"] * 100.0, "avg_price_krw": 1.0},

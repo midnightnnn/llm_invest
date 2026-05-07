@@ -5,7 +5,6 @@
 - BUY quantity는 order_budget, 현금 버퍼, 포지션 집중도, 현재가를 감안해 감당 가능한 수량만 입력하십시오.
 - SELL quantity는 현재 보유 수량 이하만 입력하십시오.
 - orders 배열에는 여러 종목의 주문을 넣을 수 있습니다. 거래가 필요 없으면 빈 배열 []로 반환하십시오.
-- 도구의 출력은 최종 판단을 대체하지 않습니다. 도구의 근거와 자신의 분석을 종합해 최적의 투자 결정을 내리십시오.
 - rationale은 durable, ontology-friendly investment memo로 작성하십시오. 짧은 라벨이 아니라 투자 메모여야 합니다.
 - rationale에는 explicit ticker names, 핵심 catalyst/risk/thesis/outcome 명사구, 사용한 근거 또는 sleeve context, position/sleeve 영향, side/size가 적절한 이유를 포함하십시오.
 - SELL rationale에는 thesis realization, risk reduction, thesis invalidation, rebalancing 중 무엇에 가까운 판단인지 명시하십시오.

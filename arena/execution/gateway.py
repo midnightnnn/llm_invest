@@ -349,28 +349,6 @@ class ExecutionGateway:
         logger.info("[cyan]Reconcile scan[/cyan] submitted=%d lookback_hours=%d", len(rows), lookback_hours)
 
         tenant = self._tenant_label()
-        snapshot_fx: float | None = None
-        snapshot_lookup_error = ""
-        latest_snapshot = getattr(self.repo, "latest_account_snapshot", None)
-        if callable(latest_snapshot):
-            try:
-                snapshot = latest_snapshot()
-            except Exception as exc:
-                snapshot = None
-                snapshot_lookup_error = str(exc)
-                logger.warning(
-                    "[yellow]Reconcile snapshot lookup failed; continuing without snapshot FX[/yellow] tenant=%s err=%s",
-                    tenant,
-                    snapshot_lookup_error,
-                    extra=failure_extra(
-                        "reconcile_snapshot_lookup_failed",
-                        exc,
-                        tenant_id=tenant,
-                    ),
-                    exc_info=True,
-                )
-            if snapshot is not None and float(getattr(snapshot, "usd_krw_rate", 0.0) or 0.0) > 0:
-                snapshot_fx = float(snapshot.usd_krw_rate)
 
         updated = 0
         reconcile_failed_orders: list[str] = []
@@ -383,8 +361,8 @@ class ExecutionGateway:
                     exchange_code=str(row.get("exchange_code") or ""),
                     side=str(row.get("side") or ""),
                     requested_qty=float(row.get("requested_qty") or 0.0),
-                    fallback_price_krw=float(row.get("avg_price_krw") or 0.0),
-                    fx_rate=float(row.get("fx_rate") or 0.0) or snapshot_fx,
+                    fallback_price_krw=0.0,
+                    fx_rate=float(row.get("fx_rate") or 0.0),
                 )
             except Exception as exc:
                 logger.warning(
@@ -454,7 +432,7 @@ class ExecutionGateway:
                 updated,
                 len(rows),
             )
-        if snapshot_lookup_error or reconcile_failed_orders or memory_sync_failed_orders:
+        if reconcile_failed_orders or memory_sync_failed_orders:
             logger.warning(
                 "[yellow]Submitted reconcile completed with warnings[/yellow] tenant=%s scanned=%d updated=%d reconcile_failed=%d memory_sync_failed=%d",
                 tenant,
@@ -471,7 +449,6 @@ class ExecutionGateway:
                     "updated": updated,
                     "reconcile_failed_orders": reconcile_failed_orders[:10],
                     "memory_sync_failed_orders": memory_sync_failed_orders[:10],
-                    "snapshot_lookup_error": snapshot_lookup_error,
                 },
             )
         return updated

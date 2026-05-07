@@ -543,11 +543,6 @@ class QuantTools:
                 continue
             px = px_map.get(t, 0.0)
             if px <= 0:
-                try:
-                    px = float(pos.get("avg_price_krw") or 0.0)
-                except (TypeError, ValueError):
-                    px = 0.0
-            if px <= 0:
                 continue
             values[t] = qty * px
 

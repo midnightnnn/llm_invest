@@ -201,7 +201,7 @@ def test_reconciliation_flags_checkpoint_seed_timestamp_mismatch() -> None:
     assert any(issue.issue_type == "checkpoint_seed_timestamp_mismatch" for issue in result.issues)
 
 
-def test_reconciliation_bootstraps_checkpoints_from_legacy_sleeves_for_backward_compatibility() -> None:
+def test_reconciliation_default_does_not_bootstrap_checkpoints_from_legacy_sleeves() -> None:
     repo = _FakeRepo()
     repo.snapshot = AccountSnapshot(
         cash_krw=100_000.0,
@@ -218,6 +218,40 @@ def test_reconciliation_bootstraps_checkpoints_from_legacy_sleeves_for_backward_
     }
 
     result = StateReconciliationService(settings=_settings(), repo=repo).reconcile_positions(
+        agent_ids=["gpt"],
+        tenant_id="midnightnnn",
+        auto_recover=True,
+    )
+
+    assert result.ok is True
+    assert result.status == "recovered"
+    assert "ensure_agent_state_checkpoints" in result.recoveries
+    assert "bootstrap_agent_state_checkpoints" not in result.recoveries
+    assert repo.checkpoint_configs["gpt"]["source"] == "ensure"
+    assert repo.reconciliation_runs[0]["summary"]["seed_source"] == "agent_state_checkpoints"
+
+
+def test_reconciliation_can_explicitly_bootstrap_checkpoints_from_legacy_sleeves() -> None:
+    repo = _FakeRepo()
+    repo.snapshot = AccountSnapshot(
+        cash_krw=100_000.0,
+        total_equity_krw=300_000.0,
+        positions={"AAPL": Position(ticker="AAPL", quantity=1.0, avg_price_krw=100_000.0, market_price_krw=120_000.0)},
+    )
+    repo.sleeve_configs = {
+        "gpt": {
+            "agent_id": "gpt",
+            "initialized_at": repo.snapshot_at,
+            "initial_cash_krw": 50_000.0,
+            "initial_positions_json": '[{"ticker":"AAPL","quantity":1}]',
+        },
+    }
+
+    result = StateReconciliationService(
+        settings=_settings(),
+        repo=repo,
+        allow_legacy_sleeve_seed=True,
+    ).reconcile_positions(
         agent_ids=["gpt"],
         tenant_id="midnightnnn",
         auto_recover=True,

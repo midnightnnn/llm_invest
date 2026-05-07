@@ -63,6 +63,22 @@ class _Broker:
         )
 
 
+class _RecordingBroker:
+    def __init__(self) -> None:
+        self.calls = []
+
+    def reconcile_submitted(self, **kwargs):
+        self.calls.append(dict(kwargs))
+        return ExecutionReport(
+            status=ExecutionStatus.FILLED,
+            order_id="ord_1",
+            filled_qty=2.0,
+            avg_price_krw=101_000.0,
+            message="reconciled",
+            created_at=utc_now(),
+        )
+
+
 class _FilledBroker:
     def place_order(self, intent, *, fx_rate=None):
         _ = (intent, fx_rate)
@@ -128,6 +144,27 @@ def test_reconcile_submitted_orders_updates_execution_row() -> None:
     assert intent.intent_id == "intent_1"
     assert report.order_id == "ord_1"
     assert report.status.value == "FILLED"
+
+
+def test_reconcile_submitted_orders_does_not_inject_snapshot_fx() -> None:
+    class _SnapshotRepo(_Repo):
+        def latest_account_snapshot(self):
+            return AccountSnapshot(
+                cash_krw=1_000_000.0,
+                total_equity_krw=1_000_000.0,
+                positions={},
+                usd_krw_rate=1450.0,
+            )
+
+    repo = _SnapshotRepo()
+    broker = _RecordingBroker()
+    gateway = ExecutionGateway(repo=repo, risk_engine=object(), broker=broker, memory_store=object())
+
+    updated = gateway.reconcile_submitted_orders(limit=50, lookback_hours=24)
+
+    assert updated == 1
+    assert broker.calls[0]["fx_rate"] == 0.0
+    assert broker.calls[0]["fallback_price_krw"] == 0.0
 
 
 def test_reconcile_submitted_orders_syncs_memory_store() -> None:

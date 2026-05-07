@@ -71,6 +71,31 @@ def test_walk_forward_backtest_runs_min_vol() -> None:
     assert set(alloc_df.columns) == {"rebalance_date", "ticker", "weight", "turnover", "cost_ratio"}
 
 
+def test_walk_forward_backtest_tracks_missing_segment_returns() -> None:
+    idx = pd.bdate_range("2024-01-02", periods=80)
+    returns = pd.DataFrame(0.001, index=idx, columns=["AAPL", "MSFT"])
+    returns.loc[idx[30], "MSFT"] = np.nan
+
+    cfg = WalkForwardConfig(
+        start=idx[20].date(),
+        end=idx[-1].date(),
+        lookback_days=15,
+        min_obs=10,
+        rebalance_freq="W-FRI",
+        fee_bps=0.0,
+        smooth_alpha=1.0,
+        max_weight_delta=1.0,
+        hysteresis_abs=0.0,
+    )
+
+    nav_df, _alloc_df, summary = walk_forward_backtest(returns, config=cfg, strategy="min_vol")
+
+    assert not nav_df.empty
+    assert not nav_df["daily_return"].isna().any()
+    assert summary["missing_return_days"] == 1
+    assert summary["missing_return_cells"] == 1
+
+
 def test_walk_forward_backtest_rejects_unknown_strategy() -> None:
     idx = pd.bdate_range("2024-01-02", periods=80)
     returns = pd.DataFrame(0.001, index=idx, columns=["AAPL", "MSFT", "NVDA"])

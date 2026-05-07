@@ -83,6 +83,7 @@ class StateReconciliationService:
         qty_tolerance: float = 1e-9,
         cash_tolerance_krw: float = 1.0,
         cash_reconciliation_enabled: bool = False,
+        allow_legacy_sleeve_seed: bool = False,
     ) -> None:
         self.settings = settings
         self.repo = repo
@@ -94,6 +95,7 @@ class StateReconciliationService:
         self.qty_tolerance = max(float(qty_tolerance), 0.0)
         self.cash_tolerance_krw = max(float(cash_tolerance_krw), 0.0)
         self.cash_reconciliation_enabled = bool(cash_reconciliation_enabled)
+        self.allow_legacy_sleeve_seed = bool(allow_legacy_sleeve_seed)
 
     def _tenant_token(self, tenant_id: str | None = None) -> str:
         resolver = getattr(self.repo, "resolve_tenant_id", None)
@@ -665,9 +667,9 @@ class StateReconciliationService:
 
         if checkpoint_missing and auto_recover:
             latest_sleeves = getattr(self.repo, "latest_agent_sleeves", None)
-            if callable(latest_sleeves):
+            if self.allow_legacy_sleeve_seed and callable(latest_sleeves):
                 legacy_configs = latest_sleeves(agent_ids=agent_tokens, tenant_id=tenant)
-            if legacy_configs and self._bootstrap_checkpoints_from_sleeves(
+            if self.allow_legacy_sleeve_seed and legacy_configs and self._bootstrap_checkpoints_from_sleeves(
                 configs=legacy_configs,
                 agent_ids=[agent_id for agent_id in agent_tokens if agent_id in legacy_configs],
                 tenant_id=tenant,
@@ -705,55 +707,59 @@ class StateReconciliationService:
                     recoveries.append("ensure_agent_sleeves")
 
         if checkpoint_missing or self._issues_have_errors(checkpoint_issues):
-            latest_sleeves = getattr(self.repo, "latest_agent_sleeves", None)
-            if callable(latest_sleeves):
-                legacy_configs = latest_sleeves(agent_ids=agent_tokens, tenant_id=tenant)
-            issues.append(
-                ReconciliationIssue(
-                    severity="warning",
-                    issue_type="checkpoint_seed_fallback_to_legacy_sleeve",
-                    entity_type="checkpoint_seed",
-                    entity_key="latest",
-                    detail={
-                        "missing_agents": list(checkpoint_missing),
-                        "checkpoint_issue_types": [issue.issue_type for issue in checkpoint_issues],
-                    },
+            if not self.allow_legacy_sleeve_seed:
+                issues.extend(checkpoint_issues)
+                missing = checkpoint_missing
+            else:
+                latest_sleeves = getattr(self.repo, "latest_agent_sleeves", None)
+                if callable(latest_sleeves):
+                    legacy_configs = latest_sleeves(agent_ids=agent_tokens, tenant_id=tenant)
+                issues.append(
+                    ReconciliationIssue(
+                        severity="warning",
+                        issue_type="checkpoint_seed_fallback_to_legacy_sleeve",
+                        entity_type="checkpoint_seed",
+                        entity_key="latest",
+                        detail={
+                            "missing_agents": list(checkpoint_missing),
+                            "checkpoint_issue_types": [issue.issue_type for issue in checkpoint_issues],
+                        },
+                    )
                 )
-            )
-            if checkpoint_missing or checkpoint_issues:
-                for issue in checkpoint_issues:
-                    severity = str(issue.severity or "").strip().lower()
-                    if severity == "error":
-                        issues.append(
-                            ReconciliationIssue(
-                                severity="warning",
-                                issue_type=issue.issue_type,
-                                entity_type=issue.entity_type,
-                                entity_key=issue.entity_key,
-                                expected=issue.expected,
-                                actual=issue.actual,
-                                detail={
-                                    **(issue.detail or {}),
-                                    "fallback_to": "agent_sleeves",
-                                },
+                if checkpoint_missing or checkpoint_issues:
+                    for issue in checkpoint_issues:
+                        severity = str(issue.severity or "").strip().lower()
+                        if severity == "error":
+                            issues.append(
+                                ReconciliationIssue(
+                                    severity="warning",
+                                    issue_type=issue.issue_type,
+                                    entity_type=issue.entity_type,
+                                    entity_key=issue.entity_key,
+                                    expected=issue.expected,
+                                    actual=issue.actual,
+                                    detail={
+                                        **(issue.detail or {}),
+                                        "fallback_to": "agent_sleeves",
+                                    },
+                                )
                             )
-                        )
-                    else:
-                        issues.append(issue)
+                        else:
+                            issues.append(issue)
 
-            seed_source = "agent_sleeves"
-            seed_positions, seed_at, missing, seed_issues = self._seed_positions_from_latest_sleeves(
-                agent_ids=agent_tokens,
-                tenant_id=tenant,
-            )
-            issues.extend(seed_issues)
+                seed_source = "agent_sleeves"
+                seed_positions, seed_at, missing, seed_issues = self._seed_positions_from_latest_sleeves(
+                    agent_ids=agent_tokens,
+                    tenant_id=tenant,
+                )
+                issues.extend(seed_issues)
 
-            if checkpoint_missing and legacy_configs and auto_recover and self._bootstrap_checkpoints_from_sleeves(
-                configs=legacy_configs,
-                agent_ids=[agent_id for agent_id in agent_tokens if agent_id in legacy_configs],
-                tenant_id=tenant,
-            ):
-                recoveries.append("bootstrap_agent_state_checkpoints")
+                if checkpoint_missing and legacy_configs and auto_recover and self._bootstrap_checkpoints_from_sleeves(
+                    configs=legacy_configs,
+                    agent_ids=[agent_id for agent_id in agent_tokens if agent_id in legacy_configs],
+                    tenant_id=tenant,
+                ):
+                    recoveries.append("bootstrap_agent_state_checkpoints")
         else:
             missing = checkpoint_missing
 
@@ -761,7 +767,7 @@ class StateReconciliationService:
             issues.append(
                 ReconciliationIssue(
                     severity="error",
-                    issue_type="missing_agent_sleeve",
+                    issue_type="missing_agent_checkpoint" if seed_source == "agent_state_checkpoints" else "missing_agent_sleeve",
                     entity_type="agent",
                     entity_key=agent_id,
                     detail={"tenant_id": tenant},
