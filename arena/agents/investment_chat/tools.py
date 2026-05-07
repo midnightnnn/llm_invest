@@ -16,15 +16,22 @@ def build_chat_tool_entries(
     settings: Settings,
     tenant_id: str,
     invalidate_tenant_cache: Callable[..., Any] | None = None,
+    read_only: bool = False,
 ) -> list[ToolEntry]:
-    return [
+    entries: list[ToolEntry] = [
         *build_account_tool_entries(repo=repo, settings=settings, tenant_id=tenant_id),
         *build_history_tool_entries(repo=repo, tenant_id=tenant_id),
-        *build_order_tool_entries(repo=repo, settings=settings, tenant_id=tenant_id),
-        *build_config_tool_entries(
-            repo=repo,
-            settings=settings,
-            tenant_id=tenant_id,
-            invalidate_tenant_cache=invalidate_tenant_cache,
-        ),
     ]
+    if not read_only:
+        entries.extend(
+            build_order_tool_entries(repo=repo, settings=settings, tenant_id=tenant_id)
+        )
+        entries.extend(
+            build_config_tool_entries(
+                repo=repo,
+                settings=settings,
+                tenant_id=tenant_id,
+                invalidate_tenant_cache=invalidate_tenant_cache,
+            )
+        )
+    return entries
