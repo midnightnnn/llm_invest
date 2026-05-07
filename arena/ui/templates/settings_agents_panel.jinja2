@@ -1,4 +1,48 @@
 <section data-settings-panel="agents" class="settings-panel hidden rounded-[24px] border border-ink-200/60 bg-white/80 p-6 shadow-sm backdrop-blur-md">
+  {% if chat_provider_options %}
+  <section class="mb-5 rounded-2xl border border-ink-200/60 bg-white/80 p-4 backdrop-blur">
+    <header class="mb-3 flex items-baseline justify-between">
+      <h3 class="font-display text-sm font-semibold text-ink-900">Chat Provider/Model</h3>
+      <p class="text-[11px] text-ink-500">투자챗봇이 사용하는 LLM. 페이지 진입 시 이 값이 적용됩니다.</p>
+    </header>
+    <form method="post" action="/settings/chat-model" class="flex flex-wrap items-center gap-2">
+      <input type="hidden" name="tenant_id" value="{{ tenant }}" />
+      <select name="provider" class="h-9 rounded-md border border-ink-200 bg-white px-2 text-xs font-semibold text-ink-700" data-chat-provider-settings>
+        {% for item in chat_provider_options %}
+        <option value="{{ item.value }}" {{ 'selected' if item.value == chat_provider_current else '' }}>{{ item.label }}</option>
+        {% endfor %}
+      </select>
+      <select name="model" class="h-9 min-w-0 flex-1 rounded-md border border-ink-200 bg-white px-2 font-mono text-xs text-ink-700 sm:max-w-[460px]" data-chat-model-settings>
+        {% for option in chat_model_options %}
+        <option value="{{ option }}" {{ 'selected' if option == chat_model_current else '' }}>{{ option }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit" class="h-9 rounded-md bg-ink-900 px-3 text-xs font-semibold text-white hover:bg-ink-800">Apply</button>
+    </form>
+  </section>
+  <script type="application/json" id="settings-chat-model-map">{{ chat_model_presets | tojson }}</script>
+  <script>
+    (function() {
+      var provider = document.querySelector('[data-chat-provider-settings]');
+      var model = document.querySelector('[data-chat-model-settings]');
+      var raw = document.getElementById('settings-chat-model-map');
+      if (!provider || !model || !raw) return;
+      var presets = {};
+      try { presets = JSON.parse(raw.textContent || '{}') || {}; } catch (_e) { presets = {}; }
+      provider.addEventListener('change', function() {
+        var values = presets[provider.value] || [];
+        model.innerHTML = '';
+        values.forEach(function(v) {
+          var opt = document.createElement('option');
+          opt.value = v;
+          opt.textContent = v;
+          model.appendChild(opt);
+        });
+        if (values.length) model.value = values[0];
+      });
+    })();
+  </script>
+  {% endif %}
   <h3 class="font-display text-lg font-semibold">Agents <span class="info-tip" data-tip="에이전트별 모델·프롬프트·리스크·도구를 독립 설정합니다.&#10;변경 후 Save를 눌러야 반영됩니다.">?</span></h3>
   <div class="mt-4">
     {% if research_banner %}

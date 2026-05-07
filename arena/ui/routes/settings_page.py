@@ -237,6 +237,7 @@ def register_settings_page_routes(app: FastAPI, *, deps: SettingsPageRouteDeps) 
             provider_api_key_help_html=_provider_api_key_help_html,
             is_live_mode=_is_live_mode,
             default_capital_krw=int(admin_vm["sleeve_capital_krw"]),
+            repo=repo,
         )
 
         mcp_panel = build_mcp_panel(

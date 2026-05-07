@@ -88,3 +88,20 @@ def test_settings_banner_appears_on_all_tabs(monkeypatch) -> None:
     for tab in ("agents", "capital", "mcp", "memory"):
         resp = client.get("/settings", params={"tab": tab})
         assert "투자챗봇으로 변경 가능합니다" in resp.text, f"missing banner on tab={tab}"
+
+
+def test_settings_agents_tab_has_chat_provider_card(monkeypatch) -> None:
+    client = _client(monkeypatch)
+    body = client.get("/settings", params={"tab": "agents"}).text
+    assert "Chat Provider/Model" in body
+    assert 'action="/settings/chat-model"' in body
+    assert 'name="provider"' in body
+    assert 'name="model"' in body
+
+
+def test_showcase_agents_tab_has_no_chat_provider_card(monkeypatch) -> None:
+    monkeypatch.setenv("ARENA_SHOWCASE_TENANT", "midnightnnn")
+    client = _client(monkeypatch)
+    body = client.get("/showcase/midnightnnn/settings", params={"tab": "agents"}).text
+    assert "Chat Provider/Model" not in body
+    assert "/settings/chat-model" not in body
