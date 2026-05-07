@@ -305,6 +305,12 @@
         backdrop-filter: none;
       }
     }
+    body[data-active="investment_chat"] .arena-sidebar,
+    body[data-active="investment_chat"] .sidebar-collapse-toggle,
+    body[data-active="investment_chat"] .sidebar-collapse-toggle svg {
+      transition: none !important;
+      will-change: auto;
+    }
   </style>
 </head>
 <body class="text-ink-900 antialiased selection:bg-brand-300 selection:text-ink-900" data-active="{{ active }}">

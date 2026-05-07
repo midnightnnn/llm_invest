@@ -56,6 +56,22 @@ def cheap_chat_model_for_provider(
     return normalize_chat_model_selection(provider_token, configured)
 
 
+def normalize_stored_advisor_model_selection(
+    provider: str | None,
+    model: str | None,
+    *,
+    advisor_default_model: str = "",
+    chat_config: Mapping[str, Any] | None = None,
+) -> str:
+    """Normalizes stored/session advisor models without overriding the tenant agent model."""
+    provider_token = canonical_provider(provider) or str(provider or "").strip().lower()
+    model_token = normalize_chat_model_selection(provider_token, model)
+    advisor_default = normalize_chat_model_selection(provider_token, advisor_default_model)
+    if model_token and advisor_default and model_token != advisor_default:
+        return ""
+    return model_token
+
+
 def tenant_default_chat_selection(
     settings: Settings,
     *,

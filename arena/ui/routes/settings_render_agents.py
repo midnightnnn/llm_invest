@@ -6,6 +6,7 @@ from typing import Any, Callable, Mapping, Sequence
 from arena.agents.investment_chat.config_tools import load_chat_agent_config
 from arena.agents.investment_chat.selection import (
     normalize_chat_model_selection,
+    normalize_stored_advisor_model_selection,
     tenant_default_chat_selection,
 )
 from arena.config import Settings
@@ -240,10 +241,14 @@ def build_agents_panel(
             if chat_provider_current
             else ""
         )
-        chat_model_current = normalize_chat_model_selection(
+        chat_model_current = normalize_stored_advisor_model_selection(
             chat_provider_current,
-            chat_config.get("model") or chat_default_model,
+            chat_config.get("model"),
+            advisor_default_model=chat_default_model,
+            chat_config=chat_config,
         )
+        if not chat_model_current:
+            chat_model_current = normalize_chat_model_selection(chat_provider_current, chat_default_model)
         chat_model_options_list = _chat_model_options(
             chat_provider_current, chat_default_model, chat_model_current
         )

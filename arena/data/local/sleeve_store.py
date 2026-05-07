@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 import json
 from typing import Any
+from uuid import uuid4
 
 from arena.data.local.session import DuckDBSession
 from arena.models import AccountSnapshot, Position, utc_now
@@ -46,6 +47,27 @@ class LocalSleeveStore:
             "quote_currency": pos.quote_currency,
             "fx_rate": pos.fx_rate,
         }
+
+    @staticmethod
+    def _as_utc_naive(value: Any) -> datetime | None:
+        if not isinstance(value, datetime):
+            return None
+        if value.tzinfo is None:
+            return value
+        return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+    @staticmethod
+    def _signed_capital_amount(event_type: Any, amount_krw: Any) -> float:
+        try:
+            amount = abs(float(amount_krw or 0.0))
+        except (TypeError, ValueError):
+            amount = 0.0
+        token = str(event_type or "").strip().upper()
+        if "WITHDRAW" in token or token in {"OUTFLOW", "DEBIT"}:
+            return -amount
+        if amount <= 0:
+            return 0.0
+        return amount
 
     def latest_agent_sleeves(self, *, agent_ids: list[str] | None = None, tenant_id: str | None = None) -> dict[str, dict[str, Any]]:
         tenant = self._tenant_token(tenant_id)
@@ -185,21 +207,172 @@ class LocalSleeveStore:
         cash_krw: float,
         positions: list[dict[str, Any]],
         source: str,
+        created_by: str = "local",
+        detail: dict[str, Any] | None = None,
     ) -> None:
         self.session.insert_dict(
             "agent_state_checkpoints",
             {
                 "tenant_id": tenant,
-                "event_id": f"checkpoint_{agent_id}_{int(checkpoint_at.timestamp())}",
+                "event_id": f"checkpoint_{agent_id}_{uuid4().hex[:20]}",
                 "checkpoint_at": checkpoint_at,
                 "agent_id": agent_id,
                 "cash_krw": float(cash_krw),
                 "positions_json": json.dumps(positions, ensure_ascii=False, default=str),
                 "source": source,
-                "created_by": "local",
-                "detail_json": json.dumps({"source": source}, ensure_ascii=False),
+                "created_by": str(created_by or "").strip() or "local",
+                "detail_json": json.dumps({"source": source, **dict(detail or {})}, ensure_ascii=False),
             },
         )
+
+    def append_capital_events(self, rows: list[dict[str, Any]], *, tenant_id: str | None = None) -> int:
+        tenant = self._tenant_token(tenant_id)
+        payloads: list[dict[str, Any]] = []
+        for row in rows or []:
+            if not isinstance(row, dict):
+                continue
+            agent = str(row.get("agent_id") or "").strip()
+            if not agent:
+                continue
+            try:
+                amount = abs(float(row.get("amount_krw") or 0.0))
+            except (TypeError, ValueError):
+                amount = 0.0
+            if amount <= 0:
+                continue
+            payloads.append(
+                {
+                    "tenant_id": tenant,
+                    "event_id": str(row.get("event_id") or f"cap_{uuid4().hex[:20]}"),
+                    "occurred_at": row.get("occurred_at") or utc_now(),
+                    "agent_id": agent,
+                    "amount_krw": amount,
+                    "event_type": str(row.get("event_type") or "INJECTION").strip().upper() or "INJECTION",
+                    "reason": str(row.get("reason") or "").strip() or None,
+                    "created_by": str(row.get("created_by") or "").strip() or None,
+                }
+            )
+        return self.session.insert_dicts("capital_events", payloads)
+
+    def capital_events_since(
+        self,
+        *,
+        agent_id: str,
+        since: datetime,
+        tenant_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        tenant = self._tenant_token(tenant_id)
+        agent = str(agent_id or "").strip()
+        if not agent:
+            return []
+        return self.session.fetch_rows(
+            """
+            SELECT tenant_id, event_id, occurred_at, agent_id, amount_krw, event_type, reason, created_by
+            FROM capital_events
+            WHERE tenant_id = $tenant_id
+              AND agent_id = $agent_id
+              AND occurred_at >= $since
+            ORDER BY occurred_at ASC, event_id ASC
+            """,
+            {"tenant_id": tenant, "agent_id": agent, "since": since},
+        )
+
+    def retarget_agent_capitals_preserve_positions(
+        self,
+        *,
+        agent_ids: list[str],
+        target_sleeve_capital_krw: float,
+        target_capitals: dict[str, float] | None = None,
+        occurred_at: datetime | None = None,
+        include_simulated: bool = True,
+        sources: list[str] | None = None,
+        tenant_id: str | None = None,
+        created_by: str = "system",
+    ) -> dict[str, dict[str, Any]]:
+        tenant = self._tenant_token(tenant_id)
+        tokens = list(dict.fromkeys(str(a or "").strip() for a in agent_ids if str(a or "").strip()))
+        if not tokens:
+            return {}
+        try:
+            default_target = float(target_sleeve_capital_krw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("target_sleeve_capital_krw must be numeric") from exc
+        if default_target <= 0:
+            raise ValueError("target_sleeve_capital_krw must be > 0")
+
+        ts = occurred_at or utc_now()
+        result: dict[str, dict[str, Any]] = {}
+        event_rows: list[dict[str, Any]] = []
+        checkpoint_rows: dict[str, tuple[AccountSnapshot, float]] = {}
+
+        for agent in tokens:
+            snapshot, baseline_equity, _meta = self.build_agent_sleeve_snapshot(
+                agent_id=agent,
+                sources=sources,
+                include_simulated=include_simulated,
+                tenant_id=tenant,
+            )
+            positions_value = sum(pos.market_value_krw() for pos in snapshot.positions.values())
+            current_cash = float(snapshot.cash_krw)
+            current_equity = current_cash + positions_value
+            agent_target = float((target_capitals or {}).get(agent, default_target))
+            delta_cash = agent_target - float(baseline_equity)
+            new_cash = current_cash + delta_cash
+            over_target = False
+            if new_cash < 0:
+                delta_cash = -current_cash
+                new_cash = 0.0
+                over_target = True
+
+            result[agent] = {
+                "target_sleeve_capital_krw": float(agent_target),
+                "effective_target_equity_krw": float(current_equity + delta_cash),
+                "positions_value_krw": float(positions_value),
+                "current_cash_krw": float(current_cash),
+                "target_cash_krw": float(new_cash),
+                "capital_flow_krw": float(delta_cash),
+                "event_type": "NOOP",
+                "over_target": bool(over_target),
+                "equity_krw_before_adjustment": float(snapshot.total_equity_krw),
+                "baseline_equity_krw_before_adjustment": float(baseline_equity),
+            }
+            if abs(delta_cash) <= 1e-9:
+                continue
+            event_type = "INJECTION" if delta_cash > 0 else "WITHDRAWAL"
+            event_rows.append(
+                {
+                    "event_id": f"cap_{uuid4().hex[:20]}",
+                    "occurred_at": ts,
+                    "agent_id": agent,
+                    "amount_krw": abs(float(delta_cash)),
+                    "event_type": event_type,
+                    "reason": "retarget_preserve_positions",
+                    "created_by": str(created_by or "").strip() or "system",
+                }
+            )
+            result[agent]["event_type"] = event_type
+            checkpoint_rows[agent] = (snapshot, float(new_cash))
+
+        if event_rows:
+            self.append_capital_events(event_rows, tenant_id=tenant)
+            checkpoint_at = ts + timedelta(microseconds=1)
+            for agent, (snapshot, new_cash) in checkpoint_rows.items():
+                positions = [
+                    self._position_to_payload(pos)
+                    for pos in sorted(snapshot.positions.values(), key=lambda p: str(p.ticker or ""))
+                    if float(pos.quantity or 0.0) > 0
+                ]
+                self._write_checkpoint(
+                    tenant=tenant,
+                    agent_id=agent,
+                    checkpoint_at=checkpoint_at,
+                    cash_krw=new_cash,
+                    positions=positions,
+                    source="capital_events.retarget",
+                    created_by=created_by,
+                    detail={**result.get(agent, {}), "mode": "capital_retarget"},
+                )
+        return result
 
     def _seed_for_agent(self, *, agent_id: str, tenant_id: str, as_of_ts: datetime | None = None) -> tuple[datetime, float, list[dict[str, Any]], str]:
         checkpoint_filters = ["tenant_id = $tenant_id", "agent_id = $agent_id"]
@@ -344,6 +517,21 @@ class LocalSleeveStore:
         for row in executions:
             cash = self._apply_execution(positions=positions, cash_krw=cash, row=row)
 
+        capital_flow_krw = 0.0
+        capital_event_count = 0
+        as_of_naive = self._as_utc_naive(as_of_ts)
+        for event in self.capital_events_since(agent_id=agent, since=since, tenant_id=tenant):
+            event_ts = self._as_utc_naive(event.get("occurred_at"))
+            if as_of_naive is not None and event_ts is not None and event_ts > as_of_naive:
+                continue
+            delta = self._signed_capital_amount(event.get("event_type"), event.get("amount_krw"))
+            if abs(delta) <= 1e-9:
+                continue
+            cash += delta
+            baseline += delta
+            capital_flow_krw += delta
+            capital_event_count += 1
+
         if positions and self._market is not None:
             try:
                 prices = self._market.latest_close_prices_with_currency(
@@ -364,7 +552,12 @@ class LocalSleeveStore:
         return (
             AccountSnapshot(cash_krw=cash, total_equity_krw=total, positions=positions),
             baseline,
-            {"seed_source": source, "valuation_source": "local_sleeve_replay", "capital_flow_krw": 0.0},
+            {
+                "seed_source": source,
+                "valuation_source": "local_sleeve_replay",
+                "capital_flow_krw": float(capital_flow_krw),
+                "capital_event_count": int(capital_event_count),
+            },
         )
 
     def write_account_snapshot(self, snapshot: AccountSnapshot, *, tenant_id: str | None = None) -> None:

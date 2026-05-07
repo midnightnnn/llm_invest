@@ -200,6 +200,8 @@ def test_prompt_pack_renders_investment_chat_router_instruction() -> None:
     assert "Utility model: gpt-5.4-mini" in prompt
     assert "investment_chat_advisor" in prompt
     assert "investment_chat_utility" in prompt
+    assert "Deterministic model/tool/sleeve-capital settings changes" in prompt
+    assert "asks you to choose an allocation" in prompt
     assert "Do not provide substantive investment analysis in the router" in prompt
 
 
@@ -215,6 +217,9 @@ def test_prompt_pack_renders_investment_chat_utility_instruction() -> None:
     assert "Tenant: midnightnnn" in prompt
     assert "Provider: claude" in prompt
     assert "Model: claude-haiku-4-5-20251001" in prompt
-    assert "configuration-change proposals" in prompt
+    assert "configuration-change drafts" in prompt
+    assert 'capital_allocation_mode="add_krw"' in prompt
+    assert 'capital_allocation_mode="fixed_krw"' in prompt
+    assert "Do not transfer deterministic configuration changes" in prompt
     assert "Do not give investment advice" in prompt
     assert "investment_chat_advisor" in prompt

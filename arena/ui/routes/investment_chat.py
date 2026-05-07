@@ -7,7 +7,7 @@ from urllib.parse import urlencode
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from arena.agents.investment_chat.context import REQUEST_USER_EMAIL
+from arena.agents.investment_chat.context import REQUEST_USER_EMAIL, normalize_tenant
 from arena.agents.investment_chat.config_tools import (
     build_config_bridge_tool_entries,
     load_chat_agent_config,
@@ -15,7 +15,11 @@ from arena.agents.investment_chat.config_tools import (
 )
 from arena.agents.investment_chat.drafts import load_draft
 from arena.agents.investment_chat.order_tools import build_order_bridge_tool_entries
-from arena.agents.investment_chat.selection import normalize_chat_model_selection, tenant_default_chat_selection
+from arena.agents.investment_chat.selection import (
+    normalize_chat_model_selection,
+    normalize_stored_advisor_model_selection,
+    tenant_default_chat_selection,
+)
 from arena.providers.registry import canonical_provider, default_model_for_provider, list_adk_provider_specs
 from arena.ui.investment_chat_providers import tenant_available_provider_specs
 from arena.ui.routes.viewer import ViewerRouteDeps
@@ -199,16 +203,23 @@ def register_investment_chat_routes(app: FastAPI, *, deps: ViewerRouteDeps) -> N
         model_token = normalize_chat_model_selection(provider_token, model_token)
         stored_provider = canonical_provider(chat_config.get("provider")) or str(chat_config.get("provider") or "").strip().lower()
         if not model_token and stored_provider == provider_token:
-            model_token = normalize_chat_model_selection(provider_token, chat_config.get("model"))
+            model_token = normalize_stored_advisor_model_selection(
+                provider_token,
+                chat_config.get("model"),
+                advisor_default_model=default_model,
+                chat_config=chat_config,
+            )
         if not model_token and session_tenant == tenant:
             try:
                 session_provider = canonical_provider(request.session.get("investment_chat_provider")) or str(
                     request.session.get("investment_chat_provider") or ""
                 ).strip().lower()
                 if session_provider == provider_token:
-                    model_token = normalize_chat_model_selection(
+                    model_token = normalize_stored_advisor_model_selection(
                         provider_token,
                         request.session.get("investment_chat_model"),
+                        advisor_default_model=default_model,
+                        chat_config=chat_config,
                     )
             except Exception:
                 model_token = ""

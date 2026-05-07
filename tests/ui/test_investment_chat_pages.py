@@ -174,7 +174,7 @@ def test_investment_chat_provider_options_come_from_adk_provider_registry(monkey
     assert client.session["investment_chat_model"] == "deepseek-reasoner"
 
 
-def test_investment_chat_page_defaults_to_stored_chat_agent_config(monkeypatch) -> None:
+def test_investment_chat_page_uses_stored_provider_with_tenant_agent_model(monkeypatch) -> None:
     import arena.ui.app as ui_app
 
     monkeypatch.setenv("ARENA_UI_AUTH_ENABLED", "false")
@@ -197,9 +197,9 @@ def test_investment_chat_page_defaults_to_stored_chat_agent_config(monkeypatch) 
 
     assert response.status_code == 200
     assert "data-chat-selector-form" not in response.text
-    assert "/investment-chat/adk/dev-ui/?tenant_id=local&amp;provider=claude&amp;model=claude-opus-4-7" in response.text
+    assert "/investment-chat/adk/dev-ui/?tenant_id=local&amp;provider=claude&amp;model=claude-sonnet-4-6" in response.text
     assert client.session["investment_chat_provider"] == "claude"
-    assert client.session["investment_chat_model"] == "claude-opus-4-7"
+    assert client.session["investment_chat_model"] == "claude-sonnet-4-6"
 
 
 def test_investment_chat_page_defaults_to_tenant_agent_model(monkeypatch) -> None:
@@ -264,6 +264,86 @@ def test_investment_chat_page_ignores_stale_session_provider_for_new_tenant(monk
     assert client.session["investment_chat_tenant_id"] == "cxznms"
     assert client.session["investment_chat_provider"] == "claude"
     assert client.session["investment_chat_model"] == "claude-sonnet-4-6"
+
+
+def test_investment_chat_page_ignores_stale_session_cheap_model(monkeypatch) -> None:
+    import arena.ui.app as ui_app
+
+    monkeypatch.setenv("ARENA_UI_AUTH_ENABLED", "false")
+    monkeypatch.setattr(
+        ui_app,
+        "build_investment_chat_adk_app",
+        lambda **kwargs: FastAPI(title="stub-adk"),
+    )
+    repo = _DummyRepo()
+    repo.set_config(
+        "midnightnnn",
+        "agents_config",
+        json.dumps(
+            [
+                {"id": "gpt", "provider": "gpt", "model": "gpt-5.5", "capital_krw": 1_000_000},
+                {
+                    "id": "gemini",
+                    "provider": "gemini",
+                    "model": "gemini-3.1-pro-preview",
+                    "capital_krw": 1_000_000,
+                },
+                {"id": "claude", "provider": "claude", "model": "claude-opus-4-7", "capital_krw": 1_000_000},
+            ]
+        ),
+        "seed",
+    )
+    app = _build_app(repo=repo, settings=load_settings())
+    client = DirectRouteClient(app)
+    client.session["investment_chat_tenant_id"] = "midnightnnn"
+    client.session["investment_chat_provider"] = "gemini"
+    client.session["investment_chat_model"] = "gemini-3-flash-preview"
+
+    response = client.get("/investment-chat", params={"tenant_id": "midnightnnn"})
+
+    assert response.status_code == 200
+    assert "/investment-chat/adk/dev-ui/?tenant_id=midnightnnn&amp;provider=gemini" in response.text
+    assert "model=gemini-3.1-pro-preview" in response.text
+    assert "gemini-3-flash-preview" not in response.text
+    assert client.session["investment_chat_provider"] == "gemini"
+    assert client.session["investment_chat_model"] == "gemini-3.1-pro-preview"
+
+
+def test_investment_chat_page_ignores_stale_session_gpt_model(monkeypatch) -> None:
+    import arena.ui.app as ui_app
+
+    monkeypatch.setenv("ARENA_UI_AUTH_ENABLED", "false")
+    monkeypatch.setattr(
+        ui_app,
+        "build_investment_chat_adk_app",
+        lambda **kwargs: FastAPI(title="stub-adk"),
+    )
+    repo = _DummyRepo()
+    repo.set_config(
+        "midnightnnn",
+        "agents_config",
+        json.dumps(
+            [
+                {"id": "gpt", "provider": "gpt", "model": "gpt-5.5", "capital_krw": 1_000_000},
+                {"id": "gemini", "provider": "gemini", "model": "gemini-3.1-pro-preview", "capital_krw": 1_000_000},
+                {"id": "claude", "provider": "claude", "model": "claude-opus-4-7", "capital_krw": 1_000_000},
+            ]
+        ),
+        "seed",
+    )
+    app = _build_app(repo=repo, settings=load_settings())
+    client = DirectRouteClient(app)
+    client.session["investment_chat_tenant_id"] = "midnightnnn"
+    client.session["investment_chat_provider"] = "gpt"
+    client.session["investment_chat_model"] = "gpt-5.2"
+
+    response = client.get("/investment-chat", params={"tenant_id": "midnightnnn"})
+
+    assert response.status_code == 200
+    assert "/investment-chat/adk/dev-ui/?tenant_id=midnightnnn&amp;provider=gpt&amp;model=gpt-5.5" in response.text
+    assert "gpt-5.2" not in response.text
+    assert client.session["investment_chat_provider"] == "gpt"
+    assert client.session["investment_chat_model"] == "gpt-5.5"
 
 
 def test_investment_chat_provider_options_are_limited_to_tenant_model_keys(monkeypatch) -> None:

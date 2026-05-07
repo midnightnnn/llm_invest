@@ -29,7 +29,11 @@ from arena.agents.investment_chat.context import (
     normalize_tenant,
 )
 from arena.agents.investment_chat.config_tools import load_chat_agent_config
-from arena.agents.investment_chat.selection import normalize_chat_model_selection, tenant_default_chat_selection
+from arena.agents.investment_chat.selection import (
+    normalize_chat_model_selection,
+    normalize_stored_advisor_model_selection,
+    tenant_default_chat_selection,
+)
 from arena.config import Settings
 from arena.providers.registry import (
     canonical_provider,
@@ -276,7 +280,13 @@ class InvestmentChatAgentLoader(BaseAgentLoader):
         model = str(preferred_model if provider == preferred_model_provider else "").strip()
         model = normalize_chat_model_selection(provider, model)
         if not model and provider == stored_provider:
-            model = normalize_chat_model_selection(provider, chat_config.get("model"))
+            advisor_default = tenant_model if provider == tenant_provider else default_model_for_provider(settings, provider)
+            model = normalize_stored_advisor_model_selection(
+                provider,
+                chat_config.get("model"),
+                advisor_default_model=advisor_default,
+                chat_config=chat_config,
+            )
         if not model and provider == tenant_provider:
             model = tenant_model
         if not model:
@@ -365,30 +375,6 @@ _MOBILE_OVERRIDE_CSS = """\
   .chat-input-container { padding: 12px 12px 16px !important; }
   .chat-messages { padding: 12px !important; }
   html, body { overflow-x: hidden !important; }
-
-  /* drawer: float as overlay so chat (and its hamburger) stays reachable */
-  selector-drawer { width: min(280px, 80vw) !important; }
-  mat-drawer.mat-drawer-side {
-    position: absolute !important;
-    top: 0 !important;
-    bottom: 0 !important;
-    z-index: 100 !important;
-    box-shadow: 0 6px 24px rgba(0, 0, 0, .18) !important;
-  }
-  mat-drawer-content,
-  .mat-drawer-content {
-    margin-left: 0 !important;
-    margin-right: 0 !important;
-  }
-  mat-drawer-container.mat-drawer-container-has-open
-    .mat-drawer-content::after {
-    content: "";
-    position: absolute;
-    inset: 0;
-    background: rgba(15, 23, 42, .28);
-    z-index: 50;
-    pointer-events: none;
-  }
 
   /* messages: contain overflow from markdown tables / long tokens */
   .message-card,

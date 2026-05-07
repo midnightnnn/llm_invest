@@ -8,6 +8,17 @@ from arena.tools.registry import ToolRegistry
 from tests.ui.helpers import _DummyRepo
 
 
+def test_adk_browser_overrides_do_not_hide_or_overlay_debug_drawer() -> None:
+    from arena.ui import investment_chat_adk
+
+    css = investment_chat_adk._MOBILE_OVERRIDE_CSS
+
+    assert "side-panel-container" not in css
+    assert "mat-drawer.mat-drawer-side" not in css
+    assert "position: absolute !important" not in css
+    assert "mat-toolbar > div:first-child > button:first-child" not in css
+
+
 def test_investment_chat_loader_binds_default_tenant(monkeypatch) -> None:
     from arena.ui import investment_chat_adk
 
@@ -295,3 +306,60 @@ def test_investment_chat_loader_defaults_to_tenant_agent_model(monkeypatch) -> N
     assert listed[0] == "investment_chat__cxznms__claude__m_Y2xhdWRlLXNvbm5ldC00LTY"
     assert calls["provider"] == "claude"
     assert calls["model_override"] == "claude-sonnet-4-6"
+
+
+def test_investment_chat_loader_ignores_stale_stored_advisor_model(monkeypatch) -> None:
+    from arena.ui import investment_chat_adk
+
+    calls: dict[str, object] = {}
+    settings = load_settings()
+    settings.agent_ids = ["gpt", "gemini", "claude"]
+    settings.agent_configs = {
+        "gpt": AgentConfig(
+            agent_id="gpt",
+            provider="gpt",
+            model="gpt-5.5",
+            capital_krw=1_000_000,
+        ),
+        "gemini": AgentConfig(
+            agent_id="gemini",
+            provider="gemini",
+            model="gemini-3.1-pro-preview",
+            capital_krw=1_000_000,
+        ),
+        "claude": AgentConfig(
+            agent_id="claude",
+            provider="claude",
+            model="claude-opus-4-7",
+            capital_krw=1_000_000,
+        ),
+    }
+    settings.openai_model = "gpt-5.5"
+    settings.gemini_model = "gemini-3.1-pro-preview"
+    settings.anthropic_model = "claude-opus-4-7"
+    repo = _DummyRepo()
+    repo.set_config(
+        "midnightnnn",
+        "investment_chat_config",
+        json.dumps({"provider": "gpt", "model": "gpt-5.2"}),
+        "seed",
+    )
+
+    def fake_build_agent(**kwargs):
+        calls.update(kwargs)
+        return SimpleNamespace(name="investment_chat", description="chat")
+
+    monkeypatch.setattr(investment_chat_adk, "build_investment_chat_agent", fake_build_agent)
+    loader = investment_chat_adk.InvestmentChatAgentLoader(
+        repo=repo,
+        settings_for_tenant=lambda tenant: settings,
+        get_default_registry=lambda tenant: ToolRegistry([]),
+        default_tenant="midnightnnn",
+    )
+
+    listed = loader.list_agents()
+    loader.load_agent(listed[0])
+
+    assert listed[0] == "investment_chat__midnightnnn__gpt__m_Z3B0LTUuNQ"
+    assert calls["provider"] == "gpt"
+    assert calls["model_override"] == "gpt-5.5"

@@ -167,6 +167,13 @@ def test_investment_chat_page_has_no_selector_form(monkeypatch) -> None:
     # Approval toast panels still present.
     assert "data-order-draft-panel" in body
     assert "data-config-draft-panel" in body
+    assert "initializeAdkSidePanelClosed" in body
+    assert "adk-side-panel-visible" in body
+    assert "installAdkNoShiftStyles" not in body
+    assert "arena-adk-no-shift-styles" not in body
+    assert "removeStaleAdkDrawerStabilizer" in body
+    assert "transition-duration: 0ms" not in body
+    assert 'body[data-active="investment_chat"] .arena-sidebar' in body
 
 
 def test_showcase_investment_chat_page_renders(monkeypatch) -> None:

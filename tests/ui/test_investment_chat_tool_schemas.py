@@ -79,7 +79,13 @@ def test_chat_config_tools_expose_structured_schema(monkeypatch) -> None:
     assert "change_json" not in props
     assert "agent_id" in params["required"]
     assert props["action"]["enum"] == ["update", "upsert", "add", "remove"]
-    assert props["capital_allocation_mode"]["enum"] == ["unchanged", "fixed_krw", "account_percent", "whole_account"]
+    assert props["capital_allocation_mode"]["enum"] == [
+        "unchanged",
+        "fixed_krw",
+        "add_krw",
+        "account_percent",
+        "whole_account",
+    ]
 
 
 def test_chat_tool_schemas_do_not_emit_empty_enum_values_for_gemini(monkeypatch) -> None:

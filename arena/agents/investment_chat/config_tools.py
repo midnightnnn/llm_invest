@@ -56,7 +56,7 @@ _CHAT_AGENT_ALLOWED_FIELDS = {
     "account_markets",
 }
 ConfigChangeAction = Literal["update", "upsert", "add", "remove"]
-CapitalAllocationMode = Literal["unchanged", "fixed_krw", "account_percent", "whole_account"]
+CapitalAllocationMode = Literal["unchanged", "fixed_krw", "add_krw", "account_percent", "whole_account"]
 
 
 def _confirmation_state_key(tool_context: ToolContext) -> str:
@@ -180,6 +180,58 @@ def _settings_agent_entries(settings: Settings) -> list[dict[str, Any]]:
     return entries
 
 
+def _latest_agent_entries_for_apply(repo: Any, *, settings: Settings, tenant: str) -> list[dict[str, Any]]:
+    store = _admin_config_store(repo, settings)
+    entries, _has_explicit = store.load_for_update(tenant)
+    return [dict(entry) for entry in entries if isinstance(entry, dict)]
+
+
+def _merge_agent_apply_entries(
+    *,
+    repo: Any,
+    settings: Settings,
+    tenant: str,
+    draft: dict[str, Any],
+    draft_entries: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Applies one agent draft onto the latest config to avoid stale full-list overwrites."""
+    if str(draft.get("scope") or "").strip().lower() != "agent":
+        return draft_entries
+    change = draft.get("change") if isinstance(draft.get("change"), dict) else {}
+    aid = str(draft.get("agent_id") or change.get("agent_id") or change.get("id") or "").strip().lower()
+    action = str(draft.get("action") or change.get("action") or "update").strip().lower()
+    if not aid or action not in {"update", "upsert", "add", "remove"}:
+        return draft_entries
+
+    latest_entries = _latest_agent_entries_for_apply(repo, settings=settings, tenant=tenant)
+    if action == "remove":
+        return [
+            entry
+            for entry in latest_entries
+            if str(entry.get("id") or "").strip().lower() != aid
+        ]
+
+    replacement = next(
+        (
+            dict(entry)
+            for entry in draft_entries
+            if str(entry.get("id") or "").strip().lower() == aid
+        ),
+        None,
+    )
+    if replacement is None:
+        return draft_entries
+
+    merged = list(latest_entries)
+    for index, entry in enumerate(merged):
+        if str(entry.get("id") or "").strip().lower() == aid:
+            merged[index] = replacement
+            break
+    else:
+        merged.append(replacement)
+    return merged
+
+
 def _admin_config_store(repo: Any, settings: Settings) -> AdminAgentConfigStore:
     def _view_model(_tenant: str) -> dict[str, Any]:
         return {"agents_config": _settings_agent_entries(settings)}
@@ -221,6 +273,11 @@ def _resolve_capital_allocation(
         amount = safe_float(raw.get("amount_krw", raw.get("capital_krw")), fallback_capital)
         if amount <= 0:
             raise ValueError("fixed capital allocation requires amount_krw > 0")
+    elif mode in {"add", "add_krw", "increment", "increment_krw"}:
+        increment = safe_float(raw.get("amount_krw", raw.get("capital_krw")), 0.0)
+        if increment <= 0:
+            raise ValueError("add_krw capital allocation requires amount_krw > 0")
+        amount = safe_float(fallback_capital) + increment
     elif mode in {"percent", "account_percent", "account_ratio"}:
         percent = safe_float(raw.get("percent", raw.get("ratio")), 0.0)
         if percent <= 0 or percent > 100:
@@ -508,7 +565,19 @@ def _apply_agents_config(
     entries = payload.get("agents_config")
     if not isinstance(entries, list):
         raise ValueError("draft is missing agents_config apply payload")
-    agents_config = [dict(entry) for entry in entries if isinstance(entry, dict)]
+    draft_entries = [dict(entry) for entry in entries if isinstance(entry, dict)]
+    merged_entries = _merge_agent_apply_entries(
+        repo=repo,
+        settings=settings,
+        tenant=tenant,
+        draft=draft,
+        draft_entries=draft_entries,
+    )
+    agents_config = serialize_agents_config_entries(
+        merged_entries,
+        tenant_settings=settings,
+        safe_float=safe_float,
+    )
     config_set(
         repo,
         tenant,
@@ -1024,7 +1093,8 @@ def _build_config_tool_entries(
             description=(
                 "Creates an investment agent settings change draft. The tool never applies settings directly; "
                 "ADK tool confirmation is required before it applies. Use capital_allocation_mode for fixed_krw, "
-                "account_percent, or whole_account sleeve assignment."
+                "add_krw, account_percent, or whole_account sleeve assignment. Use add_krw when the user asks to "
+                "add/increase capital by a KRW amount; use fixed_krw when the user asks to set the final capital."
             ),
             category="admin",
             callable=propose_agent_config_change,

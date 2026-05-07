@@ -186,3 +186,85 @@ def test_sleeve_snapshot_replays_simulated_execution(repo):
     assert snapshot.positions["AAPL"].quantity == pytest.approx(2.0)
     assert snapshot.total_equity_krw == pytest.approx(1_000.0)
     assert meta["valuation_source"] == "local_sleeve_replay"
+
+
+def test_local_sleeve_snapshot_replays_capital_events(repo):
+    repo.ensure_agent_state_checkpoints(
+        agent_ids=["gpt"],
+        total_cash_krw=1_000.0,
+        checkpoint_at=datetime(2026, 4, 28, 0, 0, tzinfo=timezone.utc),
+    )
+    written = repo.append_capital_events(
+        [
+            {
+                "event_id": "cap-local-1",
+                "occurred_at": datetime(2026, 4, 29, 0, 0, tzinfo=timezone.utc),
+                "agent_id": "gpt",
+                "amount_krw": 250.0,
+                "event_type": "INJECTION",
+                "reason": "test",
+                "created_by": "tester",
+            }
+        ],
+        tenant_id="tenant-a",
+    )
+
+    snapshot, baseline, meta = repo.build_agent_sleeve_snapshot(agent_id="gpt")
+
+    assert written == 1
+    assert snapshot.cash_krw == pytest.approx(1_250.0)
+    assert snapshot.total_equity_krw == pytest.approx(1_250.0)
+    assert baseline == pytest.approx(1_250.0)
+    assert meta["capital_flow_krw"] == pytest.approx(250.0)
+    assert meta["capital_event_count"] == 1
+
+
+def test_local_retarget_agent_capitals_preserves_positions_and_updates_snapshot(repo):
+    repo.ensure_agent_state_checkpoints(
+        agent_ids=["gpt"],
+        total_cash_krw=1_000.0,
+        checkpoint_at=datetime(2026, 4, 28, 0, 0, tzinfo=timezone.utc),
+    )
+    intent = OrderIntent(
+        agent_id="gpt",
+        ticker="AAPL",
+        side=Side.BUY,
+        quantity=2,
+        price_krw=100.0,
+        rationale="test",
+        created_at=datetime(2026, 4, 28, 1, 0, tzinfo=timezone.utc),
+    )
+    report = ExecutionReport(
+        status=ExecutionStatus.SIMULATED,
+        order_id="order-retarget-1",
+        filled_qty=2,
+        avg_price_krw=100.0,
+        message="paper fill",
+        created_at=datetime(2026, 4, 28, 1, 1, tzinfo=timezone.utc),
+    )
+    repo.write_execution_report(intent, report)
+
+    out = repo.retarget_agent_capitals_preserve_positions(
+        agent_ids=["gpt"],
+        target_sleeve_capital_krw=1_500.0,
+        occurred_at=datetime(2026, 4, 29, 0, 0, tzinfo=timezone.utc),
+        created_by="tester",
+    )
+    snapshot, baseline, meta = repo.build_agent_sleeve_snapshot(agent_id="gpt")
+    events = repo.capital_events_since(
+        agent_id="gpt",
+        since=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        tenant_id="tenant-a",
+    )
+
+    assert out["gpt"]["capital_flow_krw"] == pytest.approx(500.0)
+    assert out["gpt"]["event_type"] == "INJECTION"
+    assert len(events) == 1
+    assert events[0]["event_type"] == "INJECTION"
+    assert events[0]["amount_krw"] == pytest.approx(500.0)
+    assert snapshot.cash_krw == pytest.approx(1_300.0)
+    assert snapshot.positions["AAPL"].quantity == pytest.approx(2.0)
+    assert snapshot.total_equity_krw == pytest.approx(1_500.0)
+    assert baseline == pytest.approx(1_500.0)
+    assert meta["seed_source"] == "capital_events.retarget"
+    assert meta["capital_event_count"] == 0

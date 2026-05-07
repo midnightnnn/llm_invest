@@ -149,6 +149,108 @@ def test_chat_config_tool_uses_adk_confirmation_before_apply(monkeypatch) -> Non
     assert saved[0]["model"] == "gpt-5.5"
 
 
+def test_chat_config_adk_confirmation_merges_latest_agent_config(monkeypatch) -> None:
+    repo = _ChatOrderRepo()
+    repo.set_config(
+        "local",
+        "agents_config",
+        json.dumps(
+            [
+                {"id": "gpt", "provider": "gpt", "model": "gpt-5.2", "capital_krw": 1_000_000},
+                {"id": "gemini", "provider": "gemini", "model": "gemini-3-flash-preview", "capital_krw": 1_000_000},
+                {"id": "claude", "provider": "claude", "model": "claude-sonnet-4-6", "capital_krw": 1_000_000},
+            ]
+        ),
+        "seed",
+    )
+    tools = _build_raw_chat_tools(monkeypatch, repo)
+    propose = tools["propose_agent_config_change"]
+
+    gpt_context = _FakeToolContext(function_call_id="fc-config-gpt")
+    gemini_context = _FakeToolContext(function_call_id="fc-config-gemini")
+    assert (
+        propose(agent_id="gpt", action="update", capital_krw=2_000_000, tool_context=gpt_context)["status"]
+        == "waiting_for_confirmation"
+    )
+    assert (
+        propose(agent_id="gemini", action="update", capital_krw=3_000_000, tool_context=gemini_context)["status"]
+        == "waiting_for_confirmation"
+    )
+
+    applied_gpt = propose(
+        agent_id="gpt",
+        action="update",
+        capital_krw=2_000_000,
+        tool_context=_FakeToolContext(
+            function_call_id=gpt_context.function_call_id,
+            state=gpt_context.state,
+            tool_confirmation=SimpleNamespace(confirmed=True, payload={}),
+        ),
+    )
+    applied_gemini = propose(
+        agent_id="gemini",
+        action="update",
+        capital_krw=3_000_000,
+        tool_context=_FakeToolContext(
+            function_call_id=gemini_context.function_call_id,
+            state=gemini_context.state,
+            tool_confirmation=SimpleNamespace(confirmed=True, payload={}),
+        ),
+    )
+
+    assert applied_gpt["status"] == "applied"
+    assert applied_gemini["status"] == "applied"
+    saved = {
+        str(entry["id"]): entry
+        for entry in json.loads(repo.get_config("local", "agents_config") or "[]")
+    }
+    assert saved["gpt"]["capital_krw"] == 2_000_000
+    assert saved["gemini"]["capital_krw"] == 3_000_000
+    assert saved["claude"]["capital_krw"] == 1_000_000
+
+
+def test_chat_config_tool_adds_krw_to_existing_agent_capital(monkeypatch) -> None:
+    repo = _ChatOrderRepo()
+    repo.set_config(
+        "local",
+        "agents_config",
+        json.dumps(
+            [
+                {"id": "gpt", "provider": "gpt", "model": "gpt-5.5", "capital_krw": 5_000_000},
+                {"id": "gemini", "provider": "gemini", "model": "gemini-3-flash-preview", "capital_krw": 3_000_000},
+            ]
+        ),
+        "seed",
+    )
+    tools = _build_raw_chat_tools(monkeypatch, repo, include_internal_bridge=True)
+
+    proposed = tools["propose_agent_config_change"](
+        agent_id="gpt",
+        action="update",
+        capital_allocation_mode="add_krw",
+        capital_allocation_amount_krw=1_000_000,
+        rationale="사용자가 gpt sleeve에 100만원 추가 배분을 요청함",
+    )
+    token = str(proposed.get("approval_token") or "")
+
+    assert proposed["status"] == "ok"
+    assert {"field": "capital_krw", "before": 5_000_000, "after": 6_000_000} in proposed["diffs"]
+
+    applied = tools["apply_approved_config_change"](
+        approval_token=token,
+        confirmation_text=f"CONFIRM {token}",
+    )
+
+    assert applied["status"] == "applied"
+    saved = {
+        str(entry["id"]): entry
+        for entry in json.loads(repo.get_config("local", "agents_config") or "[]")
+    }
+    assert saved["gpt"]["capital_krw"] == 6_000_000
+    assert saved["gemini"]["capital_krw"] == 3_000_000
+    assert repo.capital_sync_calls[-1]["target_capitals"]["gpt"] == 6_000_000
+
+
 def test_chat_config_adk_confirmation_invalidates_runtime_cache(monkeypatch) -> None:
     from arena.agents.investment_chat.config_tools import build_config_tool_entries
     from arena.config import load_settings

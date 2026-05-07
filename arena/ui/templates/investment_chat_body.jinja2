@@ -18,6 +18,13 @@
 </style>
 <section class="investment-chat-shell flex flex-col overflow-hidden bg-white">
   {% if iframe_src %}
+  <script>
+    (function initializeAdkSidePanelClosed() {
+      try {
+        window.localStorage.setItem('adk-side-panel-visible', 'false');
+      } catch (_err) {}
+    })();
+  </script>
   <iframe
     src="{{ iframe_src }}"
     title="투자챗봇"
@@ -89,6 +96,57 @@
 </section>
 {% if iframe_src %}
 <script>
+  (function() {
+    function adkFrame() {
+      return document.querySelector('[data-adk-chat-frame]');
+    }
+
+    function adkFrameDocument() {
+      var frame = adkFrame();
+      try {
+        return frame && (frame.contentDocument || (frame.contentWindow && frame.contentWindow.document));
+      } catch (_err) {
+        return null;
+      }
+    }
+
+    function removeStaleAdkDrawerStabilizer(attempt) {
+      var tries = Number(attempt || 0);
+      var doc = adkFrameDocument();
+      if (!doc || !doc.head) {
+        if (tries < 40) {
+          window.setTimeout(function() { removeStaleAdkDrawerStabilizer(tries + 1); }, 250);
+        }
+        return false;
+      }
+      var stale = doc.getElementById('arena-adk-drawer-stabilizer');
+      if (stale && stale.parentNode) {
+        stale.parentNode.removeChild(stale);
+      }
+      return true;
+    }
+
+    function installWhenReady(attempt) {
+      var tries = Number(attempt || 0);
+      var doc = adkFrameDocument();
+      if (doc && doc.head) {
+        removeStaleAdkDrawerStabilizer(0);
+        return;
+      }
+      if (tries < 40) {
+        window.setTimeout(function() { installWhenReady(tries + 1); }, 250);
+      }
+    }
+
+    var frame = adkFrame();
+    if (frame) {
+      frame.addEventListener('load', function() {
+        installWhenReady(0);
+      });
+      installWhenReady(0);
+    }
+  })();
+
   (function() {
     var tenant = {{ tenant | tojson }};
     var panel = document.querySelector('[data-order-draft-panel]');
