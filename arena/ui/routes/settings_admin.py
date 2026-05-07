@@ -7,8 +7,11 @@ from typing import Any, Callable
 from fastapi import FastAPI, Form, Query, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
+from arena.agents.investment_chat.config_tools import load_chat_agent_config
+from arena.agents.investment_chat.selection import normalize_chat_model_selection
 from arena.config import Settings
 from arena.providers import list_adk_provider_specs, provider_alias_map
+from arena.providers.registry import canonical_provider
 from arena.ui.admin_agent_config import (
     AdminAgentConfigStore,
     build_agents_config_save_payload,
@@ -19,6 +22,7 @@ from arena.ui.admin_runtime_ops import (
     AdminRuntimeOps,
     live_market_sources_for_market_value,
 )
+from arena.ui.investment_chat_providers import tenant_available_provider_specs
 
 @dataclass(frozen=True)
 class AdminSettingsRouteDeps:
@@ -749,3 +753,64 @@ def register_admin_settings_routes(app: FastAPI, *, deps: AdminSettingsRouteDeps
                 detail={"error": str(exc)},
             )
             return _settings_redirect(tenant, ok=False, msg=str(exc))
+
+    @app.post("/settings/chat-model")
+    def settings_chat_model(
+        request: Request,
+        tenant_id: str = Form(default=""),
+        provider: str = Form(default=""),
+        model: str = Form(default=""),
+        updated_by: str = Form(default="ui-admin"),
+    ):
+        if not settings_enabled:
+            return JSONResponse({"error": "settings disabled"}, status_code=403)
+        _, user_email, tenant, _, redirect = _resolve_admin_context(
+            request,
+            requested_tenant=tenant_id,
+            next_path=f"/settings?tab=agents&tenant_id={tenant_id}",
+        )
+        if redirect:
+            return redirect
+        if _tenant_access_denied(tenant_id, tenant):
+            return _settings_redirect(tenant, ok=False, msg="tenant access denied", tab="agents")
+
+        provider_token = canonical_provider(provider) or str(provider or "").strip().lower()
+        specs, _credential_scoped = tenant_available_provider_specs(repo, tenant_id=tenant)
+        valid_provider_ids = {spec.provider_id for spec in specs}
+        if not provider_token or provider_token not in valid_provider_ids:
+            return JSONResponse({"error": "invalid provider"}, status_code=400)
+
+        model_token = normalize_chat_model_selection(provider_token, model)
+        if not model_token:
+            return JSONResponse({"error": "invalid model"}, status_code=400)
+
+        existing = load_chat_agent_config(repo, tenant_id=tenant)
+        merged = dict(existing)
+        merged["provider"] = provider_token
+        merged["model"] = model_token
+
+        try:
+            repo.set_config(
+                tenant,
+                "investment_chat_config",
+                json.dumps(merged, ensure_ascii=False),
+                updated_by=user_email or updated_by,
+            )
+            _invalidate_tenant_cache(tenant, "runtime", "memory", "portfolio")
+            repo.append_runtime_audit_log(
+                action="settings_chat_model_save",
+                status="ok",
+                user_email=user_email or updated_by,
+                tenant_id=tenant,
+                detail={"provider": provider_token, "model": model_token},
+            )
+            return _settings_redirect(tenant, ok=True, msg="chat model saved", tab="agents")
+        except Exception as exc:
+            repo.append_runtime_audit_log(
+                action="settings_chat_model_save",
+                status="error",
+                user_email=user_email or updated_by,
+                tenant_id=tenant,
+                detail={"error": str(exc)},
+            )
+            return _settings_redirect(tenant, ok=False, msg=str(exc), tab="agents")

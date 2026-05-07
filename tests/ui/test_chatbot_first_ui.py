@@ -105,3 +105,36 @@ def test_showcase_agents_tab_has_no_chat_provider_card(monkeypatch) -> None:
     body = client.get("/showcase/midnightnnn/settings", params={"tab": "agents"}).text
     assert "Chat Provider/Model" not in body
     assert "/settings/chat-model" not in body
+
+
+def test_chat_model_post_valid_saves_and_redirects(monkeypatch) -> None:
+    import json
+
+    from arena.agents.investment_chat.config_tools import load_chat_agent_config
+    from tests.ui.helpers import _client_with_repo
+
+    client, repo = _client_with_repo(monkeypatch)
+    resp = client.post(
+        "/settings/chat-model",
+        data={"tenant_id": "local", "provider": "gpt", "model": "gpt-5.5"},
+    )
+    assert resp.status_code in (302, 303), resp.status_code
+    location = resp.headers["location"]
+    assert "/settings" in location
+    assert "tab=agents" in location
+
+    # Verify saved.
+    saved = load_chat_agent_config(repo, tenant_id="local")
+    assert saved.get("provider") == "gpt"
+    assert saved.get("model") == "gpt-5.5"
+
+
+def test_chat_model_post_invalid_provider_rejects(monkeypatch) -> None:
+    from tests.ui.helpers import _client_with_repo
+
+    client, _repo = _client_with_repo(monkeypatch)
+    resp = client.post(
+        "/settings/chat-model",
+        data={"tenant_id": "local", "provider": "no-such-provider", "model": "x"},
+    )
+    assert resp.status_code in (400, 422)
