@@ -21,14 +21,36 @@ from arena.agents.investment_chat.config_tools import load_chat_agent_config
 from arena.agents.investment_chat.constants import AGENT_ID, APP_NAME
 from arena.agents.investment_chat.context import normalize_tenant
 from arena.agents.investment_chat.registry import build_chat_registry
-from arena.agents.investment_chat.selection import normalize_chat_model_selection, tenant_default_chat_selection
+from arena.agents.investment_chat.selection import (
+    chat_model_routing_config,
+    cheap_chat_model_for_provider,
+    normalize_chat_model_selection,
+    tenant_default_chat_selection,
+)
 from arena.agents.investment_chat.utils import repo_tenant_scope
 from arena.config import Settings
 from arena.memory.store import MemoryStore
 from arena.prompts.prompt_pack import PromptPack
-from arena.tools.registry import ToolRegistry
+from arena.tools.registry import ToolEntry, ToolRegistry
 
 logger = logging.getLogger(__name__)
+
+ADVISOR_AGENT_NAME = "investment_chat_advisor"
+UTILITY_AGENT_NAME = "investment_chat_utility"
+
+UTILITY_TOOL_IDS = frozenset(
+    {
+        "get_account_snapshot",
+        "refresh_account_snapshot",
+        "get_agent_sleeve_snapshot",
+        "get_trade_history",
+        "get_order_approval_status",
+        "propose_agent_config_change",
+        "propose_chat_agent_config_change",
+        "propose_tenant_config_change",
+        "get_config_change_status",
+    }
+)
 
 
 def _tool_memory_searcher(*, repo: Any, settings: Settings, tenant_id: str):
@@ -85,6 +107,41 @@ def _wrapped_tools(registry: ToolRegistry, *, repo: Any, settings: Settings, ten
     ]
 
 
+def _registry_for_tool_ids(registry: ToolRegistry, tool_ids: frozenset[str]) -> ToolRegistry:
+    allowed = {str(tool_id or "").strip().lower() for tool_id in tool_ids if str(tool_id or "").strip()}
+    entries: list[ToolEntry] = []
+    for entry in registry.list_entries(require_callable=True):
+        token = str(entry.tool_id or entry.name or "").strip().lower()
+        if token in allowed:
+            entries.append(entry)
+    return ToolRegistry(entries)
+
+
+def _mapping_value(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _advisor_instruction(*, tenant: str, provider: str, model_id: str) -> str:
+    base = PromptPack.render_investment_chat_instruction(
+        tenant_id=tenant,
+        provider=provider,
+        model_id=model_id,
+    )
+    note = PromptPack.render_investment_chat_advisor_routing_note(
+        utility_agent_name=UTILITY_AGENT_NAME,
+    )
+    return f"{base}\n\n{note}" if note else base
+
+
+def _utility_instruction(*, tenant: str, provider: str, model_id: str) -> str:
+    return PromptPack.render_investment_chat_utility_instruction(
+        tenant_id=tenant,
+        provider=provider,
+        model_id=model_id,
+        advisor_agent_name=ADVISOR_AGENT_NAME,
+    )
+
+
 def build_investment_chat_agent(
     *,
     repo: Any,
@@ -110,6 +167,12 @@ def build_investment_chat_agent(
         model_id = tenant_model
     model_id = normalize_chat_model_selection(provider_token, model_id)
     llm_params = chat_config.get("llm_params") if isinstance(chat_config.get("llm_params"), dict) else {}
+    routing_config = chat_model_routing_config(chat_config)
+    cheap_model_id = cheap_chat_model_for_provider(provider_token, chat_config=chat_config)
+    if not cheap_model_id:
+        cheap_model_id = model_id
+    router_llm_params = _mapping_value(routing_config.get("router_llm_params"))
+    utility_llm_params = _mapping_value(routing_config.get("utility_llm_params")) or router_llm_params
     max_tool_events = resolve_max_tool_events(settings)
     chat_registry = build_chat_registry(
         repo=repo,
@@ -118,21 +181,71 @@ def build_investment_chat_agent(
         registry=registry,
         invalidate_tenant_cache=invalidate_tenant_cache,
     )
-    tools = _wrapped_tools(chat_registry, repo=repo, settings=settings, tenant_id=tenant)
-    model = _resolve_model(provider_token, settings, model_override=model_id, llm_params=llm_params)
-    return Agent(
-        name=APP_NAME,
-        description="Arena 투자챗봇",
-        model=model,
-        instruction=PromptPack.render_investment_chat_instruction(
-            tenant_id=tenant,
-            provider=provider_token,
-            model_id=model_id,
-        ),
-        tools=tools,
+    advisor_tools = _wrapped_tools(chat_registry, repo=repo, settings=settings, tenant_id=tenant)
+    utility_tools = _wrapped_tools(
+        _registry_for_tool_ids(chat_registry, UTILITY_TOOL_IDS),
+        repo=repo,
+        settings=settings,
+        tenant_id=tenant,
+    )
+    router_model = _resolve_model(
+        provider_token,
+        settings,
+        model_override=cheap_model_id,
+        llm_params=router_llm_params,
+    )
+    advisor_model = _resolve_model(provider_token, settings, model_override=model_id, llm_params=llm_params)
+    utility_model = _resolve_model(
+        provider_token,
+        settings,
+        model_override=cheap_model_id,
+        llm_params=utility_llm_params,
+    )
+    advisor_agent = Agent(
+        name=ADVISOR_AGENT_NAME,
+        description="Arena 투자챗봇 투자상담 에이전트",
+        model=advisor_model,
+        instruction=_advisor_instruction(tenant=tenant, provider=provider_token, model_id=model_id),
+        tools=advisor_tools,
         generate_content_config=_build_generate_content_config(
             provider=provider_token,
             llm_params=llm_params,
+            max_tool_events=max_tool_events,
+        ),
+        disallow_transfer_to_parent=True,
+        disallow_transfer_to_peers=False,
+    )
+    utility_agent = Agent(
+        name=UTILITY_AGENT_NAME,
+        description="Arena 투자챗봇 조회/설정 유틸리티 에이전트",
+        model=utility_model,
+        instruction=_utility_instruction(tenant=tenant, provider=provider_token, model_id=cheap_model_id),
+        tools=utility_tools,
+        generate_content_config=_build_generate_content_config(
+            provider=provider_token,
+            llm_params=utility_llm_params,
+            max_tool_events=max_tool_events,
+        ),
+        disallow_transfer_to_parent=True,
+        disallow_transfer_to_peers=False,
+    )
+    return Agent(
+        name=APP_NAME,
+        description="Arena 투자챗봇 라우터",
+        model=router_model,
+        instruction=PromptPack.render_investment_chat_router_instruction(
+            tenant_id=tenant,
+            provider=provider_token,
+            advisor_model_id=model_id,
+            cheap_model_id=cheap_model_id,
+            advisor_agent_name=ADVISOR_AGENT_NAME,
+            utility_agent_name=UTILITY_AGENT_NAME,
+        ),
+        tools=[],
+        sub_agents=[advisor_agent, utility_agent],
+        generate_content_config=_build_generate_content_config(
+            provider=provider_token,
+            llm_params=router_llm_params,
             max_tool_events=max_tool_events,
         ),
     )

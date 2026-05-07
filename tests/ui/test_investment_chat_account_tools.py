@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from arena.config import load_settings
 from arena.models import AccountSnapshot
 from arena.tools.registry import ToolRegistry
-from tests.ui.investment_chat_helpers import _ChatOrderRepo, _build_fake_chat_agent
+from tests.ui.investment_chat_helpers import _ChatOrderRepo, _build_fake_chat_agent, _chat_advisor_agent
 
 
 def test_investment_chat_account_tools_expose_available_agent_ids() -> None:
@@ -208,7 +208,7 @@ def test_refresh_account_snapshot_blocks_server_fallback_credentials(monkeypatch
         tenant_id="czxnms",
         registry=ToolRegistry([]),
     )
-    tools = {getattr(tool, "__name__", ""): tool for tool in agent.tools}
+    tools = {getattr(tool, "__name__", ""): tool for tool in _chat_advisor_agent(agent).tools}
 
     result = tools["refresh_account_snapshot"]()
 

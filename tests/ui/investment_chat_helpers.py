@@ -153,6 +153,22 @@ class _FakeToolContext:
         self.confirmation_request = {"hint": hint, "payload": payload}
 
 
+def _chat_sub_agent(agent, name: str):
+    return next(child for child in getattr(agent, "sub_agents", []) if getattr(child, "name", "") == name)
+
+
+def _chat_advisor_agent(agent):
+    return _chat_sub_agent(agent, "investment_chat_advisor")
+
+
+def _chat_utility_agent(agent):
+    return _chat_sub_agent(agent, "investment_chat_utility")
+
+
+def _chat_tool_names(agent) -> set[str]:
+    return {getattr(tool, "__name__", "") for tool in getattr(agent, "tools", [])}
+
+
 def _build_fake_chat_agent(monkeypatch, repo: _ChatOrderRepo):
     from arena.agents.investment_chat import factory
     from arena.agents.investment_chat import memory as chat_memory
@@ -165,12 +181,13 @@ def _build_fake_chat_agent(monkeypatch, repo: _ChatOrderRepo):
     monkeypatch.setattr(chat_memory, "MemoryStore", _FakeExecutionMemory, raising=False)
     monkeypatch.setattr(factory, "_resolve_model", lambda *args, **kwargs: "fake-model")
     monkeypatch.setattr(factory, "Agent", lambda **kwargs: SimpleNamespace(**kwargs))
-    return factory.build_investment_chat_agent(
+    agent = factory.build_investment_chat_agent(
         repo=repo,
         settings=settings,
         tenant_id="local",
         registry=ToolRegistry([]),
     )
+    return _chat_advisor_agent(agent)
 
 
 def _build_raw_chat_tools(monkeypatch, repo: _ChatOrderRepo, *, settings=None, include_internal_bridge: bool = False):

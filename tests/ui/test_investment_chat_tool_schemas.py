@@ -4,7 +4,12 @@ import json
 from types import SimpleNamespace
 
 from arena.config import load_settings
-from tests.ui.investment_chat_helpers import _ChatOrderRepo, _FakeExecutionMemory, _build_fake_chat_agent
+from tests.ui.investment_chat_helpers import (
+    _ChatOrderRepo,
+    _FakeExecutionMemory,
+    _build_fake_chat_agent,
+    _chat_advisor_agent,
+)
 
 
 def test_investment_chat_wrapped_adk_confirmation_tool_builds_declaration(monkeypatch) -> None:
@@ -109,7 +114,7 @@ def test_chat_tool_schemas_do_not_emit_empty_enum_values_for_gemini(monkeypatch)
         registry=None,
     )
 
-    for tool in agent.tools:
+    for tool in _chat_advisor_agent(agent).tools:
         declaration = FunctionTool(tool)._get_declaration()
         payload = declaration.model_dump(mode="json", exclude_none=True)
         walk_schema(payload, getattr(tool, "__name__", "tool"))
@@ -136,7 +141,7 @@ def test_chat_analysis_tool_schema_keeps_required_fields_with_optional_params(mo
         tenant_id="local",
         registry=None,
     )
-    tool = next(candidate for candidate in agent.tools if candidate.__name__ == "optimize_portfolio")
+    tool = next(candidate for candidate in _chat_advisor_agent(agent).tools if candidate.__name__ == "optimize_portfolio")
 
     declaration = FunctionTool(tool)._get_declaration()
     params = declaration.parameters.model_dump(mode="json", exclude_none=True)

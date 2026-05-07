@@ -38,6 +38,7 @@ _CHAT_MODEL_PRESETS: dict[str, list[str]] = {
         "gpt-5.3-codex",
     ],
     "claude": [
+        "claude-haiku-4-5-20251001",
         "claude-sonnet-4-6",
         "claude-opus-4-7",
         "claude-opus-4-5",

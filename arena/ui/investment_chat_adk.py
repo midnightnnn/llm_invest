@@ -199,6 +199,7 @@ def _agent_cache_fingerprint(
         "selected_provider_has_credentials": provider_has_credentials(settings, provider),
         "runtime_credentials": _runtime_credentials_fingerprint(repo, tenant_id),
         "disabled_tools": _repo_config_value(repo, tenant_id, "disabled_tools"),
+        "investment_chat_config": _repo_config_value(repo, tenant_id, "investment_chat_config"),
         "investment_chat_account_markets": _repo_config_value(
             repo,
             tenant_id,

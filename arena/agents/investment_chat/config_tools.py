@@ -51,6 +51,7 @@ _CHAT_AGENT_ALLOWED_FIELDS = {
     "model",
     "disabled_tools",
     "llm_params",
+    "model_routing",
     "memory_compaction_model",
     "account_markets",
 }
@@ -407,9 +408,9 @@ def _build_chat_agent_change(change: dict[str, Any]) -> dict[str, Any]:
             if not isinstance(value, list):
                 raise ValueError(f"{token} must be an array")
             clean[token] = [str(item).strip() for item in value if str(item).strip()]
-        elif token == "llm_params":
+        elif token in {"llm_params", "model_routing"}:
             if not isinstance(value, dict):
-                raise ValueError("llm_params must be an object")
+                raise ValueError(f"{token} must be an object")
             clean[token] = dict(value)
         else:
             clean[token] = str(value or "").strip()
@@ -821,6 +822,7 @@ def _build_config_tool_entries(
         model: str = "",
         disabled_tools: Optional[list[str]] = None,
         llm_params_json: str = "",
+        model_routing_json: str = "",
         memory_compaction_model: str = "",
         account_markets: str = "",
         rationale: str = "",
@@ -841,10 +843,13 @@ def _build_config_tool_entries(
             fields["disabled_tools"] = [str(tool_id).strip() for tool_id in disabled_tools if str(tool_id).strip()]
         try:
             llm_params = _json_object_field(llm_params_json, field_name="llm_params_json")
+            model_routing = _json_object_field(model_routing_json, field_name="model_routing_json")
         except Exception as exc:
             return {"status": "error", "tenant_id": tenant, "error": str(exc)}
         if llm_params:
             fields["llm_params"] = llm_params
+        if model_routing:
+            fields["model_routing"] = model_routing
         return _propose_config_change_with_confirmation(
             {"scope": "chat_agent", "action": "update", "fields": fields},
             rationale=rationale,

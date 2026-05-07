@@ -113,6 +113,61 @@ class PromptPack:
         )
 
     @staticmethod
+    def render_investment_chat_router_instruction(
+        *,
+        tenant_id: str,
+        provider: str = "",
+        advisor_model_id: str = "",
+        cheap_model_id: str = "",
+        advisor_agent_name: str = "",
+        utility_agent_name: str = "",
+    ) -> str:
+        tenant = str(tenant_id or "").strip().lower() or "local"
+        return render_prompt_text(
+            "investment_chat",
+            "router_prompt.txt",
+            values={
+                "tenant_id": tenant,
+                "provider": provider,
+                "advisor_model_id": advisor_model_id or "provider default",
+                "cheap_model_id": cheap_model_id or "provider default",
+                "advisor_agent_name": advisor_agent_name,
+                "utility_agent_name": utility_agent_name,
+            },
+        )
+
+    @staticmethod
+    def render_investment_chat_utility_instruction(
+        *,
+        tenant_id: str,
+        provider: str = "",
+        model_id: str = "",
+        advisor_agent_name: str = "",
+    ) -> str:
+        tenant = str(tenant_id or "").strip().lower() or "local"
+        return render_prompt_text(
+            "investment_chat",
+            "utility_prompt.txt",
+            values={
+                "tenant_id": tenant,
+                "provider": provider,
+                "model_id": model_id or "provider default",
+                "advisor_agent_name": advisor_agent_name,
+            },
+        )
+
+    @staticmethod
+    def render_investment_chat_advisor_routing_note(
+        *,
+        utility_agent_name: str = "",
+    ) -> str:
+        return render_prompt_text(
+            "investment_chat",
+            "advisor_routing_note.txt",
+            values={"utility_agent_name": utility_agent_name},
+        )
+
+    @staticmethod
     def phase_format(context: dict[str, Any]) -> str:
         phase = str(context.get("cycle_phase", "execution") or "").strip().lower() or "execution"
         if phase == "explore":

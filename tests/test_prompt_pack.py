@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from arena.prompts.loader import prompt_path
 from arena.prompts.prompt_pack import PromptPack
 from arena.tools.registry import ToolEntry, ToolRegistry
 
@@ -96,6 +97,25 @@ def test_execution_prompt_requires_quantity_based_orders() -> None:
     assert "sell_ratio" not in prompt
 
 
+def test_execution_prompt_requires_sell_lifecycle_strategy_ref() -> None:
+    prompt = PromptPack.render_decision_prompt(
+        {
+            "cycle_phase": "execution",
+            "portfolio": {"cash_krw": 1000},
+            "order_budget": {"max_buy_notional_krw": 1000},
+        },
+        [],
+        max_tool_calls=5,
+    )
+
+    assert "strategy_refs" in prompt
+    assert "thesis_invalidated" in prompt
+    assert "thesis_realized" in prompt
+    assert "risk_reduction" in prompt
+    assert "rebalancing" in prompt
+    assert "thesis_invalidation" not in prompt
+
+
 def test_prompt_pack_builds_tool_catalog_payload_from_registry() -> None:
     registry = ToolRegistry(
         [
@@ -155,3 +175,51 @@ def test_prompt_pack_renders_investment_chat_instruction() -> None:
     assert "memory/thesis summaries" not in prompt
     assert "generic placeholders" not in prompt
     assert "2-4" not in prompt
+
+
+def test_prompt_pack_renders_investment_chat_router_instruction() -> None:
+    prompt = PromptPack.render_investment_chat_router_instruction(
+        tenant_id="MidNightNnN",
+        provider="gpt",
+        advisor_model_id="gpt-5.5",
+        cheap_model_id="gpt-5.4-mini",
+        advisor_agent_name="investment_chat_advisor",
+        utility_agent_name="investment_chat_utility",
+    )
+
+    assert prompt_path("investment_chat", "router_prompt.txt").exists()
+    assert "Tenant: midnightnnn" in prompt
+    assert "Provider: gpt" in prompt
+    assert "Advisor model: gpt-5.5" in prompt
+    assert "Utility model: gpt-5.4-mini" in prompt
+    assert "investment_chat_advisor" in prompt
+    assert "investment_chat_utility" in prompt
+    assert "Do not provide substantive investment analysis in the router" in prompt
+
+
+def test_prompt_pack_renders_investment_chat_utility_instruction() -> None:
+    prompt = PromptPack.render_investment_chat_utility_instruction(
+        tenant_id="MidNightNnN",
+        provider="claude",
+        model_id="claude-haiku-4-5-20251001",
+        advisor_agent_name="investment_chat_advisor",
+    )
+
+    assert prompt_path("investment_chat", "utility_prompt.txt").exists()
+    assert "Tenant: midnightnnn" in prompt
+    assert "Provider: claude" in prompt
+    assert "Model: claude-haiku-4-5-20251001" in prompt
+    assert "configuration-change proposals" in prompt
+    assert "Do not give investment advice" in prompt
+    assert "investment_chat_advisor" in prompt
+
+
+def test_prompt_pack_renders_investment_chat_advisor_routing_note() -> None:
+    prompt = PromptPack.render_investment_chat_advisor_routing_note(
+        utility_agent_name="investment_chat_utility",
+    )
+
+    assert prompt_path("investment_chat", "advisor_routing_note.txt").exists()
+    assert "investment advisor sub-agent" in prompt
+    assert "order submission flows" in prompt
+    assert "investment_chat_utility" in prompt

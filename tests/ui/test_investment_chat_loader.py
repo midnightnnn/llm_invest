@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 from arena.config import AgentConfig, load_settings
@@ -127,6 +128,41 @@ def test_investment_chat_loader_rebuilds_after_settings_fingerprint_changes(monk
     first = loader.load_agent(app_name)
     second = loader.load_agent(app_name)
     settings.openai_api_key = "new-key"
+    third = loader.load_agent(app_name)
+
+    assert first is second
+    assert third is not first
+    assert [item["model_override"] for item in builds] == ["gpt-5.5", "gpt-5.5"]
+
+
+def test_investment_chat_loader_rebuilds_after_chat_config_fingerprint_changes(monkeypatch) -> None:
+    from arena.ui import investment_chat_adk
+
+    builds: list[dict[str, object]] = []
+    settings = load_settings()
+    repo = _DummyRepo()
+
+    def fake_build_agent(**kwargs):
+        builds.append(dict(kwargs))
+        return SimpleNamespace(name=f"agent-{len(builds)}")
+
+    monkeypatch.setattr(investment_chat_adk, "build_investment_chat_agent", fake_build_agent)
+    loader = investment_chat_adk.InvestmentChatAgentLoader(
+        repo=repo,
+        settings_for_tenant=lambda tenant: settings,
+        get_default_registry=lambda tenant: ToolRegistry([]),
+        default_tenant="local",
+    )
+    app_name = "investment_chat__local__gpt__m_Z3B0LTUuNQ"
+
+    first = loader.load_agent(app_name)
+    second = loader.load_agent(app_name)
+    repo.set_config(
+        "local",
+        "investment_chat_config",
+        json.dumps({"model_routing": {"cheap_model_by_provider": {"gpt": "gpt-5.4-mini"}}}),
+        "tester",
+    )
     third = loader.load_agent(app_name)
 
     assert first is second
