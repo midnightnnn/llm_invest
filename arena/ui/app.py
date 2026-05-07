@@ -499,9 +499,10 @@ def _build_app(*, repo: BigQueryRepository, settings: Settings) -> FastAPI:
         max_drawdown=max_drawdown,
     )
     @app.get("/")
-    def _root_redirect(tenant_id: str = "") -> RedirectResponse:
+    def _root_redirect(request: Request, tenant_id: str = "") -> RedirectResponse:
+        _ = request
         qs = f"?tenant_id={tenant_id}" if tenant_id else ""
-        return RedirectResponse(url=f"/board{qs}", status_code=302)
+        return RedirectResponse(url=f"/investment-chat{qs}", status_code=302)
 
     register_board_routes(app, deps=viewer_route_deps)
     register_nav_routes(app, deps=viewer_route_deps)
