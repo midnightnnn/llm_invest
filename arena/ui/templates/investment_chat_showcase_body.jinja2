@@ -1,0 +1,36 @@
+<style>
+  .investment-chat-shell {
+    height: calc(100dvh - var(--mobile-topbar-h));
+    min-height: 0;
+  }
+  .investment-chat-frame {
+    display: block;
+    width: 100%;
+    min-width: 0;
+    min-height: 0;
+  }
+  @media (min-width: 768px) {
+    .investment-chat-shell {
+      height: 100vh;
+      min-height: 560px;
+    }
+  }
+</style>
+<section class="investment-chat-shell flex flex-col overflow-hidden bg-white">
+  {% if iframe_src %}
+  <iframe
+    src="{{ iframe_src }}"
+    title="투자챗봇 (보기 전용)"
+    class="investment-chat-frame min-h-0 flex-1 border-0"
+    loading="eager"
+    referrerpolicy="same-origin"
+    data-adk-chat-frame
+  ></iframe>
+  {% else %}
+  <div class="flex flex-1 items-center justify-center px-6">
+    <div class="max-w-md rounded-lg border border-amber-200 bg-amber-50 p-5 text-sm leading-relaxed text-amber-900">
+      이 테넌트는 챗봇 모델이 설정되지 않아 미리보기를 표시할 수 없습니다.
+    </div>
+  </div>
+  {% endif %}
+</section>
