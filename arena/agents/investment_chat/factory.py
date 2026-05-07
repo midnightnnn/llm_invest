@@ -122,15 +122,12 @@ def _mapping_value(value: Any) -> dict[str, Any]:
 
 
 def _advisor_instruction(*, tenant: str, provider: str, model_id: str) -> str:
-    base = PromptPack.render_investment_chat_instruction(
+    return PromptPack.render_investment_chat_instruction(
         tenant_id=tenant,
         provider=provider,
         model_id=model_id,
-    )
-    note = PromptPack.render_investment_chat_advisor_routing_note(
         utility_agent_name=UTILITY_AGENT_NAME,
     )
-    return f"{base}\n\n{note}" if note else base
 
 
 def _utility_instruction(*, tenant: str, provider: str, model_id: str) -> str:

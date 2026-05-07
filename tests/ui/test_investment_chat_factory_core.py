@@ -424,12 +424,16 @@ def test_build_investment_chat_agent_defaults_claude_cheap_router_to_haiku(monke
     assert _chat_advisor_agent(agent).model == "claude:claude-sonnet-4-6"
 
 
-def test_build_investment_chat_agent_uses_prompt_pack_for_router_and_utility(monkeypatch) -> None:
+def test_build_investment_chat_agent_uses_prompt_pack_for_role_prompts(monkeypatch) -> None:
     from arena.agents.investment_chat import factory
 
     settings = load_settings()
     repo = _ChatOrderRepo()
     captured: dict[str, dict[str, object]] = {}
+
+    def fake_advisor_instruction(**kwargs):
+        captured["advisor"] = dict(kwargs)
+        return "ADVISOR FILE PROMPT"
 
     def fake_router_instruction(**kwargs):
         captured["router"] = dict(kwargs)
@@ -439,10 +443,11 @@ def test_build_investment_chat_agent_uses_prompt_pack_for_router_and_utility(mon
         captured["utility"] = dict(kwargs)
         return "UTILITY FILE PROMPT"
 
-    def fake_advisor_note(**kwargs):
-        captured["advisor_note"] = dict(kwargs)
-        return "ADVISOR FILE NOTE"
-
+    monkeypatch.setattr(
+        factory.PromptPack,
+        "render_investment_chat_instruction",
+        staticmethod(fake_advisor_instruction),
+    )
     monkeypatch.setattr(
         factory.PromptPack,
         "render_investment_chat_router_instruction",
@@ -452,11 +457,6 @@ def test_build_investment_chat_agent_uses_prompt_pack_for_router_and_utility(mon
         factory.PromptPack,
         "render_investment_chat_utility_instruction",
         staticmethod(fake_utility_instruction),
-    )
-    monkeypatch.setattr(
-        factory.PromptPack,
-        "render_investment_chat_advisor_routing_note",
-        staticmethod(fake_advisor_note),
     )
     monkeypatch.setattr(factory, "_resolve_model", lambda *args, **kwargs: "fake-model")
     monkeypatch.setattr(factory, "Agent", lambda **kwargs: SimpleNamespace(**kwargs))
@@ -471,9 +471,9 @@ def test_build_investment_chat_agent_uses_prompt_pack_for_router_and_utility(mon
     )
 
     assert agent.instruction == "ROUTER FILE PROMPT"
-    assert _chat_advisor_agent(agent).instruction.endswith("ADVISOR FILE NOTE")
+    assert _chat_advisor_agent(agent).instruction == "ADVISOR FILE PROMPT"
     assert _chat_utility_agent(agent).instruction == "UTILITY FILE PROMPT"
+    assert captured["advisor"]["utility_agent_name"] == "investment_chat_utility"
     assert captured["router"]["advisor_agent_name"] == "investment_chat_advisor"
     assert captured["router"]["utility_agent_name"] == "investment_chat_utility"
     assert captured["utility"]["advisor_agent_name"] == "investment_chat_advisor"
-    assert captured["advisor_note"]["utility_agent_name"] == "investment_chat_utility"

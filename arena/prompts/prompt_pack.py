@@ -99,16 +99,18 @@ class PromptPack:
         tenant_id: str,
         provider: str = "",
         model_id: str = "",
+        utility_agent_name: str = "investment_chat_utility",
     ) -> str:
         _ = provider, model_id
         tenant = str(tenant_id or "").strip().lower() or "local"
         return render_prompt_text(
             "investment_chat",
-            "system_prompt.txt",
+            "advisor_prompt.txt",
             values={
                 "tenant_id": tenant,
                 "provider": provider,
                 "model_id": model_id,
+                "utility_agent_name": utility_agent_name,
             },
         )
 
@@ -154,17 +156,6 @@ class PromptPack:
                 "model_id": model_id or "provider default",
                 "advisor_agent_name": advisor_agent_name,
             },
-        )
-
-    @staticmethod
-    def render_investment_chat_advisor_routing_note(
-        *,
-        utility_agent_name: str = "",
-    ) -> str:
-        return render_prompt_text(
-            "investment_chat",
-            "advisor_routing_note.txt",
-            values={"utility_agent_name": utility_agent_name},
         )
 
     @staticmethod

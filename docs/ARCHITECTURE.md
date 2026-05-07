@@ -78,7 +78,7 @@ arena/                           Core business logic
 │   ├── prompt_pack.py           PromptPack: cycle prompts + investment chat instruction (320L)
 │   ├── memory.py                Memory compaction + relation extraction prompt builders (51L)
 │   ├── adk/                     core_prompt.txt + system_prompt.txt (cycle agent defaults)
-│   ├── investment_chat/         system_prompt.txt (chat advisor instruction)
+│   ├── investment_chat/         advisor_prompt.txt + router_prompt.txt + utility_prompt.txt
 │   └── memory/                  compaction_system / relation_extraction_system / relation_extraction_user_template
 ├── memory/                       Multi-tier long-term memory system
 │   ├── policy.py                Single source for all memory controls — 10 groups (2,817L)
@@ -500,7 +500,7 @@ Per-agent 모델 오버라이드: `agents_config[].model` in config
 build_investment_chat_agent(repo, settings, tenant_id, registry, provider, model_override)
   │
   ├── prompts/prompt_pack.PromptPack.render_investment_chat_instruction()
-  │     └── arena/prompts/investment_chat/system_prompt.txt
+  │     └── arena/prompts/investment_chat/advisor_prompt.txt
   │
   ├── investment_chat/registry.build_chat_registry()
   │     ├── default_registry.clone() + chat용 _ContextTools 재바인딩
@@ -514,7 +514,7 @@ build_investment_chat_agent(repo, settings, tenant_id, registry, provider, model
   └── adk_models._resolve_model(provider, settings, model_override)
 ```
 
-`investment_chat/system_prompt.txt`는 설정 변경 draft를 "적용됨"으로 말하지 말 것, token 복사를 사용자에게 요구하지 말 것 같은 safety policy만 담습니다. 어떤 값을 채워야 하는지는 tool name, description, typed signature/schema가 담당합니다.
+`investment_chat/advisor_prompt.txt`는 advisor 역할 경계, 주문/설정 draft safety policy, order rationale 규칙을 담습니다. 어떤 값을 채워야 하는지는 tool name, description, typed signature/schema가 담당합니다.
 
 | Tool group | Tools | Purpose |
 |------------|-------|---------|

@@ -37,7 +37,8 @@ def test_prompt_pack_loads_text_templates_from_central_package() -> None:
     assert prompt_path("adk", "explore_solo_format.txt").exists()
     assert prompt_path("adk", "execution_format.txt").exists()
     assert prompt_path("adk", "board_format.txt").exists()
-    assert prompt_path("investment_chat", "system_prompt.txt").exists()
+    assert prompt_path("investment_chat", "advisor_prompt.txt").exists()
+    assert not prompt_path("investment_chat", "system_prompt.txt").exists()
     assert "{agent_id}" in PromptPack.file_core_prompt()
     assert "적극적인 포트폴리오 관리" in PromptPack.file_user_prompt_default()
 
@@ -158,9 +159,13 @@ def test_prompt_pack_renders_investment_chat_instruction() -> None:
         tenant_id="MidNightNnN",
         provider="gpt",
         model_id="gpt-5.5",
+        utility_agent_name="investment_chat_utility",
     )
 
     assert "tenant 'midnightnnn'" in prompt
+    assert "investment advisor sub-agent" in prompt
+    assert "investment_chat_utility" in prompt
+    assert "mixed or ambiguous" in prompt
     assert "submit_order_with_confirmation" in prompt
     assert "validate_order_draft" in prompt
     assert "get_order_approval_status" in prompt
@@ -175,6 +180,7 @@ def test_prompt_pack_renders_investment_chat_instruction() -> None:
     assert "memory/thesis summaries" not in prompt
     assert "generic placeholders" not in prompt
     assert "2-4" not in prompt
+    assert not prompt_path("investment_chat", "advisor_routing_note.txt").exists()
 
 
 def test_prompt_pack_renders_investment_chat_router_instruction() -> None:
@@ -212,14 +218,3 @@ def test_prompt_pack_renders_investment_chat_utility_instruction() -> None:
     assert "configuration-change proposals" in prompt
     assert "Do not give investment advice" in prompt
     assert "investment_chat_advisor" in prompt
-
-
-def test_prompt_pack_renders_investment_chat_advisor_routing_note() -> None:
-    prompt = PromptPack.render_investment_chat_advisor_routing_note(
-        utility_agent_name="investment_chat_utility",
-    )
-
-    assert prompt_path("investment_chat", "advisor_routing_note.txt").exists()
-    assert "investment advisor sub-agent" in prompt
-    assert "order submission flows" in prompt
-    assert "investment_chat_utility" in prompt
