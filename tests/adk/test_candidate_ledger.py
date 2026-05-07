@@ -160,8 +160,8 @@ def test_candidate_ledger_tracks_order_and_execution_funnel() -> None:
 
     runner.record_candidate_orders(
         [
-            {"ticker": "MSFT", "side": "BUY", "target_weight": 0.2},
-            {"ticker": "AAPL", "side": "BUY", "target_weight": 0.1},
+            {"ticker": "MSFT", "side": "BUY", "quantity": 2},
+            {"ticker": "AAPL", "side": "BUY", "quantity": 1},
         ]
     )
     runner.record_candidate_order_feedback(

@@ -153,9 +153,9 @@ def _base_entries(
             tool_id="optimize_portfolio",
             description=(
                 "Answers one question: how much of each ticker to hold. "
-                "Computes target weights for a basket (current holdings + new candidates) and emits ready-to-execute "
-                "rebalance orders (BUY target_weight / SELL sell_ratio). Supports forecast-enhanced, max-Sharpe, "
-                "and HRP optimization modes. "
+                "Computes target weights for a basket (current holdings + new candidates) and emits portfolio-weight "
+                "rebalance suggestions. Final execution orders must still use explicit BUY/SELL quantity. Supports "
+                "forecast-enhanced, max-Sharpe, and HRP optimization modes. "
                 "Gracefully degrades: tickers with insufficient history are excluded (reported in data_quality.excluded); "
                 "forecast strategy falls back to HRP when coverage<50%; a single usable ticker returns weight=1.0. "
                 "Optional constraints — max_weight (per-name cap, e.g. 0.35), min_weight (drop floor, e.g. 0.02), "

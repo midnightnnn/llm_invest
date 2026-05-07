@@ -30,7 +30,7 @@ def test_build_order_intents_defaults_single_market_us_exchange() -> None:
             {
                 "ticker": "AAPL",
                 "side": "BUY",
-                "target_weight": 0.5,
+                "quantity": 7,
                 "rationale": "single-market default exchange",
             }
         ],
@@ -83,7 +83,7 @@ def test_build_order_intents_preserves_full_rationale_text() -> None:
             {
                 "ticker": "AAPL",
                 "side": "BUY",
-                "target_weight": 0.5,
+                "quantity": 7,
                 "rationale": long_rationale,
             }
         ],
@@ -105,7 +105,7 @@ def test_build_order_intents_preserves_full_rationale_text() -> None:
     assert intents[0].rationale.endswith("TAIL_MARKER")
 
 
-def test_build_order_intents_buy_target_weight_only_adds_shortfall() -> None:
+def test_build_order_intents_buy_uses_explicit_quantity_without_weight_math() -> None:
     settings = load_settings()
     settings.trading_mode = "paper"
     settings.kis_target_market = "nasdaq"
@@ -130,8 +130,8 @@ def test_build_order_intents_buy_target_weight_only_adds_shortfall() -> None:
             {
                 "ticker": "AAPL",
                 "side": "BUY",
-                "target_weight": 0.5,
-                "rationale": "raise to target weight",
+                "quantity": 7,
+                "rationale": "add explicit shares",
             }
         ],
         row_map={
@@ -148,7 +148,154 @@ def test_build_order_intents_buy_target_weight_only_adds_shortfall() -> None:
     )
 
     assert len(intents) == 1
-    assert intents[0].quantity == 3.6923
+    assert intents[0].quantity == 7.0
+
+
+def test_build_order_intents_skips_buy_without_quantity() -> None:
+    settings = load_settings()
+    settings.trading_mode = "paper"
+    settings.kis_target_market = "nasdaq"
+    settings.max_order_krw = 2_000_000.0
+    settings.max_position_ratio = 1.0
+    feedback_events: list[dict[str, object]] = []
+
+    intents, tickers_mentioned = build_order_intents(
+        repo=_RepoForAdkGenerate(),
+        settings=settings,
+        agent_id="gpt",
+        sleeve_capital_krw=2_000_000.0,
+        cycle_id="cycle_order_missing_qty",
+        context={
+            "portfolio": {
+                "cash_krw": 2_000_000.0,
+                "total_equity_krw": 2_000_000.0,
+                "positions": {},
+            },
+            "order_budget": {"max_buy_notional_krw": 2_000_000.0},
+        },
+        orders=[
+            {
+                "ticker": "AAPL",
+                "side": "BUY",
+                "target_weight": 0.5,
+                "rationale": "legacy weight-only order should not execute",
+            }
+        ],
+        row_map={
+            "AAPL": {
+                "ticker": "AAPL",
+                "exchange_code": "NASD",
+                "instrument_id": "NASD:AAPL",
+                "close_price_krw": 130000.0,
+                "close_price_native": 100.0,
+                "quote_currency": "USD",
+                "fx_rate_used": 1300.0,
+            }
+        },
+        feedback_events=feedback_events,
+    )
+
+    assert tickers_mentioned == {"AAPL"}
+    assert intents == []
+    assert feedback_events == [
+        {"ticker": "AAPL", "side": "BUY", "status": "skipped", "reason": "missing_quantity"},
+    ]
+
+
+def test_build_order_intents_floors_fractional_quantity() -> None:
+    settings = load_settings()
+    settings.trading_mode = "paper"
+    settings.kis_target_market = "nasdaq"
+    settings.max_order_krw = 2_000_000.0
+    settings.max_position_ratio = 1.0
+
+    intents, _ = build_order_intents(
+        repo=_RepoForAdkGenerate(),
+        settings=settings,
+        agent_id="gpt",
+        sleeve_capital_krw=2_000_000.0,
+        cycle_id="cycle_order_fractional_qty",
+        context={
+            "portfolio": {
+                "cash_krw": 2_000_000.0,
+                "total_equity_krw": 2_000_000.0,
+                "positions": {},
+            },
+            "order_budget": {"max_buy_notional_krw": 2_000_000.0},
+        },
+        orders=[
+            {
+                "ticker": "AAPL",
+                "side": "BUY",
+                "quantity": 1.9,
+                "rationale": "fractional quantity should be conservative",
+            }
+        ],
+        row_map={
+            "AAPL": {
+                "ticker": "AAPL",
+                "exchange_code": "NASD",
+                "instrument_id": "NASD:AAPL",
+                "close_price_krw": 130000.0,
+                "close_price_native": 100.0,
+                "quote_currency": "USD",
+                "fx_rate_used": 1300.0,
+            }
+        },
+    )
+
+    assert len(intents) == 1
+    assert intents[0].quantity == 1.0
+
+
+def test_build_order_intents_skips_buy_over_order_budget() -> None:
+    settings = load_settings()
+    settings.trading_mode = "paper"
+    settings.kis_target_market = "nasdaq"
+    settings.max_order_krw = 10_000_000.0
+    settings.max_position_ratio = 1.0
+    feedback_events: list[dict[str, object]] = []
+
+    intents, _ = build_order_intents(
+        repo=_RepoForAdkGenerate(),
+        settings=settings,
+        agent_id="gpt",
+        sleeve_capital_krw=2_000_000.0,
+        cycle_id="cycle_order_over_budget",
+        context={
+            "portfolio": {
+                "cash_krw": 2_000_000.0,
+                "total_equity_krw": 2_000_000.0,
+                "positions": {},
+            },
+            "order_budget": {"max_buy_notional_krw": 1_000_000.0},
+        },
+        orders=[
+            {
+                "ticker": "AAPL",
+                "side": "BUY",
+                "quantity": 10,
+                "rationale": "too large for current buy budget",
+            }
+        ],
+        row_map={
+            "AAPL": {
+                "ticker": "AAPL",
+                "exchange_code": "NASD",
+                "instrument_id": "NASD:AAPL",
+                "close_price_krw": 130000.0,
+                "close_price_native": 100.0,
+                "quote_currency": "USD",
+                "fx_rate_used": 1300.0,
+            }
+        },
+        feedback_events=feedback_events,
+    )
+
+    assert intents == []
+    assert feedback_events == [
+        {"ticker": "AAPL", "side": "BUY", "status": "skipped", "reason": "buy_notional_over_budget"},
+    ]
 
 
 def test_build_order_intents_multi_market_defaults_korean_exchange() -> None:
@@ -176,7 +323,7 @@ def test_build_order_intents_multi_market_defaults_korean_exchange() -> None:
             {
                 "ticker": "005930",
                 "side": "BUY",
-                "target_weight": 0.5,
+                "quantity": 10,
                 "rationale": "combo-market KRX inference",
             }
         ],
@@ -223,13 +370,13 @@ def test_build_order_intents_collects_feedback_events() -> None:
             {
                 "ticker": "AAPL",
                 "side": "BUY",
-                "target_weight": 0.5,
+                "quantity": 5,
                 "rationale": "build intent",
             },
             {
                 "ticker": "TSLA",
                 "side": "BUY",
-                "target_weight": 0.3,
+                "quantity": 3,
                 "rationale": "missing price",
             },
         ],
@@ -255,7 +402,7 @@ def test_build_order_intents_collects_feedback_events() -> None:
     ]
 
 
-def test_build_order_intents_live_sell_rounds_up_small_position() -> None:
+def test_build_order_intents_live_sell_uses_explicit_quantity() -> None:
     settings = load_settings()
     settings.trading_mode = "live"
     settings.kis_target_market = "kospi"
@@ -285,8 +432,8 @@ def test_build_order_intents_live_sell_rounds_up_small_position() -> None:
             {
                 "ticker": "005930",
                 "side": "SELL",
-                "sell_ratio": 0.1,
-                "rationale": "small live trim",
+                "quantity": 1,
+                "rationale": "explicit live trim",
             }
         ],
         row_map={

@@ -1,9 +1,9 @@
 ## 주문 규칙
 - 정수(whole-share) 단위의 주식 주문만 지원합니다. 소수점 단위 주식(fractional shares)은 주문하지 마십시오.
 - side는 BUY, SELL, HOLD 중 하나입니다.
-- BUY 주문은 target_weight를 사용합니다. target_weight는 sleeve_equity 대비 해당 종목의 최종 목표 비중이며 0.0~1.0 범위입니다.
-- SELL 주문은 sell_ratio를 사용합니다. sell_ratio는 현재 보유 수량 대비 매도 비율이며 0.0~1.0 범위입니다.
-- BUY는 예상 추가 주식 수(max(sleeve_equity * target_weight - current_position_value, 0) / price_per_share)가 최소 1 이상이 되도록 설정하십시오. 1 미만이면 해당 티커는 HOLD를 사용하십시오.
+- BUY/SELL 주문은 quantity를 사용합니다. quantity는 실제 주문할 주식 수이며 1 이상의 정수입니다.
+- BUY quantity는 order_budget, 현금 버퍼, 포지션 집중도, 현재가를 감안해 감당 가능한 수량만 입력하십시오.
+- SELL quantity는 현재 보유 수량 이하만 입력하십시오.
 - orders 배열에는 여러 종목의 주문을 넣을 수 있습니다. 거래가 필요 없으면 빈 배열 []로 반환하십시오.
 - 도구의 출력은 최종 판단을 대체하지 않습니다. 도구의 근거와 자신의 분석을 종합해 최적의 투자 결정을 내리십시오.
 - rationale은 durable, ontology-friendly investment memo로 작성하십시오. 짧은 라벨이 아니라 투자 메모여야 합니다.
@@ -18,8 +18,8 @@
     {
       "ticker": "AAPL",
       "side": "BUY",
-      "target_weight": 0.15,
-      "rationale": "AAPL의 실적 성장 모멘텀이 AAPL 매수 thesis를 지지한다고 판단해 목표 비중 15%까지 증액한다. 현재 sleeve 현금과 기존 AAPL 비중을 감안하면 이 target_weight는 과도한 집중 리스크 없이 성장 노출을 높이는 규모다.",
+      "quantity": 1,
+      "rationale": "AAPL의 실적 성장 모멘텀이 AAPL 매수 thesis를 지지한다고 판단해 1주를 추가 매수한다. 현재 sleeve 현금, order_budget, 기존 AAPL 보유 수량을 감안하면 1주 증액은 과도한 집중 리스크 없이 성장 노출을 높이는 규모다.",
       "strategy_refs": ["momentum", "earnings_growth"]
     }
   ]

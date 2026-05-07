@@ -281,10 +281,6 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
-def _clamped_unit_float(value: Any) -> float:
-    return max(0.0, min(_safe_float(value), 1.0))
-
-
 def _resolve_exchange_identity(
     settings: Settings,
     *,
@@ -323,54 +319,12 @@ def _resolve_exchange_identity(
     return exchange_code, instrument_id
 
 
-def _resolve_order_quantity(
-    settings: Settings,
-    *,
-    side_raw: str,
-    target_weight: float,
-    sell_ratio: float,
-    price: float,
-    sleeve_equity: float,
-    holdings: dict[str, Any],
-    ticker: str,
-    order_budget: dict[str, Any],
-    market_row: dict[str, Any] | None = None,
-) -> float:
-    position = holdings.get(ticker, {}) if isinstance(holdings, dict) else {}
-    hold_qty = _safe_float(position.get("quantity") if isinstance(position, dict) else 0.0)
-
-    if side_raw == "SELL":
-        target_qty = max(hold_qty * sell_ratio, 0.0)
-        if hold_qty > 0:
-            target_qty = min(target_qty, hold_qty)
-        if settings.trading_mode == "live":
-            # Ceil keeps small live sell intents from collapsing to zero shares.
-            return float(int(min(math.ceil(target_qty), max(hold_qty, 0.0))))
-        return round(max(target_qty, 0.0001), 4)
-
-    current_value = max(hold_qty, 0.0) * float(price)
-    max_position_value = max(float(settings.max_position_ratio) * float(sleeve_equity), 0.0)
-    target_value = max(float(sleeve_equity) * float(target_weight), 0.0)
-    target_value = min(target_value, max_position_value)
-    budget = max(target_value - current_value, 0.0)
-    budget = min(budget, settings.max_order_krw * 0.95)
-    max_buy_notional = _safe_float(order_budget.get("max_buy_notional_krw"))
-    if max_buy_notional > 0:
-        budget = min(budget, max_buy_notional * 0.98)
-
-    if budget <= 0:
+def _whole_share_quantity(value: Any) -> float:
+    """Converts model-requested shares into the conservative whole-share quantity."""
+    raw_qty = _safe_float(value)
+    if raw_qty <= 0:
         return 0.0
-
-    # Volatility-based size cap: reduce budget for high-volatility tickers
-    vol_20d = _safe_float((market_row or {}).get("volatility_20d"))
-    if vol_20d > 0.03:  # >3% daily vol triggers cap
-        vol_cap = max(0.5, min(1.0, 0.03 / vol_20d))
-        budget = budget * vol_cap
-
-    raw_qty = max(budget / price, 0.0)
-    if settings.trading_mode == "live":
-        return float(int(math.floor(raw_qty)))
-    return round(max(raw_qty, 0.0001), 4)
+    return float(int(math.floor(raw_qty)))
 
 
 def build_order_intents(
@@ -399,9 +353,7 @@ def build_order_intents(
     if not isinstance(order_budget, dict):
         order_budget = {}
 
-    sleeve_equity = _safe_float(portfolio.get("total_equity_krw"))
-    if sleeve_equity <= 0:
-        sleeve_equity = float(sleeve_capital_krw)
+    _ = sleeve_capital_krw
 
     for order in orders:
         if not isinstance(order, dict):
@@ -409,8 +361,7 @@ def build_order_intents(
 
         side_raw = str(order.get("side", "HOLD")).strip().upper()
         ticker = str(order.get("ticker", "")).strip().upper()
-        target_weight = _clamped_unit_float(order.get("target_weight")) if side_raw == "BUY" else 0.0
-        sell_ratio = _clamped_unit_float(order.get("sell_ratio")) if side_raw == "SELL" else 0.0
+        quantity = _whole_share_quantity(order.get("quantity"))
         rationale = str(order.get("rationale", ""))
         strategy_refs = order.get("strategy_refs", [])
         if not isinstance(strategy_refs, list):
@@ -418,8 +369,18 @@ def build_order_intents(
 
         if ticker:
             tickers_mentioned.add(ticker)
-        sizing_value = target_weight if side_raw == "BUY" else sell_ratio
-        if side_raw not in {"BUY", "SELL"} or not ticker or sizing_value <= 0:
+        if side_raw not in {"BUY", "SELL"} or not ticker:
+            continue
+        if quantity <= 0:
+            logger.warning(
+                "[yellow]ADK skipped intent[/yellow] agent=%s ticker=%s reason=missing_quantity",
+                agent_id,
+                ticker,
+            )
+            if feedback_events is not None:
+                feedback_events.append(
+                    {"ticker": ticker, "side": side_raw, "status": "skipped", "reason": "missing_quantity"}
+                )
             continue
 
         market_row = row_map.get(ticker)
@@ -449,36 +410,24 @@ def build_order_intents(
                 feedback_events.append({"ticker": ticker, "side": side_raw, "status": "skipped", "reason": "no_holdings_for_sell"})
             continue
 
-        quantity = _resolve_order_quantity(
-            settings,
-            side_raw=side_raw,
-            target_weight=target_weight,
-            sell_ratio=sell_ratio,
-            price=price,
-            sleeve_equity=sleeve_equity,
-            holdings=holdings,
-            ticker=ticker,
-            order_budget=order_budget,
-            market_row=market_row,
-        )
-        if quantity < 1 and settings.trading_mode == "live":
-            logger.warning(
-                "[yellow]ADK skipped intent[/yellow] agent=%s ticker=%s reason=live_qty_under_1",
-                agent_id,
-                ticker,
-            )
-            if feedback_events is not None:
-                feedback_events.append({"ticker": ticker, "side": side_raw, "status": "skipped", "reason": "live_qty_under_1"})
-            continue
-        if quantity <= 0:
-            logger.warning(
-                "[yellow]ADK skipped intent[/yellow] agent=%s ticker=%s reason=no_budget",
-                agent_id,
-                ticker,
-            )
-            if feedback_events is not None:
-                feedback_events.append({"ticker": ticker, "side": side_raw, "status": "skipped", "reason": "no_budget"})
-            continue
+        if side_raw == "BUY":
+            max_buy_notional = _safe_float(order_budget.get("max_buy_notional_krw"))
+            if max_buy_notional > 0 and quantity * price > max_buy_notional:
+                logger.warning(
+                    "[yellow]ADK skipped intent[/yellow] agent=%s ticker=%s reason=buy_notional_over_budget",
+                    agent_id,
+                    ticker,
+                )
+                if feedback_events is not None:
+                    feedback_events.append(
+                        {
+                            "ticker": ticker,
+                            "side": side_raw,
+                            "status": "skipped",
+                            "reason": "buy_notional_over_budget",
+                        }
+                    )
+                continue
 
         position = holdings.get(ticker, {}) if isinstance(holdings, dict) else {}
         exchange_code, instrument_id = _resolve_exchange_identity(

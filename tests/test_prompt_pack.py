@@ -80,6 +80,22 @@ def test_execution_prompt_describes_ontology_friendly_order_rationale() -> None:
     assert "2-4" not in prompt
 
 
+def test_execution_prompt_requires_quantity_based_orders() -> None:
+    prompt = PromptPack.render_decision_prompt(
+        {
+            "cycle_phase": "execution",
+            "portfolio": {"cash_krw": 1000},
+            "order_budget": {"max_buy_notional_krw": 1000},
+        },
+        [],
+        max_tool_calls=5,
+    )
+
+    assert "quantity" in prompt
+    assert "target_weight" not in prompt
+    assert "sell_ratio" not in prompt
+
+
 def test_prompt_pack_builds_tool_catalog_payload_from_registry() -> None:
     registry = ToolRegistry(
         [

@@ -25,7 +25,7 @@ class _FakeRunner:
                     {
                         "ticker": "AAPL",
                         "side": "BUY",
-                        "target_weight": 0.5,
+                        "quantity": 1,
                         "rationale": "fx repricing",
                     }
                 ],
@@ -47,7 +47,7 @@ class _FakeKospiRunner(_FakeRunner):
                     {
                         "ticker": "025860",
                         "side": "BUY",
-                        "target_weight": 0.2,
+                        "quantity": 48,
                         "rationale": "momentum continuation",
                     }
                 ],
