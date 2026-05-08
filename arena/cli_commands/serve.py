@@ -3,11 +3,22 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from datetime import date
 
 from arena.config import Settings
 
 logger = logging.getLogger(__name__)
+
+
+def _truthy_env(value: str | None, *, default: bool = False) -> bool:
+    if value is None:
+        return default
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _ui_ensure_schema_on_startup() -> bool:
+    return _truthy_env(os.getenv("ARENA_UI_ENSURE_SCHEMA_ON_STARTUP"), default=False)
 
 
 def _cli():
@@ -34,8 +45,9 @@ def cmd_serve_ui() -> None:
     cli._validate_or_exit(settings)
 
     repo = cli._repo_or_exit(settings)
-    repo.ensure_dataset()
-    repo.ensure_tables()
+    if _ui_ensure_schema_on_startup():
+        repo.ensure_dataset()
+        repo.ensure_tables()
 
     from arena.ui.server import serve_ui
 

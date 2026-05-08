@@ -35,7 +35,7 @@
 - **Agents decide on their own** — Not algorithms, but LLMs that read the market, select tools, make trade decisions, and manage portfolios autonomously.
 - **Competition & collaboration between agents** — Agents share analysis on a bulletin board, review each other's picks, and reference past lessons.
 - **Fully customizable agents** — Customize prompts, sleeve allocation, tool configurations, memory policies, and risk limits through the admin UI or an approval-gated chat workflow.
-- **Chat-driven advisor on the same runtime** — A built-in investment chat lets the operator ask about positions, approve orders, and stage settings changes through the same risk, config, memory, and gateway surfaces as the autonomous cycle.
+- **Chat-first operator surface** — The investment chat is the default landing page (`/` redirects to `/investment-chat`); the operator asks about positions, approves orders, and stages settings changes through the same risk, config, memory, and gateway surfaces as the autonomous cycle. A read-only mirror of the same agent powers the public showcase.
 
 <details>
 <summary><b>💬 Agent Board Example</b></summary>
@@ -279,16 +279,19 @@ flowchart TB
 ```
 arena/
   agents/          # ADK ReAct cycle agents + research + memory compaction
-    investment_chat/   # User-facing chat agent (account/history/order/config tools, approval drafts)
+    investment_chat/   # User-facing chat agent (router → advisor + utility, account/history/order/config tools, approval drafts, read-only flag)
   prompts/         # Central prompt templates (adk / investment_chat / memory) + loader
   memory/          # Long-term memory (storage, vectors, policies, queries, cleanup, semantic relations)
-  ui/              # Admin UI (FastAPI + Jinja2 + HTMX) + investment-chat ADK mount
+  ui/              # Admin UI (FastAPI + Jinja2 + HTMX) + investment-chat ADK mounts (read-write + read-only)
   tools/           # Tool registry (quant, sentiment, macro, context)
   recommendation/  # Signal-IC meta-learner that feeds recommend_opportunities
+  forecast_selection.py  # Picks forecast tickers from ranker buckets (momentum/pullback/recovery/defensive)
+  corporate_actions.py   # Planned corporate-action windows used by RiskEngine + Reconciliation
+  asset_benchmarks.py    # US/KOSPI cross-asset ETF benchmarks (gold, silver, oil, long treasury, USD)
   data/            # BigQuery storage + schemas (modular per-domain stores)
   broker/          # Paper / live (KIS) broker adapters
-  execution/       # Central order gateway
-  open_trading/    # KIS client + account/dividend sync + fundamentals ingestors
+  execution/       # Central order gateway (whole-share quantity orders)
+  open_trading/    # KIS client + account/dividend sync + fundamentals ingestors + KOSPI master loader
   forecasting/     # Multi-model stacking forecasts
   providers/       # LLM provider registry + credential parsing
   cli_commands/    # Modular CLI handlers (pipeline, sync, admin, reconcile, serve)
@@ -301,7 +304,7 @@ arena/
   orchestrator.py  # Cycle orchestration
   reconciliation.py # State reconciliation + auto-recovery
   risk.py          # Risk engine
-tests/             # 67+ test files (pytest)
+tests/             # 169+ test files (pytest)
 scripts/           # Deployment scripts
 ```
 
@@ -316,25 +319,30 @@ All settings are stored in the active config backend (BigQuery in GCP mode, Duck
 | Page | Description |
 |------|-------------|
 | **Prompts** | System prompts that direct agent behavior |
-| **Agents** | Add/remove agents, swap models, per-agent overrides |
+| **Agents** | Add/remove agents, swap models, per-agent overrides — also where the investment-chat advisor's provider/model is set |
 | **Risk** | Position limits, cash buffer, cooldown, turnover caps |
 | **Sleeves** | Target capital allocation per agent |
 | **Tools** | Enable/disable built-in tools per cycle |
 | **MCP** | Register custom tool servers |
 | **Memory** | 3D neural graph visualization of memory policies |
-| **Investment Chat** | Chat with the agents about positions, approve order drafts, and approve settings drafts on the same runtime |
+| **Investment Chat** | The default landing surface — chat with the agents about positions, approve order drafts, and approve settings drafts on the same runtime |
 
 ---
 
 ## Investment Chat
 
-A built-in advisor that runs on the same ADK runtime as the autonomous cycle. Pick a provider/model in the page header, ask about the total account or a specific agent sleeve, and the chat agent answers with the same analysis tools the cycle agents use. Mutating actions are staged as drafts and require an explicit UI approval button before anything is submitted or applied.
+The default landing surface (`/` redirects to `/investment-chat`). A built-in advisor that runs on the same ADK runtime as the autonomous cycle: ask about the total account or a specific agent sleeve and it answers with the same analysis tools the cycle agents use. Mutating actions are staged as drafts and require an explicit UI approval button before anything is submitted or applied. The chat provider/model is set from the settings page (`/settings?tab=agents` → chat card → `POST /settings/chat-model`); the chat page itself is a clean iframe shell with the approval panels.
+
+Internally the chat is a small agent tree — a router dispatches each turn to the **advisor** (your chosen model, all analysis + draft tools) or to the **utility** (a low-cost model on the same provider, deterministic snapshots and config-change drafts). A read-only mirror of the same agent powers the public showcase via `/investment-chat/adk-readonly`, so visitors can interact without seeing or invoking order / config tools.
 
 ```mermaid
 graph LR
     USER(["Operator"])
-    SHELL["/investment-chat\nprovider · model select"]
-    ADK["ADK chat agent\nanalysis + draft tools"]
+    SETTINGS["/settings?tab=agents\nchat provider · model"]
+    SHELL["/investment-chat\niframe + approval panels"]
+    ROUTER["ADK router\ncheap model"]
+    ADVISOR["Advisor agent\nuser-chosen model\nanalysis + draft tools"]
+    UTILITY["Utility agent\ncheap model\nsnapshots + config drafts"]
     ORDERDRAFT{{"validate_order_draft\n→ order draft"}}
     ORDERPANEL["Order approval panel\nbutton click"]
     SUBMIT{{"submit_approved_order"}}
@@ -344,9 +352,14 @@ graph LR
     GATEWAY["ExecutionGateway\nRiskEngine + Broker"]
     AUDIT[("runtime_audit_logs\n+ semantic memory")]
 
-    USER --> SHELL --> ADK
-    ADK --> ORDERDRAFT --> ORDERPANEL --> SUBMIT --> GATEWAY
-    ADK --> CFGDRAFT --> CFGPANEL --> CONFIG
+    USER --> SHELL --> ROUTER
+    ROUTER --> ADVISOR
+    ROUTER --> UTILITY
+    SETTINGS -.->|POST /settings/chat-model| CONFIG
+    ADVISOR --> ORDERDRAFT --> ORDERPANEL --> SUBMIT --> GATEWAY
+    ADVISOR --> CFGDRAFT
+    UTILITY --> CFGDRAFT
+    CFGDRAFT --> CFGPANEL --> CONFIG
     SUBMIT -.-> AUDIT
     CFGPANEL -.-> AUDIT
 
@@ -357,17 +370,18 @@ graph LR
     classDef store fill:#fff7ed,stroke:#f97316,stroke-width:2px,color:#9a3412
 
     class USER user
-    class SHELL,ADK ui
+    class SHELL,SETTINGS,ROUTER,ADVISOR,UTILITY ui
     class ORDERDRAFT,ORDERPANEL,SUBMIT,CFGDRAFT,CFGPANEL approval
     class GATEWAY gw
     class CONFIG,AUDIT store
 ```
 
-- **Same runtime, separate agent** — Reuses `ExecutionGateway`, `RiskEngine`, broker adapters, memory store, and analysis tools. No parallel order path.
+- **Same runtime, separate agent tree** — Reuses `ExecutionGateway`, `RiskEngine`, broker adapters, memory store, and analysis tools. No parallel order path. Router and utility share the cheap model for the same provider; only the advisor uses the model you select.
 - **No direct writes from the LLM** — Analysis tools are inherited from the cycle registry; order and settings tools only create drafts. The backend/UI bridge calls the internal submit/apply tools after button approval.
 - **Two-step human approval** — `validate_order_draft` produces an approval token + risk decision but never submits. `/investment-chat` polls pending drafts and renders a compact approval panel; the submit bridge passes the exact confirmation phrase internally. Drafts auto-expire (default 15 min).
 - **Scope-aware** — `scope='account'` operates on the total brokerage account; `scope='agent_sleeve'` targets one batch agent's sleeve. Sleeve trades are recorded as `judgment_source="user+investment_chat"` so they don't masquerade as autonomous decisions.
-- **Config-aware** — `propose_agent_config_change`, `propose_chat_agent_config_change`, and `propose_tenant_config_change` can stage provider/model/tool/memory/risk/prompt changes. Agent sleeve capital can be fixed KRW, a percentage of the latest account equity, or the whole account; all modes resolve to the same `agents_config[].capital_krw` contract before apply.
+- **Config-aware** — `propose_agent_config_change`, `propose_chat_agent_config_change`, and `propose_tenant_config_change` can stage provider/model/tool/memory/risk/prompt changes. Agent sleeve capital can be fixed KRW, an additional KRW increment, a percentage of the latest account equity, or the whole account; all modes resolve to the same `agents_config[].capital_krw` contract before apply, and apply merges with the latest stored config so concurrent edits to other agents are not overwritten.
+- **Public read-only mode** — The same agent builder accepts a `read_only` flag that omits order and settings tools and adds a "view-only" notice to the advisor prompt. The showcase landing `/showcase/{tenant}/investment-chat` embeds this read-only ADK at `/investment-chat/adk-readonly`, isolated by a separate loader cache so it can never share state with the operator instance.
 - **Tenant-isolated, audit-logged** — Per-tenant write lock, `runtime_audit_logs` rows for each validate / submit / refresh, and a semantic-tier memory event so the cycle agents can recall the human override.
 
 ---
@@ -428,6 +442,11 @@ Agents autonomously select which tools to call at each reasoning step.
 
 > **+ MCP** — Add custom tool servers via the admin UI (SSE / Streamable HTTP).
 > Tool schemas are generated from typed Python signatures and registry metadata, so ADK sees required fields, enums, and descriptions instead of free-form JSON blobs.
+
+> **Pipeline-side safeguards**
+> · Forecast tickers are picked from the opportunity ranker's momentum / pullback / recovery / defensive buckets (with a max-age guard) and merged with current holdings, so the daily forecast budget stays focused on what the meta-learner already prefers. → [`arena/forecast_selection.py`](arena/forecast_selection.py)
+> · Planned corporate-action windows (splits, mergers, par-value changes) registered in `Settings.planned_corporate_actions` block new orders at the risk gate and downgrade matching reconciliation diffs from ERROR to a warning. → [`arena/corporate_actions.py`](arena/corporate_actions.py)
+> · Asset-class benchmark ETFs (gold, silver, oil, long treasury, USD) are tracked alongside the equity universe for both US and KOSPI. → [`arena/asset_benchmarks.py`](arena/asset_benchmarks.py)
 
 ---
 
@@ -557,7 +576,7 @@ graph LR
 - **Google Search Grounding as the research backbone** — `from google.adk.tools import google_search` powers the 4-phase market briefing pipeline. → [`arena/agents/research_agent.py`](arena/agents/research_agent.py)
 - **SDK-level tool budget enforcement** — `AutomaticFunctionCallingConfig(maximum_remote_calls=...)` + `AdkToolBudgetExceeded` guard. → [`arena/agents/adk_runner_runtime.py`](arena/agents/adk_runner_runtime.py)
 - **Slot-in for future Google services** — Gmail / Calendar / Drive and other Google APIs share ADC + service-account auth with the existing BigQuery / Firestore / Vertex stack, so they attach as MCP tools or first-party ADK tools without touching the agent loop.
-- **One ADK runtime, two product surfaces** — The investment chat agent (`agents/investment_chat/`) is built from the same `Runner`, model resolver, tool wrapper, and memory store as the cycle agents; only the prompt, tool whitelist, and approval flow differ. The chat dev-UI is mounted as a FastAPI sub-app at `/investment-chat/adk` with a per-tenant `BaseAgentLoader`. → [`arena/ui/investment_chat_adk.py`](arena/ui/investment_chat_adk.py)
+- **One ADK runtime, three product surfaces** — The investment chat agent (`agents/investment_chat/`) is built from the same `Runner`, model resolver, tool wrapper, and memory store as the cycle agents; only the prompt, tool whitelist, and approval flow differ. Internally the chat is a router → advisor + utility tree so the router/utility can run on a cheap model while the advisor uses the operator's choice. The dev-UI is mounted as a FastAPI sub-app at `/investment-chat/adk` (read-write, per-tenant `BaseAgentLoader`) and again at `/investment-chat/adk-readonly` for the public showcase, with the read-only flag baked into the loader cache key. → [`arena/ui/investment_chat_adk.py`](arena/ui/investment_chat_adk.py)
 
 ---
 

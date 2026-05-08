@@ -37,9 +37,16 @@ PUBLIC_DEMO_TENANT="${ARENA_PUBLIC_DEMO_TENANT:-}"
 SHOWCASE_TENANT="${ARENA_SHOWCASE_TENANT:-}"
 SHARED_RESEARCH_GEMINI_SOURCE_TENANT="${ARENA_SHARED_RESEARCH_GEMINI_SOURCE_TENANT:-}"
 UI_MIN_INSTANCES="${CLOUD_RUN_UI_MIN_INSTANCES:-${CLOUD_RUN_MIN_INSTANCES:-0}}"
+UI_MEMORY="${CLOUD_RUN_UI_MEMORY:-1Gi}"
+UI_ENSURE_SCHEMA_BEFORE_DEPLOY="${ARENA_UI_ENSURE_SCHEMA_BEFORE_DEPLOY:-true}"
+UI_ENSURE_SCHEMA_ON_STARTUP="${ARENA_UI_ENSURE_SCHEMA_ON_STARTUP:-false}"
 
 if ! [[ "${UI_MIN_INSTANCES}" =~ ^[0-9]+$ ]]; then
   echo "ERROR: CLOUD_RUN_UI_MIN_INSTANCES must be a non-negative integer."
+  exit 1
+fi
+if [[ -z "${UI_MEMORY}" ]]; then
+  echo "ERROR: CLOUD_RUN_UI_MEMORY must not be empty."
   exit 1
 fi
 
@@ -81,14 +88,24 @@ _upsert_secret_latest() {
     --data-file=- >/dev/null
 }
 
-echo "[1/5] Enable required APIs"
+_run_llm_arena() {
+  if command -v llm-arena >/dev/null 2>&1; then
+    llm-arena "$@"
+  elif [[ -x "${ROOT_DIR}/.venv/bin/llm-arena" ]]; then
+    "${ROOT_DIR}/.venv/bin/llm-arena" "$@"
+  else
+    python -m arena.cli "$@"
+  fi
+}
+
+echo "[1/6] Enable required APIs"
 gcloud services enable \
   run.googleapis.com \
   cloudbuild.googleapis.com \
   artifactregistry.googleapis.com \
   secretmanager.googleapis.com
 
-echo "[2/5] Resolve UI runtime config"
+echo "[2/6] Resolve UI runtime config"
 CURRENT_SERVICE_URL="$(gcloud run services describe "${SERVICE_NAME}" --region "${REGION}" --project "${PROJECT}" --format='value(status.url)' 2>/dev/null || true)"
 
 # Ignore checked-in/dev defaults so ship.sh all can still fall back to Secret Manager.
@@ -142,9 +159,9 @@ if [[ "${UI_AUTH_ENABLED,,}" == "true" ]] && [[ -z "${UI_CLIENT_ID}" || -z "${UI
 fi
 
 # Minimal env needed for BigQuery access + UI auth/settings defaults.
-RUN_ENV_VARS="${RUN_ENV_VARS:-^||^GOOGLE_CLOUD_PROJECT=${PROJECT}||BQ_DATASET=llm_arena||BQ_LOCATION=${REGION}||ARENA_LOG_LEVEL=INFO||ARENA_LOG_FORMAT=rich||ARENA_TRADING_MODE=live||ARENA_DISTRIBUTION_MODE=${DISTRIBUTION_MODE}||ARENA_AGENT_IDS=gemini,gpt,claude||KIS_TARGET_MARKET=us||ARENA_UI_AUTH_ENABLED=${UI_AUTH_ENABLED}||ARENA_UI_SETTINGS_ENABLED=${UI_SETTINGS_ENABLED}||GOOGLE_OAUTH_CLIENT_ID=${UI_CLIENT_ID}||GOOGLE_OAUTH_CLIENT_SECRET=${UI_CLIENT_SECRET}||ARENA_UI_GOOGLE_REDIRECT_URI=${UI_REDIRECT_URI}||ARENA_UI_SESSION_SECRET=${UI_SESSION_SECRET}||ARENA_OPERATOR_EMAILS=${OPERATOR_EMAILS}||ARENA_PUBLIC_DEMO_TENANT=${PUBLIC_DEMO_TENANT}||ARENA_SHOWCASE_TENANT=${SHOWCASE_TENANT}||ARENA_SHARED_RESEARCH_GEMINI_SOURCE_TENANT=${SHARED_RESEARCH_GEMINI_SOURCE_TENANT}}"
+RUN_ENV_VARS="${RUN_ENV_VARS:-^||^GOOGLE_CLOUD_PROJECT=${PROJECT}||BQ_DATASET=llm_arena||BQ_LOCATION=${REGION}||ARENA_LOG_LEVEL=INFO||ARENA_LOG_FORMAT=rich||ARENA_TRADING_MODE=live||ARENA_DISTRIBUTION_MODE=${DISTRIBUTION_MODE}||ARENA_AGENT_IDS=gemini,gpt,claude||KIS_TARGET_MARKET=us||ARENA_UI_AUTH_ENABLED=${UI_AUTH_ENABLED}||ARENA_UI_SETTINGS_ENABLED=${UI_SETTINGS_ENABLED}||ARENA_UI_ENSURE_SCHEMA_ON_STARTUP=${UI_ENSURE_SCHEMA_ON_STARTUP}||GOOGLE_OAUTH_CLIENT_ID=${UI_CLIENT_ID}||GOOGLE_OAUTH_CLIENT_SECRET=${UI_CLIENT_SECRET}||ARENA_UI_GOOGLE_REDIRECT_URI=${UI_REDIRECT_URI}||ARENA_UI_SESSION_SECRET=${UI_SESSION_SECRET}||ARENA_OPERATOR_EMAILS=${OPERATOR_EMAILS}||ARENA_PUBLIC_DEMO_TENANT=${PUBLIC_DEMO_TENANT}||ARENA_SHOWCASE_TENANT=${SHOWCASE_TENANT}||ARENA_SHARED_RESEARCH_GEMINI_SOURCE_TENANT=${SHARED_RESEARCH_GEMINI_SOURCE_TENANT}}"
 
-echo "[3/5] Ensure Artifact Registry"
+echo "[3/6] Ensure Artifact Registry"
 if ! gcloud artifacts repositories describe "${AR_REPOSITORY}" --location "${REGION}" --project "${PROJECT}" >/dev/null 2>&1; then
   gcloud artifacts repositories create "${AR_REPOSITORY}" \
     --repository-format=docker \
@@ -155,9 +172,9 @@ fi
 
 SKIP_BUILD="${SKIP_BUILD:-false}"
 if [[ "${SKIP_BUILD,,}" == "true" ]]; then
-  echo "[4/5] Skip build (SKIP_BUILD=true)"
+  echo "[4/6] Skip build (SKIP_BUILD=true)"
 else
-  echo "[4/5] Build container image (UI)"
+  echo "[4/6] Build container image (UI)"
   gcloud builds submit \
     --tag "${IMAGE}" \
     --project "${PROJECT}" \
@@ -165,7 +182,14 @@ else
     .
   fi
 
-echo "[5/5] Deploy Cloud Run Service"
+if [[ "${UI_ENSURE_SCHEMA_BEFORE_DEPLOY,,}" == "true" ]]; then
+  echo "[5/6] Ensure BigQuery schema"
+  _run_llm_arena init-bq
+else
+  echo "[5/6] Skip BigQuery schema ensure (ARENA_UI_ENSURE_SCHEMA_BEFORE_DEPLOY=${UI_ENSURE_SCHEMA_BEFORE_DEPLOY})"
+fi
+
+echo "[6/6] Deploy Cloud Run Service"
 DEPLOY_CMD=(
   gcloud run deploy "${SERVICE_NAME}"
   --image "${IMAGE}"
@@ -175,7 +199,7 @@ DEPLOY_CMD=(
   --update-env-vars "${RUN_ENV_VARS}"
   --port 8080
   --min-instances "${UI_MIN_INSTANCES}"
-  --memory 512Mi
+  --memory "${UI_MEMORY}"
   --cpu 1
   --concurrency 80
   --timeout 60
@@ -197,4 +221,6 @@ echo "Cloud Run Service: ${SERVICE_NAME}"
 echo "Image: ${IMAGE}"
 echo "Service Account: ${RUN_SERVICE_ACCOUNT}"
 echo "Min instances: ${UI_MIN_INSTANCES}"
+echo "Memory: ${UI_MEMORY}"
+echo "Runtime schema ensure: ${UI_ENSURE_SCHEMA_ON_STARTUP}"
 echo "URL: ${SERVICE_URL}"
