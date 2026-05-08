@@ -204,11 +204,6 @@ def _agent_cache_fingerprint(
         "runtime_credentials": _runtime_credentials_fingerprint(repo, tenant_id),
         "disabled_tools": _repo_config_value(repo, tenant_id, "disabled_tools"),
         "investment_chat_config": _repo_config_value(repo, tenant_id, "investment_chat_config"),
-        "investment_chat_account_markets": _repo_config_value(
-            repo,
-            tenant_id,
-            "investment_chat_account_markets",
-        ),
         "vertex_env": {
             "GOOGLE_GENAI_USE_VERTEXAI": os.getenv("GOOGLE_GENAI_USE_VERTEXAI", ""),
             "GOOGLE_CLOUD_PROJECT": os.getenv("GOOGLE_CLOUD_PROJECT", ""),
@@ -544,12 +539,77 @@ _MOBILE_OVERRIDE_CSS = """\
 </style>
 """
 
+_MOBILE_KEYBOARD_DISMISSAL_SCRIPT = """\
+<script>
+(function installArenaMobileKeyboardDismissal() {
+  var lastFocusedChatInput = null;
+
+  function isMobileViewport() {
+    return !window.matchMedia || window.matchMedia('(max-width: 767px)').matches;
+  }
+
+  function isChatInput(node) {
+    return !!(
+      node &&
+      node.matches &&
+      node.matches('textarea.chat-input-box, input.chat-input-box')
+    );
+  }
+
+  function rememberChatInput(event) {
+    if (isChatInput(event.target)) {
+      lastFocusedChatInput = event.target;
+    }
+  }
+
+  function dismissMobileKeyboard() {
+    if (!isMobileViewport()) {
+      return;
+    }
+    window.setTimeout(function() {
+      var active = document.activeElement;
+      if (!isChatInput(active)) {
+        active = lastFocusedChatInput;
+      }
+      if (active && typeof active.blur === 'function') {
+        active.blur();
+      }
+    }, 80);
+  }
+
+  document.addEventListener('focusin', rememberChatInput, true);
+  document.addEventListener('click', function(event) {
+    var target = event.target;
+    if (target && target.closest && target.closest('button.send-message-btn')) {
+      dismissMobileKeyboard();
+    }
+  }, true);
+  document.addEventListener('submit', function(event) {
+    var target = event.target;
+    if (target && target.querySelector && target.querySelector('textarea.chat-input-box, input.chat-input-box')) {
+      dismissMobileKeyboard();
+    }
+  }, true);
+  document.addEventListener('keydown', function(event) {
+    if (
+      event.key === 'Enter' &&
+      !event.shiftKey &&
+      !event.isComposing &&
+      isChatInput(event.target)
+    ) {
+      dismissMobileKeyboard();
+    }
+  }, true);
+})();
+</script>
+"""
+
 
 def _inject_mobile_overrides(index_html_path: Path) -> None:
     if not index_html_path.exists():
         return
     text = index_html_path.read_text(encoding="utf-8")
-    block = f"{_MOBILE_OVERRIDE_OPEN}\n{_MOBILE_OVERRIDE_CSS}{_MOBILE_OVERRIDE_CLOSE}\n"
+    block = f"{_MOBILE_OVERRIDE_OPEN}\n{_MOBILE_OVERRIDE_CSS}{_MOBILE_KEYBOARD_DISMISSAL_SCRIPT}{_MOBILE_OVERRIDE_CLOSE}\n"
     if text.count(_MOBILE_OVERRIDE_OPEN) == 1 and block in text:
         return
     while True:

@@ -118,7 +118,36 @@ def test_investment_chat_builds_analysis_tools_with_total_account_market_scope(m
         registry=None,
     )
 
-    assert captured["kis_target_market"] == "us,kospi"
+    assert captured["kis_target_market"] == "us,kospi,kosdaq"
+
+
+def test_investment_chat_ignores_legacy_single_market_chat_scope(monkeypatch) -> None:
+    from arena.agents.investment_chat import factory
+    from arena.agents.investment_chat import registry as chat_registry
+
+    settings = load_settings()
+    settings.kis_target_market = "us"
+    repo = _ChatOrderRepo()
+    repo.set_config("local", "investment_chat_account_markets", "us", "legacy")
+    captured: dict[str, object] = {}
+
+    def fake_default_registry(repo, settings, *, tenant_id="local"):
+        _ = repo, tenant_id
+        captured["kis_target_market"] = settings.kis_target_market
+        return ToolRegistry([])
+
+    monkeypatch.setattr(chat_registry, "build_default_registry", fake_default_registry)
+    monkeypatch.setattr(factory, "_resolve_model", lambda *args, **kwargs: "fake-model")
+    monkeypatch.setattr(factory, "Agent", lambda **kwargs: SimpleNamespace(**kwargs))
+
+    factory.build_investment_chat_agent(
+        repo=repo,
+        settings=settings,
+        tenant_id="local",
+        registry=None,
+    )
+
+    assert captured["kis_target_market"] == "us,kospi,kosdaq"
 
 
 def test_build_investment_chat_agent_injects_tool_memory_for_request_tenant(monkeypatch) -> None:

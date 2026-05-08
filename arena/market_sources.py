@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 US_MARKETS: frozenset[str] = frozenset({"nasdaq", "nyse", "amex", "us"})
-KOSPI_MARKETS: frozenset[str] = frozenset({"kospi"})
+KOSPI_MARKETS: frozenset[str] = frozenset({"kospi", "kosdaq"})
 
 LIVE_MARKET_SOURCES_BY_MARKET: dict[str, tuple[str, ...]] = {
     "nasdaq": ("open_trading_nasdaq_quote", "open_trading_nasdaq", "open_trading_us_quote", "open_trading_us"),
@@ -20,6 +20,7 @@ LIVE_MARKET_SOURCES_BY_MARKET: dict[str, tuple[str, ...]] = {
         "open_trading_amex",
     ),
     "kospi": ("open_trading_kospi_quote", "open_trading_kospi"),
+    "kosdaq": ("open_trading_kospi_quote", "open_trading_kospi"),
 }
 
 

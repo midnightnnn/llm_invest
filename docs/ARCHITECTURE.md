@@ -1125,7 +1125,7 @@ FastAPI Admin Dashboard — 모듈화된 라우트 구조.
 | `system_prompt` | text | 에이전트 시스템 프롬프트 |
 | `agents_config` | JSON | 에이전트 CRUD (provider/model/capital/risk/tools/memory). chat 승인 flow도 최종적으로 이 key를 append |
 | `investment_chat_config` | JSON | 채팅 에이전트 provider/model/disabled_tools/llm_params/memory_compaction_model + `model_routing.cheap_model[_by_provider]`(router/utility용 저비용 모델). `POST /settings/chat-model`이 provider/model 두 필드만 갱신하고 캐시 invalidate |
-| `investment_chat_account_markets` | scalar | 채팅 계좌/슬리브 조회 허용 market scope |
+| `investment_chat_account_markets` | scalar | legacy ignored key — 채팅 계좌/상담 scope는 batch agent target_market와 분리되어 항상 전체 계좌(`us,kospi,kosdaq`)로 고정 |
 | `risk_policy` | JSON | Risk 파라미터 |
 | `planned_corporate_actions` | JSON | 분할/병합/액면 변경 등 사전 등록된 코퍼레이트 액션 (RiskEngine 차단 + Reconciliation warning 다운그레이드) |
 | `sleeve_capital_krw` | scalar | 기본 sleeve 자본 |

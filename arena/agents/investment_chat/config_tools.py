@@ -36,7 +36,6 @@ CONFIG_CHANGE_APPLY_ACTION = "chat_config_change_apply"
 _TENANT_CONFIG_JSON_KEYS = {"risk_policy", "disabled_tools", "mcp_servers", "memory_policy"}
 _TENANT_CONFIG_STRING_KEYS = {
     "system_prompt",
-    "investment_chat_account_markets",
     "memory_compactor_prompt",
 }
 _TENANT_CONFIG_NUMBER_KEYS = {
@@ -53,7 +52,6 @@ _CHAT_AGENT_ALLOWED_FIELDS = {
     "llm_params",
     "model_routing",
     "memory_compaction_model",
-    "account_markets",
 }
 ConfigChangeAction = Literal["update", "upsert", "add", "remove"]
 CapitalAllocationMode = Literal["unchanged", "fixed_krw", "add_krw", "account_percent", "whole_account"]
@@ -454,14 +452,11 @@ def _build_chat_agent_change(change: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(fields, dict) or not fields:
         raise ValueError("fields object is required for chat_agent config changes")
     clean: dict[str, Any] = {}
-    extra_config_values: dict[str, str] = {}
     for key, value in fields.items():
         token = str(key or "").strip()
         if token not in _CHAT_AGENT_ALLOWED_FIELDS:
             raise ValueError(f"chat_agent field is not allowed: {token}")
-        if token == "account_markets":
-            extra_config_values["investment_chat_account_markets"] = str(value or "").strip()
-        elif token in {"disabled_tools"}:
+        if token in {"disabled_tools"}:
             if not isinstance(value, list):
                 raise ValueError(f"{token} must be an array")
             clean[token] = [str(item).strip() for item in value if str(item).strip()]
@@ -472,7 +467,6 @@ def _build_chat_agent_change(change: dict[str, Any]) -> dict[str, Any]:
         else:
             clean[token] = str(value or "").strip()
     values = {"investment_chat_config": json.dumps(clean, ensure_ascii=False)}
-    values.update(extra_config_values)
     return {
         "scope": "chat_agent",
         "action": "update",
@@ -893,7 +887,6 @@ def _build_config_tool_entries(
         llm_params_json: str = "",
         model_routing_json: str = "",
         memory_compaction_model: str = "",
-        account_markets: str = "",
         rationale: str = "",
         tool_context: ToolContext | None = None,
     ) -> dict[str, Any]:
@@ -903,7 +896,6 @@ def _build_config_tool_entries(
             "provider": provider,
             "model": model,
             "memory_compaction_model": memory_compaction_model,
-            "account_markets": account_markets,
         }.items():
             text = str(value or "").strip()
             if text:
@@ -927,7 +919,6 @@ def _build_config_tool_entries(
 
     def propose_tenant_config_change(
         system_prompt: str = "",
-        investment_chat_account_markets: str = "",
         memory_compactor_prompt: str = "",
         sleeve_capital_krw: Optional[float] = None,
         research_max_tickers: Optional[int] = None,
@@ -945,7 +936,6 @@ def _build_config_tool_entries(
         fields: dict[str, Any] = {}
         for key, value in {
             "system_prompt": system_prompt,
-            "investment_chat_account_markets": investment_chat_account_markets,
             "memory_compactor_prompt": memory_compactor_prompt,
         }.items():
             text = str(value or "").strip()

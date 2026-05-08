@@ -1199,13 +1199,13 @@ def validate_settings(
 
     if require_kis:
         market_tokens = _market_tokens(settings.kis_target_market)
-        allowed_markets = {"nasdaq", "nyse", "amex", "us", "kospi"}
+        allowed_markets = {"nasdaq", "nyse", "amex", "us", "kospi", "kosdaq"}
         if settings.distribution_mode == "simulated_only":
             errors.append("KIS-backed commands are disabled when ARENA_DISTRIBUTION_MODE=simulated_only")
         if settings.kis_env not in {"real", "demo"}:
             errors.append("KIS_ENV must be 'real' or 'demo'")
         if not market_tokens or any(token not in allowed_markets for token in market_tokens):
-            errors.append("KIS_TARGET_MARKET must be one of: nasdaq, nyse, amex, us, kospi")
+            errors.append("KIS_TARGET_MARKET must be one of: nasdaq, nyse, amex, us, kospi, kosdaq")
 
         has_secret = bool(settings.kis_secret_name.strip())
         has_real_keys = bool(settings.kis_api_key and settings.kis_api_secret)

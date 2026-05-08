@@ -137,6 +137,13 @@ def _account_sync_settings(repo: Any, *, tenant_id: str, settings: Settings) -> 
     return account_scope_settings(repo, tenant_id=tenant_id, settings=settings)
 
 
+def _account_scope_payload(repo: Any, *, tenant_id: str) -> dict[str, str]:
+    return {
+        "scope": "account",
+        "market_scope": _account_market_override(repo, tenant_id=tenant_id),
+    }
+
+
 def build_account_tool_entries(*, repo: Any, settings: Settings, tenant_id: str) -> list[ToolEntry]:
     tenant = normalize_tenant(tenant_id)
     available_agent_ids = _available_agent_ids(settings)
@@ -156,10 +163,12 @@ def build_account_tool_entries(*, repo: Any, settings: Settings, tenant_id: str)
             return {
                 "status": "missing",
                 "tenant_id": tenant,
+                **_account_scope_payload(repo, tenant_id=tenant),
                 "error": "No account snapshot is stored for this tenant.",
                 "available_agent_ids": available_agent_ids,
             }
         payload = snapshot_payload(snapshot, tenant_id=tenant, max_positions=max_positions)
+        payload.update(_account_scope_payload(repo, tenant_id=tenant))
         payload["available_agent_ids"] = available_agent_ids
         return payload
 
@@ -176,6 +185,7 @@ def build_account_tool_entries(*, repo: Any, settings: Settings, tenant_id: str)
             return {
                 "status": "blocked",
                 "tenant_id": tenant,
+                **_account_scope_payload(repo, tenant_id=tenant),
                 "error": "This tenant KIS credentials are not configured. Refusing to use server fallback credentials for account refresh.",
             }
         try:
@@ -201,7 +211,12 @@ def build_account_tool_entries(*, repo: Any, settings: Settings, tenant_id: str)
                 status="error",
                 detail={"error": str(exc)[:500]},
             )
-            return {"status": "error", "tenant_id": tenant, "error": str(exc)}
+            return {
+                "status": "error",
+                "tenant_id": tenant,
+                **_account_scope_payload(repo, tenant_id=tenant),
+                "error": str(exc),
+            }
         append_chat_audit(
             repo,
             tenant_id=tenant,
@@ -212,7 +227,9 @@ def build_account_tool_entries(*, repo: Any, settings: Settings, tenant_id: str)
                 "target_market": str(getattr(account_settings, "kis_target_market", "") or ""),
             },
         )
-        return snapshot_payload(snapshot, tenant_id=tenant, max_positions=max_positions)
+        payload = snapshot_payload(snapshot, tenant_id=tenant, max_positions=max_positions)
+        payload.update(_account_scope_payload(repo, tenant_id=tenant))
+        return payload
 
     def get_agent_sleeve_snapshot(agent_id: str, max_positions: int = 50) -> dict[str, Any]:
         """Reads one batch agent sleeve snapshot so chat advice can distinguish total account vs sleeve scope."""

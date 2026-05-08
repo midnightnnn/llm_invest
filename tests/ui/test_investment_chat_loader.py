@@ -19,6 +19,19 @@ def test_adk_browser_overrides_do_not_hide_or_overlay_debug_drawer() -> None:
     assert "mat-toolbar > div:first-child > button:first-child" not in css
 
 
+def test_adk_browser_overrides_blur_chat_input_after_mobile_submit() -> None:
+    from arena.ui import investment_chat_adk
+
+    script = investment_chat_adk._MOBILE_KEYBOARD_DISMISSAL_SCRIPT
+
+    assert "installArenaMobileKeyboardDismissal" in script
+    assert "textarea.chat-input-box" in script
+    assert "button.send-message-btn" in script
+    assert "active.blur()" in script
+    assert "keydown" in script
+    assert "Enter" in script
+
+
 def test_investment_chat_loader_binds_default_tenant(monkeypatch) -> None:
     from arena.ui import investment_chat_adk
 

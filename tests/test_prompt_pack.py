@@ -166,6 +166,7 @@ def test_prompt_pack_renders_investment_chat_instruction() -> None:
     assert "investment advisor sub-agent" in prompt
     assert "investment_chat_utility" in prompt
     assert "mixed or ambiguous" in prompt
+    assert "Always consider the current account situation" in prompt
     assert "submit_order_with_confirmation" in prompt
     assert "validate_order_draft" in prompt
     assert "get_order_approval_status" in prompt

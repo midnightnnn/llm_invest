@@ -791,14 +791,14 @@ class MarketDataSyncService:
             if since_date is not None and as_of_ts.date() < since_date:
                 continue
 
-            sub = krw_closes[: idx + 1]
+            sub = list(krw_closes)
             ret_5d = _window_return(sub, 5)
             ret_20d = _window_return(sub, 20)
             vol_20d = _volatility_20d(sub)
 
             sentiment = 0.0
-            if idx > 0 and krw_closes[idx - 1] > 0:
-                daily_ret = (krw_closes[idx] / krw_closes[idx - 1]) - 1.0
+            if len(krw_closes) >= 2 and krw_closes[-2] > 0:
+                daily_ret = (krw_closes[-1] / krw_closes[-2]) - 1.0
                 sentiment = max(-1.0, min(1.0, float(daily_ret) * 10.0))
 
             rows.append(
@@ -839,7 +839,70 @@ class MarketDataSyncService:
 
         return rows
 
-    def _ensure_usd_krw_daily_fx(self, candles: list[dict[str, object]]) -> dict[date, float]:
+    def _price_detail_usd_krw_daily_fx(
+        self,
+        *,
+        ticker: str,
+        excd: str,
+        series: list[tuple[datetime, float]],
+    ) -> dict[date, float]:
+        """Builds a short KIS-sourced FX map from overseas price-detail rates."""
+        symbol = str(ticker or "").strip().upper()
+        exchange = str(excd or "").strip().upper()
+        if not symbol or not exchange or not series:
+            return {}
+
+        try:
+            detail = self.client.get_overseas_price_detail(ticker=symbol, excd=exchange)
+        except Exception as exc:
+            logger.warning(
+                "[yellow]USD/KRW price-detail FX fallback failed[/yellow] ticker=%s excd=%s err=%s",
+                symbol,
+                exchange,
+                str(exc),
+                extra=failure_extra(
+                    "usd_krw_price_detail_fx_fallback_failed",
+                    exc,
+                    ticker=symbol,
+                    exchange=exchange,
+                ),
+            )
+            return {}
+
+        current_rate = _to_float(detail.get("t_rate"), default=0.0)
+        previous_rate = _to_float(detail.get("p_rate"), default=0.0)
+        if current_rate <= 0 and previous_rate <= 0:
+            return {}
+
+        dates = [ts.date() for ts, _ in series]
+        out: dict[date, float] = {}
+        if previous_rate > 0 and len(dates) >= 2:
+            out[dates[-2]] = float(previous_rate)
+        if current_rate > 0:
+            out[dates[-1]] = float(current_rate)
+
+        if out:
+            logger.warning(
+                "[yellow]USD/KRW daily FX supplemented from KIS price-detail[/yellow] ticker=%s excd=%s dates=%s",
+                symbol,
+                exchange,
+                ",".join(d.isoformat() for d in sorted(out)),
+                extra=event_extra(
+                    "usd_krw_daily_fx_price_detail_fallback",
+                    ticker=symbol,
+                    exchange=exchange,
+                    dates=[d.isoformat() for d in sorted(out)],
+                ),
+            )
+        return out
+
+    def _ensure_usd_krw_daily_fx(
+        self,
+        candles: list[dict[str, object]],
+        *,
+        ticker: str = "",
+        excd: str = "",
+    ) -> dict[date, float]:
         """Loads USD/KRW daily FX rows once per sync window when configured."""
         symbol = str(self.settings.usd_krw_fx_symbol or "").strip().upper()
         if not symbol:
@@ -874,6 +937,11 @@ class MarketDataSyncService:
         else:
             start_date = series[0][0].date()
             end_date = series[-1][0].date()
+        series_dates = [ts.date() for ts, _ in series]
+        if self._usd_krw_daily_fx and series_dates:
+            tail_dates = series_dates[-2:] if len(series_dates) >= 2 else series_dates[-1:]
+            if tail_dates and all(float(self._usd_krw_daily_fx.get(d) or 0.0) > 0 for d in tail_dates):
+                return self._usd_krw_daily_fx
         if self._usd_krw_daily_fx_range is not None:
             cached_start, cached_end = self._usd_krw_daily_fx_range
             if cached_start <= start_date and cached_end >= end_date and self._usd_krw_daily_fx:
@@ -901,6 +969,9 @@ class MarketDataSyncService:
                     end_date=end_date.isoformat(),
                 ),
             )
+            fallback = self._price_detail_usd_krw_daily_fx(ticker=ticker, excd=excd, series=series)
+            if fallback:
+                self._usd_krw_daily_fx.update(fallback)
             return self._usd_krw_daily_fx
 
         fx_series = self._extract_chart_series(
@@ -925,10 +996,19 @@ class MarketDataSyncService:
                     end_date=end_date.isoformat(),
                 ),
             )
+            fallback = self._price_detail_usd_krw_daily_fx(ticker=ticker, excd=excd, series=series)
+            if fallback:
+                self._usd_krw_daily_fx.update(fallback)
             return self._usd_krw_daily_fx
 
-        self._usd_krw_daily_fx = {ts.date(): float(px) for ts, px in fx_series if float(px) > 0}
-        self._usd_krw_daily_fx_range = (fx_series[0][0].date(), fx_series[-1][0].date())
+        fx_map = {ts.date(): float(px) for ts, px in fx_series if float(px) > 0}
+        fallback = self._price_detail_usd_krw_daily_fx(ticker=ticker, excd=excd, series=series)
+        for fx_date, fx_rate in fallback.items():
+            fx_map.setdefault(fx_date, fx_rate)
+        self._usd_krw_daily_fx = fx_map
+        if self._usd_krw_daily_fx:
+            dates = sorted(self._usd_krw_daily_fx)
+            self._usd_krw_daily_fx_range = (dates[0], dates[-1])
         return self._usd_krw_daily_fx
 
     def _latest_usd_krw_fx_rate(self) -> float:
@@ -1056,7 +1136,7 @@ class MarketDataSyncService:
             if not order_excd:
                 continue
             instrument_id = f"{order_excd}:{ticker}"
-            fx_by_date = self._ensure_usd_krw_daily_fx(candles)
+            fx_by_date = self._ensure_usd_krw_daily_fx(candles, ticker=ticker, excd=excd)
             if not fx_by_date:
                 raise RuntimeError(
                     f"USD/KRW daily FX unavailable for ticker={ticker}; refusing to persist "

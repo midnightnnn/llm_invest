@@ -16,3 +16,10 @@ def test_live_market_sources_for_combo_include_quote_sources_first() -> None:
         "open_trading_kospi_quote",
         "open_trading_kospi",
     ]
+
+
+def test_live_market_sources_treat_kosdaq_as_domestic_krx_scope() -> None:
+    assert live_market_sources_for_markets(["kosdaq"]) == [
+        "open_trading_kospi_quote",
+        "open_trading_kospi",
+    ]

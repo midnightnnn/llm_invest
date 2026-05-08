@@ -25,6 +25,24 @@ def test_investment_chat_account_tools_expose_available_agent_ids() -> None:
     assert payload["available_agent_ids"] == ["gemini", "gpt", "claude"]
 
 
+def test_investment_chat_account_snapshot_reports_total_account_market_scope() -> None:
+    from arena.agents.investment_chat.account_tools import build_account_tool_entries
+
+    settings = load_settings()
+    settings.kis_target_market = "us"
+    repo = _ChatOrderRepo()
+    repo.set_config("local", "investment_chat_account_markets", "us", "legacy")
+    tools = {
+        entry.name: entry.callable
+        for entry in build_account_tool_entries(repo=repo, settings=settings, tenant_id="local")
+    }
+
+    payload = tools["get_account_snapshot"]()
+
+    assert payload["scope"] == "account"
+    assert payload["market_scope"] == "us,kospi,kosdaq"
+
+
 def test_investment_chat_sleeve_tool_normalizes_model_aliases_to_agent_ids() -> None:
     from arena.agents.investment_chat.account_tools import build_account_tool_entries
 
@@ -144,16 +162,16 @@ def test_refresh_account_snapshot_defaults_to_total_account_markets(monkeypatch)
     result = tools["refresh_account_snapshot"]()
 
     assert result["status"] == "ok"
-    assert calls["market"] == "us,kospi"
-    assert repo.audit_logs[-1]["detail"]["target_market"] == "us,kospi"
+    assert calls["market"] == "us,kospi,kosdaq"
+    assert repo.audit_logs[-1]["detail"]["target_market"] == "us,kospi,kosdaq"
 
 
-def test_refresh_account_snapshot_uses_chat_account_market_override(monkeypatch) -> None:
+def test_refresh_account_snapshot_ignores_legacy_single_market_chat_scope(monkeypatch) -> None:
     from arena.agents.investment_chat import account_tools
 
     repo = _ChatOrderRepo()
     repo.runtime_credentials["local"] = {"kis_secret_name": "local-local-kis"}
-    repo.set_config("local", "investment_chat_account_markets", "us,kospi", "tester")
+    repo.set_config("local", "investment_chat_account_markets", "us", "legacy")
     agent = _build_fake_chat_agent(monkeypatch, repo)
     tools = {getattr(tool, "__name__", ""): tool for tool in agent.tools}
     calls: dict[str, object] = {}
@@ -171,8 +189,8 @@ def test_refresh_account_snapshot_uses_chat_account_market_override(monkeypatch)
     result = tools["refresh_account_snapshot"]()
 
     assert result["status"] == "ok"
-    assert calls["market"] == "us,kospi"
-    assert repo.audit_logs[-1]["detail"]["target_market"] == "us,kospi"
+    assert calls["market"] == "us,kospi,kosdaq"
+    assert repo.audit_logs[-1]["detail"]["target_market"] == "us,kospi,kosdaq"
 
 
 def test_refresh_account_snapshot_blocks_server_fallback_credentials(monkeypatch) -> None:
