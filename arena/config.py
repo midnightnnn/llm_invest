@@ -8,6 +8,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 from dotenv import load_dotenv
+from arena.corporate_actions import normalize_planned_corporate_actions
 from arena.memory.policy import apply_memory_policy_to_settings, default_memory_policy, normalize_memory_policy
 from arena.providers.registry import (
     canonical_provider,
@@ -199,6 +200,7 @@ class Settings:
     usd_krw_fx_symbol: str = ""
     usd_krw_fx_market_div_code: str = "X"
     reconcile_excluded_tickers: list[str] = field(default_factory=list)
+    planned_corporate_actions: list[dict[str, Any]] = field(default_factory=list)
     agent_capitals: dict[str, float] = field(default_factory=dict)
 
     dividend_sync_enabled: bool = True
@@ -601,6 +603,7 @@ def load_settings() -> Settings:
             for token in _csv(os.getenv("ARENA_RECONCILE_EXCLUDED_TICKERS"), [])
             if str(token).strip()
         ],
+        planned_corporate_actions=normalize_planned_corporate_actions(os.getenv("ARENA_PLANNED_CORPORATE_ACTIONS")),
         max_order_krw=_to_float(os.getenv("ARENA_MAX_ORDER_KRW"), 100_000_000.0),
         max_daily_turnover_ratio=_to_float(
             os.getenv("ARENA_MAX_DAILY_TURNOVER_RATIO"),
@@ -755,6 +758,7 @@ def apply_runtime_overrides(settings: Settings, repo: Any, tenant_id: str) -> Se
         "kis_account_key_suffix",
         "kis_target_market",
         "reconcile_excluded_tickers",
+        "planned_corporate_actions",
         "universe_run_top_n",
         "universe_per_exchange_cap",
         "us_universe_per_exchange_cap",
@@ -882,6 +886,11 @@ def apply_runtime_overrides(settings: Settings, repo: Any, tenant_id: str) -> Se
             if normalized and normalized not in merged:
                 merged.append(normalized)
         settings.reconcile_excluded_tickers = merged
+
+    if values.get("planned_corporate_actions") is not None:
+        settings.planned_corporate_actions = normalize_planned_corporate_actions(
+            values.get("planned_corporate_actions")
+        )
 
     universe_run_top_n_raw = str(values.get("universe_run_top_n") or "").strip()
     if universe_run_top_n_raw:

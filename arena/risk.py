@@ -4,6 +4,7 @@ import re
 from datetime import datetime, timezone
 
 from arena.config import Settings
+from arena.corporate_actions import active_action_for_ticker
 from arena.models import AccountSnapshot, OrderIntent, RiskDecision, Side
 
 _US_TICKER_RE = re.compile(r"^[A-Z][A-Z0-9.\-]{0,9}$")
@@ -79,6 +80,19 @@ class RiskEngine:
         if not _ticker_matches_market(intent.ticker, self.settings.kis_target_market):
             hits.append("ticker_market_mismatch")
             return RiskDecision(allowed=False, reason="ticker does not match target market", policy_hits=hits)
+
+        if active_action_for_ticker(
+            getattr(self.settings, "planned_corporate_actions", []),
+            intent.ticker,
+            as_of=now,
+            require_trading_block=True,
+        ):
+            hits.append("planned_corporate_action")
+            return RiskDecision(
+                allowed=False,
+                reason="ticker has an active planned corporate action",
+                policy_hits=hits,
+            )
 
         notional = intent.notional_krw
         # Allow one-share buys above max_order_krw when still inside cash/position constraints.

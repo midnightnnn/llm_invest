@@ -165,6 +165,176 @@ def test_reconciliation_excludes_broker_overlap_above_ai_ledger_as_external() ->
     assert repo.reconciliation_runs[0]["summary"]["external_overlap_ticker_count"] == 1
 
 
+def test_reconciliation_downgrades_matching_reverse_split_to_adjustment_candidate() -> None:
+    repo = _FakeRepo()
+    repo.snapshot_at = datetime(2026, 5, 20, 5, 34, tzinfo=timezone.utc)
+    repo.snapshot = AccountSnapshot(
+        cash_krw=0.0,
+        total_equity_krw=100_000.0,
+        positions={"092220": Position(ticker="092220", quantity=27.0, avg_price_krw=8_200.0, market_price_krw=9_190.0)},
+    )
+    repo.checkpoint_configs = {
+        "claude": {
+            "agent_id": "claude",
+            "event_id": "chk_claude",
+            "checkpoint_at": datetime(2026, 5, 5, 7, 30, tzinfo=timezone.utc),
+            "cash_krw": 0.0,
+            "positions_json": [{"ticker": "092220", "quantity": 139, "avg_price_krw": 1646.8}],
+            "source": "capital_events.retarget",
+        },
+    }
+    settings = _settings()
+    settings.planned_corporate_actions = [
+        {
+            "ticker": "092220",
+            "action_type": "stock_consolidation",
+            "ratio_numerator": 1,
+            "ratio_denominator": 5,
+            "effective_date": "2026-05-20",
+            "cash_in_lieu": True,
+        }
+    ]
+
+    result = StateReconciliationService(settings=settings, repo=repo).reconcile_positions(
+        agent_ids=["claude"],
+        tenant_id="cxznms",
+    )
+
+    candidate = next(issue for issue in result.issues if issue.issue_type == "corporate_action_adjustment_candidate")
+    assert result.ok is True
+    assert candidate.severity == "warning"
+    assert candidate.entity_key == "092220"
+    assert candidate.expected == {"ledger_quantity": 139.0, "expected_broker_quantity": 27.8}
+    assert candidate.actual == {"broker_quantity": 27.0}
+    assert candidate.detail["suggested_delta_quantity"] == pytest.approx(-112.0)
+    assert candidate.detail["matched_broker_quantity"] == pytest.approx(27.0)
+    assert candidate.detail["fractional_quantity"] == pytest.approx(0.8)
+    assert all(issue.issue_type != "position_quantity_mismatch" for issue in result.issues)
+
+
+def test_reconciliation_keeps_error_when_corporate_action_ratio_does_not_match() -> None:
+    repo = _FakeRepo()
+    repo.snapshot_at = datetime(2026, 5, 20, 5, 34, tzinfo=timezone.utc)
+    repo.snapshot = AccountSnapshot(
+        cash_krw=0.0,
+        total_equity_krw=100_000.0,
+        positions={"092220": Position(ticker="092220", quantity=20.0, avg_price_krw=8_200.0, market_price_krw=9_190.0)},
+    )
+    repo.checkpoint_configs = {
+        "claude": {
+            "agent_id": "claude",
+            "event_id": "chk_claude",
+            "checkpoint_at": datetime(2026, 5, 5, 7, 30, tzinfo=timezone.utc),
+            "cash_krw": 0.0,
+            "positions_json": [{"ticker": "092220", "quantity": 139}],
+            "source": "capital_events.retarget",
+        },
+    }
+    settings = _settings()
+    settings.planned_corporate_actions = [
+        {
+            "ticker": "092220",
+            "action_type": "stock_consolidation",
+            "ratio_numerator": 1,
+            "ratio_denominator": 5,
+            "effective_date": "2026-05-20",
+            "cash_in_lieu": True,
+        }
+    ]
+
+    result = StateReconciliationService(settings=settings, repo=repo).reconcile_positions(
+        agent_ids=["claude"],
+        tenant_id="cxznms",
+    )
+
+    mismatch = next(issue for issue in result.issues if issue.issue_type == "position_quantity_mismatch")
+    assert result.ok is False
+    assert mismatch.severity == "error"
+    assert mismatch.entity_key == "092220"
+    assert all(issue.issue_type != "corporate_action_adjustment_candidate" for issue in result.issues)
+
+
+def test_reconciliation_keeps_error_before_corporate_action_effective_date() -> None:
+    repo = _FakeRepo()
+    repo.snapshot_at = datetime(2026, 5, 19, 5, 34, tzinfo=timezone.utc)
+    repo.snapshot = AccountSnapshot(
+        cash_krw=0.0,
+        total_equity_krw=100_000.0,
+        positions={"092220": Position(ticker="092220", quantity=27.0, avg_price_krw=8_200.0, market_price_krw=9_190.0)},
+    )
+    repo.checkpoint_configs = {
+        "claude": {
+            "agent_id": "claude",
+            "event_id": "chk_claude",
+            "checkpoint_at": datetime(2026, 5, 5, 7, 30, tzinfo=timezone.utc),
+            "cash_krw": 0.0,
+            "positions_json": [{"ticker": "092220", "quantity": 139}],
+            "source": "capital_events.retarget",
+        },
+    }
+    settings = _settings()
+    settings.planned_corporate_actions = [
+        {
+            "ticker": "092220",
+            "action_type": "stock_consolidation",
+            "ratio_numerator": 1,
+            "ratio_denominator": 5,
+            "effective_date": "2026-05-20",
+            "cash_in_lieu": True,
+        }
+    ]
+
+    result = StateReconciliationService(settings=settings, repo=repo).reconcile_positions(
+        agent_ids=["claude"],
+        tenant_id="cxznms",
+    )
+
+    assert result.ok is False
+    assert any(issue.issue_type == "position_quantity_mismatch" for issue in result.issues)
+    assert all(issue.issue_type != "corporate_action_adjustment_candidate" for issue in result.issues)
+
+
+def test_reconciliation_downgrades_matching_split_before_external_overlap_exclusion() -> None:
+    repo = _FakeRepo()
+    repo.snapshot_at = datetime(2026, 5, 20, 5, 34, tzinfo=timezone.utc)
+    repo.snapshot = AccountSnapshot(
+        cash_krw=0.0,
+        total_equity_krw=100_000.0,
+        positions={"000001": Position(ticker="000001", quantity=100.0, avg_price_krw=5_000.0, market_price_krw=5_200.0)},
+    )
+    repo.checkpoint_configs = {
+        "claude": {
+            "agent_id": "claude",
+            "event_id": "chk_claude",
+            "checkpoint_at": datetime(2026, 5, 5, 7, 30, tzinfo=timezone.utc),
+            "cash_krw": 0.0,
+            "positions_json": [{"ticker": "000001", "quantity": 50}],
+            "source": "capital_events.retarget",
+        },
+    }
+    settings = _settings()
+    settings.planned_corporate_actions = [
+        {
+            "ticker": "000001",
+            "action_type": "stock_split",
+            "ratio_numerator": 2,
+            "ratio_denominator": 1,
+            "effective_date": "2026-05-20",
+        }
+    ]
+
+    result = StateReconciliationService(settings=settings, repo=repo).reconcile_positions(
+        agent_ids=["claude"],
+        tenant_id="cxznms",
+    )
+
+    candidate = next(issue for issue in result.issues if issue.issue_type == "corporate_action_adjustment_candidate")
+    assert result.ok is True
+    assert candidate.detail["suggested_delta_quantity"] == pytest.approx(50.0)
+    assert all(issue.issue_type != "external_broker_position_overlap_excluded" for issue in result.issues)
+    assert all(issue.issue_type != "position_quantity_mismatch" for issue in result.issues)
+
+
 def test_reconciliation_flags_checkpoint_seed_timestamp_mismatch() -> None:
     repo = _FakeRepo()
     older = datetime(2026, 3, 11, 23, 59, tzinfo=timezone.utc)
@@ -199,6 +369,45 @@ def test_reconciliation_flags_checkpoint_seed_timestamp_mismatch() -> None:
 
     assert result.ok is False
     assert any(issue.issue_type == "checkpoint_seed_timestamp_mismatch" for issue in result.issues)
+
+
+def test_reconciliation_allows_short_retarget_checkpoint_timestamp_skew() -> None:
+    repo = _FakeRepo()
+    older = datetime(2026, 3, 12, 1, 0, 0, tzinfo=timezone.utc)
+    newer = datetime(2026, 3, 12, 1, 0, 16, tzinfo=timezone.utc)
+    repo.snapshot = AccountSnapshot(
+        cash_krw=100_000.0,
+        total_equity_krw=500_000.0,
+        positions={"AAPL": Position(ticker="AAPL", quantity=2.0, avg_price_krw=100_000.0, market_price_krw=120_000.0)},
+    )
+    repo.checkpoint_configs = {
+        "gpt": {
+            "agent_id": "gpt",
+            "event_id": "chk_gpt",
+            "checkpoint_at": older,
+            "cash_krw": 0.0,
+            "positions_json": [{"ticker": "AAPL", "quantity": 1}],
+            "source": "capital_events.retarget",
+        },
+        "gemini": {
+            "agent_id": "gemini",
+            "event_id": "chk_gemini",
+            "checkpoint_at": newer,
+            "cash_krw": 0.0,
+            "positions_json": [{"ticker": "AAPL", "quantity": 1}],
+            "source": "capital_events.retarget",
+        },
+    }
+
+    result = StateReconciliationService(settings=_settings(), repo=repo).reconcile_positions(
+        agent_ids=["gpt", "gemini"],
+        tenant_id="midnightnnn",
+    )
+
+    mismatch = next(issue for issue in result.issues if issue.issue_type == "checkpoint_seed_timestamp_mismatch")
+    assert result.ok is True
+    assert mismatch.severity == "warning"
+    assert mismatch.detail["checkpoint_timestamp_skew_seconds"] == pytest.approx(16.0)
 
 
 def test_reconciliation_default_does_not_bootstrap_checkpoints_from_legacy_sleeves() -> None:

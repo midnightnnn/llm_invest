@@ -259,6 +259,40 @@ def test_apply_runtime_overrides_merges_reconcile_excluded_tickers() -> None:
     assert out.reconcile_excluded_tickers == ["PLTD", "TSLL"]
 
 
+def test_apply_runtime_overrides_applies_planned_corporate_actions() -> None:
+    settings = make_test_settings()
+
+    repo = FakeRuntimeConfigRepo(
+        {
+            "planned_corporate_actions": json.dumps(
+                [
+                    {
+                        "ticker": "092220",
+                        "action_type": "stock_consolidation",
+                        "ratio_numerator": 1,
+                        "ratio_denominator": 5,
+                        "effective_date": "2026-05-20",
+                        "cash_in_lieu": True,
+                    },
+                    {"ticker": "", "ratio_numerator": 1, "ratio_denominator": 2},
+                ]
+            )
+        }
+    )
+    out = apply_runtime_overrides(settings, repo, tenant_id="cxznms")
+
+    assert out.planned_corporate_actions == [
+        {
+            "ticker": "092220",
+            "action_type": "stock_consolidation",
+            "ratio_numerator": 1,
+            "ratio_denominator": 5,
+            "effective_date": "2026-05-20",
+            "cash_in_lieu": True,
+        }
+    ]
+
+
 def test_apply_runtime_overrides_applies_agent_autonomy_config() -> None:
     settings = make_test_settings()
     settings.autonomy_working_set_enabled = False

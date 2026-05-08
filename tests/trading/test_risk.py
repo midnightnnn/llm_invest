@@ -249,6 +249,36 @@ def test_risk_handles_multi_market_ticker_validation() -> None:
     assert "ticker_market_mismatch" in bad_decision.policy_hits
 
 
+def test_risk_rejects_order_for_active_planned_corporate_action() -> None:
+    """Rejects orders in tickers under an active planned corporate action."""
+    base = replace(
+        _settings(),
+        planned_corporate_actions=[
+            {
+                "ticker": "092220",
+                "action_type": "stock_consolidation",
+                "ratio_numerator": 1,
+                "ratio_denominator": 5,
+                "effective_date": "2026-05-20",
+            }
+        ],
+    )
+    engine = RiskEngine(base)
+    intent = OrderIntent(
+        agent_id="a",
+        ticker="092220",
+        side=Side.BUY,
+        quantity=1,
+        price_krw=10_000,
+        rationale="test",
+    )
+
+    decision = engine.evaluate(intent, _snapshot(), daily_turnover_krw=0, daily_order_count=0, last_trade_at=None, now=utc_now())
+
+    assert decision.allowed is False
+    assert "planned_corporate_action" in decision.policy_hits
+
+
 def test_risk_allows_buy_when_sleeve_equity_above_target_if_cash_buffer_ok() -> None:
     """Allows buys above target sleeve equity when other risk checks pass."""
     base = _settings()

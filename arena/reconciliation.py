@@ -10,12 +10,18 @@ from typing import Any, Callable
 from uuid import uuid4
 
 from arena.config import Settings
+from arena.corporate_actions import corporate_action_adjustment_candidate
 from arena.logging_utils import event_extra, failure_extra
 from arena.models import AccountSnapshot, utc_now
 
 logger = logging.getLogger(__name__)
 
 _ZERO_QTY_EPSILON = 1e-9
+_CHECKPOINT_RETARGET_SKEW_TOLERANCE_SECONDS = 60.0
+_POSITION_PRESERVING_CHECKPOINT_SOURCES = {
+    "agent_sleeves.retarget",
+    "capital_events.retarget",
+}
 
 
 def _to_float(value: Any, default: float = 0.0) -> float:
@@ -96,6 +102,7 @@ class StateReconciliationService:
         self.cash_tolerance_krw = max(float(cash_tolerance_krw), 0.0)
         self.cash_reconciliation_enabled = bool(cash_reconciliation_enabled)
         self.allow_legacy_sleeve_seed = bool(allow_legacy_sleeve_seed)
+        self.planned_corporate_actions = list(getattr(settings, "planned_corporate_actions", []) or [])
 
     def _tenant_token(self, tenant_id: str | None = None) -> str:
         resolver = getattr(self.repo, "resolve_tenant_id", None)
@@ -202,12 +209,16 @@ class StateReconciliationService:
         missing = [agent_id for agent_id in agent_ids if agent_id not in configs]
         issues: list[ReconciliationIssue] = []
         timestamps: list[datetime] = []
+        checkpoint_sources: set[str] = set()
         positions: dict[str, float] = defaultdict(float)
 
         for agent_id in agent_ids:
             cfg = configs.get(agent_id)
             if not cfg:
                 continue
+            source = str(cfg.get("source") or "").strip()
+            if source:
+                checkpoint_sources.add(source)
             checkpoint_at = cfg.get("checkpoint_at")
             if isinstance(checkpoint_at, datetime):
                 timestamps.append(checkpoint_at)
@@ -242,15 +253,26 @@ class StateReconciliationService:
             earliest = min(timestamps)
             latest = max(timestamps)
             if earliest != latest:
+                skew_seconds = abs((latest - earliest).total_seconds())
+                is_position_preserving_retarget = (
+                    bool(checkpoint_sources)
+                    and checkpoint_sources.issubset(_POSITION_PRESERVING_CHECKPOINT_SOURCES)
+                    and skew_seconds <= _CHECKPOINT_RETARGET_SKEW_TOLERANCE_SECONDS
+                )
                 issues.append(
                     ReconciliationIssue(
-                        severity="error",
+                        severity="warning" if is_position_preserving_retarget else "error",
                         issue_type="checkpoint_seed_timestamp_mismatch",
                         entity_type="checkpoint_seed",
                         entity_key="latest",
                         expected={"checkpoint_at": earliest.isoformat()},
                         actual={"checkpoint_at": latest.isoformat()},
-                        detail={"agent_count": len(agent_ids)},
+                        detail={
+                            "agent_count": len(agent_ids),
+                            "checkpoint_sources": sorted(checkpoint_sources),
+                            "checkpoint_timestamp_skew_seconds": skew_seconds,
+                            "retarget_skew_tolerance_seconds": _CHECKPOINT_RETARGET_SKEW_TOLERANCE_SECONDS,
+                        },
                     )
                 )
 
@@ -762,6 +784,7 @@ class StateReconciliationService:
                     recoveries.append("bootstrap_agent_state_checkpoints")
         else:
             missing = checkpoint_missing
+            issues.extend(checkpoint_issues)
 
         for agent_id in missing:
             issues.append(
@@ -782,6 +805,7 @@ class StateReconciliationService:
         issues.extend(ledger_issues)
 
         broker_positions = dict(self._account_position_map(snapshot))
+        snapshot_at = self._latest_snapshot_at(tenant_id=tenant)
         external_trade_ticker_count = 0
         external_trade_quantity_total = 0.0
         for ticker, external_qty in external_positions.items():
@@ -851,6 +875,14 @@ class StateReconciliationService:
             excluded_qty = broker_qty - sleeve_qty
             if excluded_qty <= self.qty_tolerance:
                 continue
+            if corporate_action_adjustment_candidate(
+                self.planned_corporate_actions,
+                ticker=ticker,
+                ledger_quantity=sleeve_qty,
+                broker_quantity=broker_qty,
+                as_of=snapshot_at,
+            ):
+                continue
             broker_positions[ticker] = sleeve_qty
             external_overlap_ticker_count += 1
             external_overlap_quantity_total += excluded_qty
@@ -870,6 +902,7 @@ class StateReconciliationService:
                 )
             )
 
+        corporate_action_candidate_count = 0
         for ticker in sorted(set(ledger_positions) | set(broker_positions)):
             sleeve_qty = float(ledger_positions.get(ticker) or 0.0)
             broker_qty = float(broker_positions.get(ticker) or 0.0)
@@ -892,6 +925,30 @@ class StateReconciliationService:
                             },
                         )
                     )
+                continue
+            corporate_action_candidate = corporate_action_adjustment_candidate(
+                self.planned_corporate_actions,
+                ticker=ticker,
+                ledger_quantity=sleeve_qty,
+                broker_quantity=broker_qty,
+                as_of=snapshot_at,
+            )
+            if corporate_action_candidate:
+                corporate_action_candidate_count += 1
+                issues.append(
+                    ReconciliationIssue(
+                        severity="warning",
+                        issue_type="corporate_action_adjustment_candidate",
+                        entity_type="ticker",
+                        entity_key=ticker,
+                        expected={
+                            "ledger_quantity": sleeve_qty,
+                            "expected_broker_quantity": corporate_action_candidate["expected_post_quantity"],
+                        },
+                        actual={"broker_quantity": broker_qty},
+                        detail=corporate_action_candidate,
+                    )
+                )
                 continue
             issues.append(
                 ReconciliationIssue(
@@ -988,7 +1045,6 @@ class StateReconciliationService:
         )
         issues.extend(fx_issues)
 
-        snapshot_at = self._latest_snapshot_at(tenant_id=tenant)
         ok = not self._issues_have_errors(issues)
         status = "recovered" if ok and recoveries else ("ok" if ok else "failed")
         summary = {
@@ -1010,6 +1066,7 @@ class StateReconciliationService:
             "external_carry_quantity_total": float(external_carry_quantity_total),
             "external_overlap_ticker_count": int(external_overlap_ticker_count),
             "external_overlap_quantity_total": float(external_overlap_quantity_total),
+            "corporate_action_candidate_count": int(corporate_action_candidate_count),
             "qty_tolerance": float(self.qty_tolerance),
             "cash_tolerance_krw": float(self.cash_tolerance_krw),
             "broker_cash_krw": float(broker_cash),
