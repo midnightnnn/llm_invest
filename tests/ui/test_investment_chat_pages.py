@@ -81,6 +81,8 @@ def test_ui_registers_investment_chat_page_and_adk_mount(monkeypatch) -> None:
     assert "investment-chat-shell" in response.text
     assert "calc(100dvh - var(--mobile-topbar-h))" in response.text
     assert "investment-chat-frame" in response.text
+    assert "arena-main-shell" in response.text
+    assert 'body[data-active="investment_chat"] .arena-main-shell' in response.text
     assert 'body[data-active="investment_chat"] .sidebar-backdrop.open' in response.text
     assert any(getattr(route, "path", "") == "/investment-chat/adk" for route in app.routes)
 

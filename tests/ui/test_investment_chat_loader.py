@@ -32,6 +32,15 @@ def test_adk_browser_overrides_blur_chat_input_after_mobile_submit() -> None:
     assert "Enter" in script
 
 
+def test_adk_browser_mobile_chat_input_uses_compact_bottom_spacing() -> None:
+    from arena.ui import investment_chat_adk
+
+    css = investment_chat_adk._MOBILE_OVERRIDE_CSS
+
+    assert ".chat-input {\n    width: 100% !important;\n    padding: 6px 10px 4px !important;" in css
+    assert ".chat-input-actions { margin-top: 4px !important;" in css
+
+
 def test_investment_chat_loader_binds_default_tenant(monkeypatch) -> None:
     from arena.ui import investment_chat_adk
 

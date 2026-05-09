@@ -375,8 +375,6 @@ app-builder-tabs {
   margin: 0 !important;
   padding: 0 !important;
   pointer-events: none !important;
-  position: absolute !important;
-  left: -9999px !important;
 }
 
 /* The chat toolbar still ships a "Builder Assistant" toggle button which
@@ -536,11 +534,11 @@ html [aria-label="Toggle theme"] {
   /* chat input: fill viewport on mobile (was capped to 88%) */
   .chat-input {
     width: 100% !important;
-    padding: 8px 10px !important;
+    padding: 6px 10px 4px !important;
     box-sizing: border-box !important;
   }
   .chat-input-content-row { gap: 8px !important; }
-  .chat-input-actions { margin-top: 8px !important; gap: 4px !important; }
+  .chat-input-actions { margin-top: 4px !important; gap: 4px !important; }
 
   /* iOS auto-zoom prevention: text inputs need >=16px font-size */
   input-box,
