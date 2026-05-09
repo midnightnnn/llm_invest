@@ -252,3 +252,56 @@ def test_cmd_run_shared_prep_slow_runs_daily_sync_then_ml(monkeypatch) -> None:
     )
     # Marker is ok because freshness default is fresh.
     assert any(c[0] == "marker" and c[2] == "ok" for c in calls)
+
+
+def test_cmd_run_shared_prep_slow_syncs_account_held_coverage_before_ml(monkeypatch) -> None:
+    settings = load_settings()
+    settings.google_cloud_project = "proj-x"
+    settings.bq_dataset = "ds"
+    settings.bq_location = "asia-northeast3"
+    settings.kis_target_market = "us"
+    calls: list[tuple[str, object]] = []
+
+    class _Repo(_FakeRepo):
+        def ensure_dataset(self):
+            calls.append(("dataset", None))
+
+        def ensure_tables(self):
+            calls.append(("tables", None))
+
+        def get_latest_position_tickers(self, *, market="", all_tenants=False):
+            assert all_tenants is True
+            if market == "us,kospi,kosdaq":
+                return ["AAPL", "053580"]
+            return ["AAPL"]
+
+    repo = _Repo()
+    _stub_shared_prep_environment(monkeypatch, settings, repo, calls)
+
+    class _FakeMarketSyncResult:
+        inserted_rows = 1
+        attempted_tickers = 1
+        failed_tickers: list = []
+
+    def _fake_market_service_factory(**kwargs):
+        service_settings = kwargs["settings"]
+
+        class _S:
+            def sync_market_features(self_inner):
+                calls.append(("daily_sync", service_settings.kis_target_market))
+                return _FakeMarketSyncResult()
+
+            def sync_market_features_for_tickers(self_inner, tickers):
+                calls.append(("held_coverage", service_settings.kis_target_market, tuple(tickers)))
+                return _FakeMarketSyncResult()
+
+        return _S()
+
+    monkeypatch.setattr(cli, "MarketDataSyncService", _fake_market_service_factory)
+
+    cli.cmd_run_shared_prep(live=True, market_override="us", dispatch_job="", stage="slow")
+
+    stages = [c[0] for c in calls]
+    assert "held_coverage" in stages
+    assert stages.index("held_coverage") < stages.index("forecast")
+    assert ("held_coverage", "us,kospi,kosdaq", ("AAPL", "053580")) in calls

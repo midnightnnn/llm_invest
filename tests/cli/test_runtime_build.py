@@ -147,8 +147,10 @@ def test_build_forecast_tickers_uses_quote_aware_sources() -> None:
             return [row for row in rows if not allow or row["ticker"] in allow]
 
         def get_latest_position_tickers(self, *, market="", all_tenants=False):
-            assert market == "us"
             assert all_tenants is True
+            if market == "us,kospi,kosdaq":
+                return ["GILD", "AAPL"]
+            assert market == "us"
             return ["GILD", "AAPL"]
 
     repo = _Repo()
@@ -209,6 +211,94 @@ def test_build_forecast_tickers_passes_market_scope_to_runtime_universe() -> Non
     cli._build_forecast_tickers(repo, settings, top_n=5)
 
     assert repo.last_markets == ["us"]
+
+
+def test_build_forecast_tickers_includes_account_wide_holdings() -> None:
+    settings = load_settings()
+    settings.kis_target_market = "us"
+    settings.default_universe = ["AAPL", "MSFT"]
+    settings.forecast_max_tickers = 20
+
+    class _Repo:
+        def latest_universe_candidate_tickers(self, *, limit=200, markets=None):
+            _ = (limit, markets)
+            return ["AAPL", "MSFT"]
+
+        def latest_market_features(self, *, tickers, limit, sources=None):
+            _ = (tickers, limit, sources)
+            return []
+
+        def get_latest_position_tickers(self, *, market="", all_tenants=False):
+            assert all_tenants is True
+            if market == "us":
+                return ["AAPL"]
+            if market == "us,kospi,kosdaq":
+                return ["AAPL", "053580"]
+            return []
+
+    out = cli._build_forecast_tickers(_Repo(), settings, top_n=10)
+
+    assert "AAPL" in out
+    assert "053580" in out
+
+
+def test_cmd_build_forecasts_broadens_sources_for_account_wide_holdings(monkeypatch) -> None:
+    settings = load_settings()
+    settings.google_cloud_project = "proj-x"
+    settings.bq_dataset = "ds"
+    settings.bq_location = "asia-northeast3"
+    settings.kis_target_market = "us"
+    settings.default_universe = ["AAPL"]
+
+    class _Repo:
+        def ensure_dataset(self):
+            return None
+
+        def ensure_tables(self):
+            return None
+
+        def latest_universe_candidate_tickers(self, *, limit=200, markets=None):
+            _ = (limit, markets)
+            return ["AAPL"]
+
+        def latest_market_features(self, *, tickers, limit, sources=None):
+            _ = (tickers, limit, sources)
+            return []
+
+        def get_latest_position_tickers(self, *, market="", all_tenants=False):
+            assert all_tenants is True
+            if market == "us,kospi,kosdaq":
+                return ["AAPL", "053580"]
+            return ["AAPL"]
+
+    captured: dict[str, object] = {}
+
+    def _fake_build(repo, build_settings, **kwargs):
+        _ = repo
+        captured["market"] = build_settings.kis_target_market
+        captured["tickers"] = kwargs.get("tickers")
+        return SimpleNamespace(
+            run_date="2026-03-13",
+            rows_written=2,
+            tickers_used=2,
+            used_neuralforecast=True,
+            model_names=["nbeatsx"],
+            note="",
+        )
+
+    import arena.forecasting as forecasting_mod
+
+    monkeypatch.setattr(cli, "load_settings", lambda: settings)
+    monkeypatch.setattr(cli, "configure_logging", lambda *args, **kwargs: None)
+    monkeypatch.setattr(cli, "_validate_or_exit", lambda *args, **kwargs: None)
+    monkeypatch.setattr(cli, "_repo_or_exit", lambda settings: _Repo())
+    monkeypatch.setattr(forecasting_mod, "build_and_store_stacked_forecasts", _fake_build)
+
+    args = SimpleNamespace(top_n=10, lookback_days=360, horizon=20, min_series_length=160, max_steps=200)
+    cli.cmd_build_forecasts(args)
+
+    assert captured["market"] == "us,kospi,kosdaq"
+    assert captured["tickers"] == ["AAPL", "053580"]
 
 
 def test_build_forecast_tickers_prefers_ranker_bucket_basket_plus_holdings() -> None:
@@ -308,8 +398,10 @@ def test_build_forecast_tickers_prefers_ranker_bucket_basket_plus_holdings() -> 
             return rows
 
         def get_latest_position_tickers(self, *, market="", all_tenants=False):
-            assert market == "us"
             assert all_tenants is True
+            if market == "us,kospi,kosdaq":
+                return ["HOLD", "M00"]
+            assert market == "us"
             return ["HOLD", "M00"]
 
     repo = _Repo()

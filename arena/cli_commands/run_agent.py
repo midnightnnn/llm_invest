@@ -5,6 +5,7 @@ import logging
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+from arena.cli_commands.sync import ACCOUNT_HELD_MARKET_SCOPE
 from arena.config import Settings
 from arena.data.bq import BigQueryRepository
 from arena.logging_utils import event_extra, failure_extra
@@ -18,6 +19,35 @@ def _cli():
     import arena.cli as cli
 
     return cli
+
+
+def _research_held_tickers(repo: BigQueryRepository | None, settings: Settings) -> list[str]:
+    if repo is None:
+        return []
+    loader = getattr(repo, "get_latest_position_tickers", None)
+    if callable(loader):
+        try:
+            rows = loader(market=ACCOUNT_HELD_MARKET_SCOPE, all_tenants=False) or []
+            tickers = list(dict.fromkeys(str(t).strip().upper() for t in rows if str(t).strip()))
+            if tickers:
+                return tickers
+        except Exception as exc:
+            logger.warning(
+                "[yellow]Account-wide research holdings load failed[/yellow] err=%s",
+                str(exc),
+                extra=failure_extra("research_account_holdings_load_failed", exc),
+            )
+    fallback = getattr(repo, "get_all_held_tickers", None)
+    if callable(fallback):
+        try:
+            return list(fallback(market=settings.kis_target_market) or [])
+        except Exception as exc:
+            logger.warning(
+                "[yellow]Market-scoped research holdings fallback failed[/yellow] err=%s",
+                str(exc),
+                extra=failure_extra("research_market_holdings_load_failed", exc),
+            )
+    return []
 
 
 def _run_post_cycle_maintenance(
@@ -319,7 +349,7 @@ def _run_agent_cycle_once(
             )
 
         current_stage = "research"
-        held_tickers = repo.get_all_held_tickers(market=settings.kis_target_market) if repo else []
+        held_tickers = _research_held_tickers(repo, settings)
         from arena.agents.research_agent import ResearchAgent
 
         research_agent = ResearchAgent(settings=settings, repo=repo)

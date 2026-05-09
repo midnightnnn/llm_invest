@@ -103,6 +103,20 @@ def test_write_account_snapshot_persists_usd_krw_rate() -> None:
     assert float(session.client.payloads[0]["usd_krw_rate"]) == pytest.approx(1450.0)
 
 
+def test_write_account_snapshot_persists_market_scope() -> None:
+    snapshot = AccountSnapshot(
+        cash_krw=100_000.0,
+        total_equity_krw=200_000.0,
+        positions={},
+    )
+    session = _FakeSession()
+    store = _SleeveStoreForInit(session, snapshot=snapshot)
+
+    store.write_account_snapshot(store._snapshot, market_scope="us,kospi,kosdaq")
+
+    assert session.client.payloads[0]["market_scope"] == "us,kospi,kosdaq"
+
+
 def test_write_account_snapshot_appends_broker_cash_checkpoint() -> None:
     snapshot = AccountSnapshot(
         cash_krw=100_000.0,
@@ -158,6 +172,29 @@ def test_latest_account_snapshot_reads_usd_krw_rate() -> None:
     assert snapshot.usd_krw_rate == pytest.approx(1450.0)
 
 
+def test_latest_account_snapshot_filters_market_scope() -> None:
+    session = _FakeSession(
+        responses=[
+            [
+                {
+                    "snapshot_at": datetime(2026, 2, 21, tzinfo=timezone.utc),
+                    "cash_krw": 100_000.0,
+                    "total_equity_krw": 200_000.0,
+                    "usd_krw_rate": 1450.0,
+                }
+            ],
+            [],
+        ]
+    )
+    store = SleeveStore(session)
+
+    snapshot = store.latest_account_snapshot(tenant_id="midnightnnn", market_scope="us,kospi,kosdaq")
+
+    assert snapshot is not None
+    assert "market_scope = @market_scope" in session.calls[0]
+    assert session.call_pairs[0][1]["market_scope"] == "us,kospi,kosdaq"
+
+
 def test_get_latest_position_tickers_can_union_latest_snapshots_across_tenants() -> None:
     session = _FakeSession(
         responses=[
@@ -173,8 +210,44 @@ def test_get_latest_position_tickers_can_union_latest_snapshots_across_tenants()
     tickers = store.get_latest_position_tickers(market="us", all_tenants=True)
 
     assert tickers == ["VZ", "CSX"]
-    assert "GROUP BY tenant_id" in session.calls[0]
-    assert session.call_pairs[0][1] == {}
+    assert "PARTITION BY tenant_id" in session.calls[0]
+    assert session.call_pairs[0][1] == {"market_scope_like_0": "%,us,%"}
+
+
+def test_get_latest_position_tickers_scopes_kosdaq_latest_snapshot() -> None:
+    session = _FakeSession(
+        responses=[
+            [
+                {"ticker": "053580"},
+                {"ticker": "AAPL"},
+            ]
+        ]
+    )
+    store = SleeveStore(session)
+
+    tickers = store.get_latest_position_tickers(market="kosdaq", all_tenants=True)
+
+    assert tickers == ["053580"]
+    sql, params = session.call_pairs[0]
+    assert "market_scope" in sql
+    assert "ROW_NUMBER()" in sql
+    assert params == {"market_scope_like_0": "%,kosdaq,%"}
+
+
+def test_get_latest_position_tickers_requires_us_and_kr_for_combined_scope() -> None:
+    session = _FakeSession(responses=[[{"ticker": "053580"}, {"ticker": "AAPL"}]])
+    store = SleeveStore(session)
+
+    tickers = store.get_latest_position_tickers(market="us,kospi,kosdaq", all_tenants=True)
+
+    assert tickers == ["053580", "AAPL"]
+    sql, params = session.call_pairs[0]
+    assert "LIKE @market_scope_like_0) AND (" in sql
+    assert params == {
+        "market_scope_like_0": "%,us,%",
+        "market_scope_like_1": "%,kospi,%",
+        "market_scope_like_2": "%,kosdaq,%",
+    }
 
 
 def test_account_holdings_at_date_uses_latest_snapshot_before_date() -> None:

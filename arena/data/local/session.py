@@ -17,7 +17,7 @@ from contextlib import nullcontext
 from datetime import datetime, timezone
 from typing import Any
 
-from arena.data.local.schema import render_duckdb_ddls
+from arena.data.local.schema import TableSpec, render_duckdb_ddls, table_specs
 
 logger = logging.getLogger(__name__)
 
@@ -251,7 +251,29 @@ class DuckDBSession:
         Returns the number of DDL statements executed (== arena table count).
         """
         conn = self.connect()
+        specs = table_specs()
         ddls = render_duckdb_ddls()
         for ddl in ddls:
             conn.execute(ddl)
+        for spec in specs:
+            self._ensure_table_columns(conn, spec)
         return len(ddls)
+
+    def _ensure_table_columns(self, conn: Any, spec: TableSpec) -> None:
+        rows = conn.execute(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = 'main'
+              AND table_name = ?
+            """,
+            [spec.name],
+        ).fetchall()
+        existing = {str(row[0]) for row in rows}
+        for col in spec.columns:
+            if col.name in existing:
+                continue
+            conn.execute(
+                f"ALTER TABLE {self._quote_identifier(spec.name)} "
+                f"ADD COLUMN {self._quote_identifier(col.name)} {col.type_name}"
+            )

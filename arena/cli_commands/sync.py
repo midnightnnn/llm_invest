@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from math import ceil
 from typing import Any
 
@@ -21,6 +22,10 @@ from arena.runtime_universe import resolve_runtime_universe
 from arena.tools.screening import DISCOVERY_BUCKETS, build_discovery_rows, momentum_scores
 
 logger = logging.getLogger(__name__)
+
+ACCOUNT_HELD_MARKET_SCOPE = "us,kospi,kosdaq"
+_US_SCOPE_TOKENS = {"us", "nasdaq", "nyse", "amex", "arca", "usa"}
+_KR_SCOPE_TOKENS = {"kospi", "kosdaq", "kr", "krx", "korea", "domestic"}
 
 
 def _cli():
@@ -274,14 +279,61 @@ def _build_forecast_tickers(repo, settings: Settings, top_n: int) -> list[str]:
 
 
 def _latest_position_tickers(repo, settings: Settings) -> list[str]:
+    tickers: list[str] = []
     try:
-        return repo.get_latest_position_tickers(
+        tickers.extend(repo.get_latest_position_tickers(
             market=settings.kis_target_market,
             all_tenants=True,
-        )
+        ) or [])
     except Exception as exc:
         logger.warning("[yellow]Failed to load held tickers for forecast[/yellow] err=%s", str(exc))
-        return []
+    try:
+        tickers.extend(repo.get_latest_position_tickers(
+            market=ACCOUNT_HELD_MARKET_SCOPE,
+            all_tenants=True,
+        ) or [])
+    except Exception as exc:
+        logger.warning("[yellow]Failed to load account-wide held tickers for forecast[/yellow] err=%s", str(exc))
+    return list(dict.fromkeys(str(t).strip().upper() for t in tickers if str(t).strip()))
+
+
+def _market_tokens(raw: str | None) -> set[str]:
+    return {token.strip().lower() for token in str(raw or "").replace("|", ",").replace(";", ",").split(",") if token.strip()}
+
+
+def _ticker_market_flags(tickers: list[str]) -> tuple[bool, bool]:
+    has_us = False
+    has_kr = False
+    for raw in tickers:
+        ticker = str(raw or "").strip().upper()
+        if not ticker:
+            continue
+        if ticker.isdigit() and len(ticker) == 6:
+            has_kr = True
+        elif not ticker[:1].isdigit():
+            has_us = True
+    return has_us, has_kr
+
+
+def _forecast_settings_for_tickers(settings: Settings, tickers: list[str]) -> Settings:
+    base_market = str(settings.kis_target_market or "").strip().lower()
+    base_tokens = _market_tokens(base_market)
+    base_has_us = bool(base_tokens & _US_SCOPE_TOKENS)
+    base_has_kr = bool(base_tokens & _KR_SCOPE_TOKENS)
+    ticker_has_us, ticker_has_kr = _ticker_market_flags(tickers)
+    has_us = base_has_us or ticker_has_us
+    has_kr = base_has_kr or ticker_has_kr
+    if has_us and has_kr:
+        market_scope = ACCOUNT_HELD_MARKET_SCOPE
+    elif has_us:
+        market_scope = base_market if base_has_us and not base_has_kr else "us"
+    elif has_kr:
+        market_scope = base_market if base_has_kr and not base_has_us else "kospi,kosdaq"
+    else:
+        market_scope = base_market
+    if market_scope and market_scope != base_market:
+        return replace(settings, kis_target_market=market_scope)
+    return settings
 
 
 def _ranker_forecast_tickers(repo, settings: Settings, *, universe: list[str]) -> list[str]:
@@ -358,12 +410,13 @@ def cmd_build_forecasts(args: object) -> Any:
 
     top_n = max(10, int(getattr(args, "top_n", 50)))
     forecast_tickers = _build_forecast_tickers(repo, settings, top_n=top_n)
+    forecast_settings = _forecast_settings_for_tickers(settings, forecast_tickers)
 
     from arena.forecasting import build_and_store_stacked_forecasts
 
     result = build_and_store_stacked_forecasts(
         repo,
-        settings,
+        forecast_settings,
         lookback_days=max(180, int(getattr(args, "lookback_days", 360))),
         horizon=max(5, int(getattr(args, "horizon", 20))),
         min_series_length=max(80, int(getattr(args, "min_series_length", 160))),

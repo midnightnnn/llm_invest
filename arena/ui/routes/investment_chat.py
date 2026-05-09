@@ -2,9 +2,16 @@ from __future__ import annotations
 
 import html
 import json
+import time
 from urllib.parse import urlencode
 
 from fastapi import FastAPI, Request
+
+
+# Bumped each process start so the ADK iframe URL changes whenever the server
+# is restarted, defeating the browser disk cache that otherwise serves a stale
+# index.html (with the previous arena-mobile-overrides block).
+_IFRAME_CACHE_BUST = str(int(time.time()))
 from fastapi.responses import JSONResponse
 
 from arena.agents.investment_chat.context import REQUEST_USER_EMAIL, normalize_tenant
@@ -44,18 +51,17 @@ def _next_path(tenant_id: str = "", provider: str = "", model: str = "") -> str:
 def _adk_iframe_src(tenant_id: str, provider: str, model: str) -> str:
     provider = canonical_provider(provider) or str(provider or "").strip().lower()
     model = normalize_chat_model_selection(provider, model)
-    query = urlencode(
-        {
-            key: value
-            for key, value in {
-                "tenant_id": tenant_id,
-                "provider": provider,
-                "model": model,
-            }.items()
-            if str(value or "").strip()
-        }
-    )
-    return f"/investment-chat/adk/dev-ui/?{query}" if query else "/investment-chat/adk/dev-ui/"
+    params = {
+        key: value
+        for key, value in {
+            "tenant_id": tenant_id,
+            "provider": provider,
+            "model": model,
+        }.items()
+        if str(value or "").strip()
+    }
+    params["_v"] = _IFRAME_CACHE_BUST
+    return f"/investment-chat/adk/dev-ui/?{urlencode(params)}"
 
 
 def _provider_options(repo=None, tenant_id: str = "") -> list[dict[str, str]]:

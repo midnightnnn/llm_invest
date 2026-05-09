@@ -159,6 +159,16 @@ def test_account_sync_combined_preserves_usd_fx_rate() -> None:
     assert snapshot.cash_foreign_currency == "USD"
 
 
+def test_account_sync_combined_does_not_double_count_shared_krw_cash() -> None:
+    repo = FakeRepo()
+    settings = _settings("us,kospi", ["AAPL", "005930"])
+    snapshot = AccountSyncService(settings=settings, repo=repo, client=FakeClient()).sync_account_snapshot()
+
+    position_value = sum(pos.market_value_krw() for pos in snapshot.positions.values())
+    assert snapshot.cash_krw == pytest.approx(1_000_000.0)
+    assert snapshot.total_equity_krw == pytest.approx(1_000_000.0 + position_value)
+
+
 def test_account_sync_overseas_merges_multi_exchange_balances() -> None:
     repo = FakeRepo()
     settings = _settings("us", ["AAPL", "VZ"])

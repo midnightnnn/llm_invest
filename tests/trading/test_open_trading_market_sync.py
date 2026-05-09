@@ -145,6 +145,20 @@ def test_market_sync_kospi_builds_rows() -> None:
     assert rank_meta["261240"]["asset_class"] == "usd_currency"
 
 
+def test_market_sync_kosdaq_treats_six_digit_holdings_as_domestic() -> None:
+    repo = FakeRepo()
+    settings = _settings("kosdaq", ["053580"])
+    settings.universe_per_exchange_cap = 3
+    client = FakeClient()
+    service = MarketDataSyncService(settings=settings, repo=repo, client=client)
+
+    result = service.sync_market_features()
+
+    assert result.attempted_tickers >= 1
+    assert "053580" in {row["ticker"] for row in repo.rows}
+    assert client.domestic_daily_requests
+
+
 def test_discover_kospi_symbols_backfills_name_for_already_seen_ticker() -> None:
     class NamedClient(FakeClient):
         def get_domestic_market_cap_ranking(self, *, market_scope="0001", div_cls_code="0"):
@@ -364,6 +378,22 @@ def test_market_sync_us_includes_existing_tickers_missing_daily_features() -> No
     assert miss_rows[-1]["ret_5d"] is not None
     assert miss_rows[-1]["ret_20d"] is not None
     assert miss_rows[-1]["volatility_20d"] is not None
+
+
+def test_market_sync_for_tickers_syncs_account_held_us_and_domestic_only() -> None:
+    repo = FakeRepo()
+    settings = _settings("us", [])
+    settings.usd_krw_fx_symbol = "USDKRW"
+    client = FakeClient()
+    service = MarketDataSyncService(settings=settings, repo=repo, client=client)
+
+    result = service.sync_market_features_for_tickers(["AAPL", "053580", "AAPL"])
+
+    assert result.attempted_tickers == 2
+    assert result.inserted_rows == 12
+    assert {row["ticker"] for row in repo.rows} == {"AAPL", "053580"}
+    assert client.overseas_daily_requests
+    assert client.domestic_daily_requests
 
 
 def test_quote_sync_us_rows_include_native_price_and_fx() -> None:

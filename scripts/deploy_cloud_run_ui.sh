@@ -89,9 +89,7 @@ _upsert_secret_latest() {
 }
 
 _run_llm_arena() {
-  if command -v llm-arena >/dev/null 2>&1; then
-    llm-arena "$@"
-  elif [[ -x "${ROOT_DIR}/.venv/bin/llm-arena" ]]; then
+  if [[ -x "${ROOT_DIR}/.venv/bin/llm-arena" ]]; then
     "${ROOT_DIR}/.venv/bin/llm-arena" "$@"
   else
     python -m arena.cli "$@"

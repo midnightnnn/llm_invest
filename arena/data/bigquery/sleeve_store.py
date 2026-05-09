@@ -186,18 +186,72 @@ class SleeveStore:
     def _tenant_token(self, tenant_id: str | None = None) -> str:
         return str(self.session.resolve_tenant_id(tenant_id))
 
-    def latest_account_snapshot(self, *, tenant_id: str | None = None) -> AccountSnapshot | None:
+    @staticmethod
+    def _normalize_market_scope(market_scope: str | None = None) -> str:
+        tokens: list[str] = []
+        for token in str(market_scope or "").replace("|", ",").replace(";", ",").split(","):
+            clean = token.strip().lower()
+            if clean and clean not in tokens:
+                tokens.append(clean)
+        return ",".join(tokens)
+
+    @staticmethod
+    def _market_scope_tokens(market: str | None = None) -> list[str]:
+        tokens: list[str] = []
+        for token in str(market or "").replace("|", ",").replace(";", ",").split(","):
+            clean = token.strip().lower()
+            if not clean:
+                continue
+            mapped = {
+                "nasdaq": ["us"],
+                "nyse": ["us"],
+                "amex": ["us"],
+                "arca": ["us"],
+                "usa": ["us"],
+                "kr": ["kospi", "kosdaq"],
+                "krx": ["kospi", "kosdaq"],
+                "korea": ["kospi", "kosdaq"],
+                "domestic": ["kospi", "kosdaq"],
+            }.get(clean, [clean])
+            for item in mapped:
+                if item and item not in tokens:
+                    tokens.append(item)
+        return tokens
+
+    @classmethod
+    def _filter_tickers_for_market(cls, tickers: list[str], market: str | None = None) -> list[str]:
+        tokens = set(cls._market_scope_tokens(market))
+        wants_kr = bool(tokens.intersection({"kospi", "kosdaq"}))
+        wants_us = "us" in tokens
+        if wants_kr and not wants_us:
+            return [ticker for ticker in tickers if ticker.isdigit() and len(ticker) == 6]
+        if wants_us and not wants_kr:
+            return [ticker for ticker in tickers if ticker and not ticker[:1].isdigit()]
+        return tickers
+
+    def latest_account_snapshot(
+        self,
+        *,
+        tenant_id: str | None = None,
+        market_scope: str | None = None,
+    ) -> AccountSnapshot | None:
         """Loads the latest account cash, equity, and current positions."""
         tenant = self._tenant_token(tenant_id)
+        scope = self._normalize_market_scope(market_scope)
+        filters = ["tenant_id = @tenant_id"]
+        params: dict[str, Any] = {"tenant_id": tenant}
+        if scope:
+            filters.append("market_scope = @market_scope")
+            params["market_scope"] = scope
         sql = f"""
         SELECT snapshot_at, cash_krw, total_equity_krw, usd_krw_rate,
                cash_foreign, cash_foreign_currency
         FROM `{self.session.dataset_fqn}.account_snapshots`
-        WHERE tenant_id = @tenant_id
+        WHERE {' AND '.join(filters)}
         ORDER BY snapshot_at DESC
         LIMIT 1
         """
-        head = self.session.fetch_rows(sql, {"tenant_id": tenant})
+        head = self.session.fetch_rows(sql, params)
         if not head:
             return None
 
@@ -310,15 +364,18 @@ class SleeveStore:
         snapshot_at: datetime | None = None,
         *,
         tenant_id: str | None = None,
+        market_scope: str | None = None,
     ) -> datetime:
         """Persists one full account snapshot and matching positions rows."""
         tenant = self._tenant_token(tenant_id)
         ts = snapshot_at or utc_now()
+        scope = self._normalize_market_scope(market_scope)
 
         snapshots_table = f"{self.session.dataset_fqn}.account_snapshots"
         snapshot_row = {
             "tenant_id": tenant,
             "snapshot_at": ts.isoformat(),
+            "market_scope": scope or None,
             "cash_krw": snapshot.cash_krw,
             "total_equity_krw": snapshot.total_equity_krw,
             "usd_krw_rate": snapshot.usd_krw_rate if snapshot.usd_krw_rate > 0 else None,
@@ -472,13 +529,62 @@ class SleeveStore:
         live holdings.
         """
         params: dict[str, Any] = {}
+        market_tokens = self._market_scope_tokens(market)
+        scope_match_sql = ""
+        if market_tokens:
+            scope_param_idx = 0
+
+            def like_expr(token: str) -> str:
+                nonlocal scope_param_idx
+                key = f"market_scope_like_{scope_param_idx}"
+                scope_param_idx += 1
+                params[key] = f"%,{token},%"
+                return (
+                    "CONCAT(',', LOWER(REPLACE(REPLACE(COALESCE(market_scope, ''), '|', ','), ';', ',')), ',') "
+                    f"LIKE @{key}"
+                )
+
+            groups: list[str] = []
+            if "us" in market_tokens:
+                groups.append(f"({like_expr('us')})")
+            kr_tokens = [token for token in market_tokens if token in {"kospi", "kosdaq"}]
+            if kr_tokens:
+                groups.append("(" + " OR ".join(like_expr(token) for token in kr_tokens) + ")")
+            for token in market_tokens:
+                if token not in {"us", "kospi", "kosdaq"}:
+                    groups.append(f"({like_expr(token)})")
+            scope_match_sql = "(" + " AND ".join(groups) + ")"
         if all_tenants:
-            sql = f"""
+            if scope_match_sql:
+                latest_sql = f"""
+            WITH ranked_snapshots AS (
+              SELECT tenant_id,
+                     snapshot_at,
+                     ROW_NUMBER() OVER (
+                       PARTITION BY tenant_id
+                       ORDER BY CASE WHEN {scope_match_sql} THEN 0 ELSE 1 END, snapshot_at DESC
+                     ) AS rn
+              FROM `{self.session.dataset_fqn}.account_snapshots`
+              WHERE {scope_match_sql}
+                 OR market_scope IS NULL
+                 OR TRIM(market_scope) = ''
+            ),
+            latest AS (
+              SELECT tenant_id, snapshot_at
+              FROM ranked_snapshots
+              WHERE rn = 1
+            )
+                """
+            else:
+                latest_sql = f"""
             WITH latest AS (
               SELECT tenant_id, MAX(snapshot_at) AS snapshot_at
               FROM `{self.session.dataset_fqn}.account_snapshots`
               GROUP BY tenant_id
             )
+                """
+            sql = f"""
+            {latest_sql}
             SELECT DISTINCT p.ticker
             FROM `{self.session.dataset_fqn}.positions_current` p
             JOIN latest l
@@ -489,12 +595,35 @@ class SleeveStore:
         else:
             tenant = self._tenant_token(tenant_id)
             params["tenant_id"] = tenant
-            sql = f"""
+            if scope_match_sql:
+                latest_sql = f"""
+            WITH ranked_snapshots AS (
+              SELECT snapshot_at,
+                     ROW_NUMBER() OVER (
+                       ORDER BY CASE WHEN {scope_match_sql} THEN 0 ELSE 1 END, snapshot_at DESC
+                     ) AS rn
+              FROM `{self.session.dataset_fqn}.account_snapshots`
+              WHERE tenant_id = @tenant_id
+                AND ({scope_match_sql}
+                  OR market_scope IS NULL
+                  OR TRIM(market_scope) = '')
+            ),
+            latest AS (
+              SELECT snapshot_at
+              FROM ranked_snapshots
+              WHERE rn = 1
+            )
+                """
+            else:
+                latest_sql = f"""
             WITH latest AS (
               SELECT MAX(snapshot_at) AS snapshot_at
               FROM `{self.session.dataset_fqn}.account_snapshots`
               WHERE tenant_id = @tenant_id
             )
+                """
+            sql = f"""
+            {latest_sql}
             SELECT DISTINCT p.ticker
             FROM `{self.session.dataset_fqn}.positions_current` p
             CROSS JOIN latest l
@@ -516,12 +645,7 @@ class SleeveStore:
             )
             return []
         tickers = [str(r["ticker"]).strip().upper() for r in rows if r.get("ticker")]
-        m = market.lower().strip()
-        if m == "kospi":
-            return [t for t in tickers if t.isdigit() and len(t) == 6]
-        if m == "us":
-            return [t for t in tickers if t and not t[:1].isdigit()]
-        return tickers
+        return self._filter_tickers_for_market(tickers, market)
 
     def latest_agent_sleeves(
         self,

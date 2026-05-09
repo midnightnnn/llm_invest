@@ -146,9 +146,15 @@ def _stub_shared_prep_environment(
         failed_tickers: list = []
 
     def _fake_market_service_factory(**kwargs):
+        service_settings = kwargs.get("settings")
+
         class _S:
             def sync_market_features(self_inner):
                 calls.append(("daily_sync", None))
+                return _FakeMarketSyncResult()
+
+            def sync_market_features_for_tickers(self_inner, tickers):
+                calls.append(("held_coverage", getattr(service_settings, "kis_target_market", ""), tuple(tickers)))
                 return _FakeMarketSyncResult()
 
         return _S()

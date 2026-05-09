@@ -350,6 +350,7 @@ TABLE_DDLS: tuple[str, ...] = (
     CREATE TABLE IF NOT EXISTS `{project}.{dataset}.account_snapshots` (
       tenant_id STRING NOT NULL,
       snapshot_at TIMESTAMP NOT NULL,
+      market_scope STRING,
       cash_krw FLOAT64 NOT NULL,
       total_equity_krw FLOAT64 NOT NULL,
       usd_krw_rate FLOAT64,

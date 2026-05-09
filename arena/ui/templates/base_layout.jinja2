@@ -305,11 +305,13 @@
         backdrop-filter: none;
       }
     }
-    body[data-active="investment_chat"] .arena-sidebar,
-    body[data-active="investment_chat"] .sidebar-collapse-toggle,
-    body[data-active="investment_chat"] .sidebar-collapse-toggle svg {
-      transition: none !important;
-      will-change: auto;
+    @media (min-width: 768px) {
+      body[data-active="investment_chat"] .arena-sidebar,
+      body[data-active="investment_chat"] .sidebar-collapse-toggle,
+      body[data-active="investment_chat"] .sidebar-collapse-toggle svg {
+        transition: none !important;
+        will-change: auto;
+      }
     }
   </style>
 </head>
@@ -317,11 +319,11 @@
   <div id="nav-loader"></div>
 
   {# ── Mobile top bar ── #}
-  <header class="sticky top-0 z-40 flex h-14 items-center justify-between border-b border-white/40 bg-white/70 px-4 backdrop-blur-xl md:hidden">
-    <h1 class="font-display text-lg font-bold tracking-tight text-ink-900">LLM INVEST</h1>
+  <header class="sticky top-0 z-40 flex h-14 items-center gap-3 border-b border-white/40 bg-white/70 px-4 backdrop-blur-xl md:hidden">
     <button id="sidebar-toggle" type="button" class="rounded-lg border border-ink-200/50 bg-white/80 p-1.5 text-ink-600">
       <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" d="M4 6h16M4 12h16M4 18h16"/></svg>
     </button>
+    <h1 class="font-display text-lg font-bold tracking-tight text-ink-900">LLM INVEST</h1>
   </header>
 
   <div id="sidebar-backdrop" class="sidebar-backdrop md:hidden"></div>

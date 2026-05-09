@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from arena.cli_commands.sync import ACCOUNT_HELD_MARKET_SCOPE, _forecast_settings_for_tickers
 from arena.config import Settings
 from arena.data.bq import BigQueryRepository
 from arena.logging_utils import event_extra, failure_extra
@@ -100,7 +101,9 @@ def _batch_tenant_work(
                 snapshot=snapshot,
             )
 
-        held_tickers = repo.get_all_held_tickers(market=settings.kis_target_market) if repo else []
+        held_tickers = _account_held_tickers(repo, all_tenants=False) if repo else []
+        if not held_tickers and repo:
+            held_tickers = repo.get_all_held_tickers(market=settings.kis_target_market)
         from arena.agents.research_agent import ResearchAgent
 
         research_agent = ResearchAgent(settings=settings, repo=repo)
@@ -557,6 +560,59 @@ def _record_shared_prep_session(
         )
 
 
+def _account_held_tickers(repo: BigQueryRepository, *, all_tenants: bool = True) -> list[str]:
+    loader = getattr(repo, "get_latest_position_tickers", None)
+    if not callable(loader):
+        return []
+    try:
+        rows = loader(market=ACCOUNT_HELD_MARKET_SCOPE, all_tenants=all_tenants) or []
+    except Exception as exc:
+        logger.warning(
+            "[yellow]Account held coverage ticker load skipped[/yellow] err=%s",
+            str(exc),
+            extra=failure_extra("account_held_coverage_ticker_load_failed", exc),
+        )
+        return []
+    return list(dict.fromkeys(str(t).strip().upper() for t in rows if str(t).strip()))
+
+
+def _sync_account_held_market_features(settings: Settings, repo: BigQueryRepository) -> object | None:
+    tickers = _account_held_tickers(repo, all_tenants=True)
+    if not tickers:
+        logger.info("[cyan]Account held market coverage skipped[/cyan] reason=no_held_tickers")
+        return None
+    cli = _cli()
+    coverage_settings = _forecast_settings_for_tickers(settings, tickers)
+    service = cli.MarketDataSyncService(settings=coverage_settings, repo=repo)
+    syncer = getattr(service, "sync_market_features_for_tickers", None)
+    if not callable(syncer):
+        logger.warning("[yellow]Account held market coverage skipped[/yellow] reason=syncer_unavailable")
+        return None
+    try:
+        result = syncer(tickers)
+    except Exception as exc:
+        logger.warning(
+            "[yellow]Account held market coverage failed[/yellow] err=%s",
+            str(exc),
+            extra=failure_extra(
+                "account_held_market_coverage_failed",
+                exc,
+                ticker_count=len(tickers),
+                market=coverage_settings.kis_target_market,
+            ),
+            exc_info=True,
+        )
+        return None
+    logger.info(
+        "[cyan]Account held market coverage[/cyan] market=%s inserted=%d attempted=%d failed=%d",
+        coverage_settings.kis_target_market,
+        int(getattr(result, "inserted_rows", 0) or 0),
+        int(getattr(result, "attempted_tickers", 0) or 0),
+        len(getattr(result, "failed_tickers", []) or []),
+    )
+    return result
+
+
 def cmd_run_shared_prep(
     live: bool,
     *,
@@ -860,6 +916,9 @@ def cmd_run_shared_prep(
                             exc_info=True,
                         )
                         raise SystemExit(8)
+
+            if not local_existing_data_mode:
+                _sync_account_held_market_features(bootstrap_settings, repo)
 
             # Upstream freshness guard: refuse if daily EOD data is so stale
             # that the ML step would train on month-old prices. 'stale' here

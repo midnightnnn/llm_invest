@@ -158,7 +158,8 @@ def build_account_tool_entries(*, repo: Any, settings: Settings, tenant_id: str)
                 "requested_source": source_token,
                 "available_agent_ids": available_agent_ids,
             }
-        snapshot = latest_account_snapshot(repo, tenant_id=tenant)
+        market_scope = _account_market_override(repo, tenant_id=tenant)
+        snapshot = latest_account_snapshot(repo, tenant_id=tenant, market_scope=market_scope)
         if snapshot is None:
             return {
                 "status": "missing",

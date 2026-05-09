@@ -35,10 +35,15 @@ def call_with_optional_tenant(fn, *, tenant_id: str, **kwargs):
         return fn(**kwargs)
 
 
-def latest_account_snapshot(repo: Any, *, tenant_id: str) -> AccountSnapshot | None:
+def latest_account_snapshot(repo: Any, *, tenant_id: str, market_scope: str | None = None) -> AccountSnapshot | None:
     loader = getattr(repo, "latest_account_snapshot", None)
     if not callable(loader):
         return None
+    if str(market_scope or "").strip():
+        try:
+            return loader(tenant_id=tenant_id, market_scope=market_scope)
+        except TypeError:
+            pass
     return call_with_optional_tenant(loader, tenant_id=tenant_id)
 
 

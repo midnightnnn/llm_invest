@@ -43,6 +43,32 @@ def test_investment_chat_account_snapshot_reports_total_account_market_scope() -
     assert payload["market_scope"] == "us,kospi,kosdaq"
 
 
+def test_investment_chat_account_snapshot_reads_scoped_total_account_snapshot() -> None:
+    from arena.agents.investment_chat.account_tools import build_account_tool_entries
+
+    settings = load_settings()
+
+    class _ScopedRepo(_ChatOrderRepo):
+        def __init__(self):
+            super().__init__()
+            self.latest_calls: list[dict[str, object]] = []
+
+        def latest_account_snapshot(self, *, tenant_id: str | None = None, market_scope: str | None = None):
+            self.latest_calls.append({"tenant_id": tenant_id, "market_scope": market_scope})
+            return self.account_snapshot
+
+    repo = _ScopedRepo()
+    tools = {
+        entry.name: entry.callable
+        for entry in build_account_tool_entries(repo=repo, settings=settings, tenant_id="local")
+    }
+
+    payload = tools["get_account_snapshot"]()
+
+    assert payload["status"] == "ok"
+    assert repo.latest_calls[-1]["market_scope"] == "us,kospi,kosdaq"
+
+
 def test_investment_chat_sleeve_tool_normalizes_model_aliases_to_agent_ids() -> None:
     from arena.agents.investment_chat.account_tools import build_account_tool_entries
 

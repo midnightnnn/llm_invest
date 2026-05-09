@@ -588,7 +588,13 @@ def register_showcase_routes(app: FastAPI, *, deps: ShowcaseRouteDeps) -> None:
         )
         iframe_src = ""
         if provider_token and model_token:
-            qs = urlencode({"tenant_id": t, "provider": provider_token, "model": model_token})
+            from arena.ui.routes.investment_chat import _IFRAME_CACHE_BUST
+            qs = urlencode({
+                "tenant_id": t,
+                "provider": provider_token,
+                "model": model_token,
+                "_v": _IFRAME_CACHE_BUST,
+            })
             iframe_src = f"/investment-chat/adk-readonly/dev-ui/?{qs}"
         body = render_ui_template(
             "investment_chat_showcase_body.jinja2",

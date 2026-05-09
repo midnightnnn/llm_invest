@@ -285,12 +285,12 @@ class MarketDataSyncService:
         return bool(self._parsed_markets() & self._US_MARKETS)
 
     def _has_kospi_market(self) -> bool:
-        return "kospi" in self._parsed_markets()
+        return bool(self._parsed_markets() & {"kospi", "kosdaq"})
 
     def _is_us_market(self) -> bool:
         """Legacy compat: True only if ALL markets are US (no kospi)."""
         markets = self._parsed_markets()
-        return bool(markets & self._US_MARKETS) and "kospi" not in markets
+        return bool(markets & self._US_MARKETS) and not bool(markets & {"kospi", "kosdaq"})
 
     def _daily_source(self, market: str = "") -> str:
         """Returns source tag for a specific market. If not given, uses first parsed market."""
@@ -1537,6 +1537,32 @@ class MarketDataSyncService:
         """Fetches market data and writes feature rows into BigQuery."""
         self._universe_rank_metadata = {}
         symbols = self._include_missing_daily_feature_symbols(self._target_symbols())
+        return self._sync_market_features_for_symbols(symbols)
+
+    def _symbols_for_tickers(self, tickers: list[str]) -> list[dict[str, str]]:
+        symbols: list[dict[str, str]] = []
+        seen: set[str] = set()
+        for raw in tickers:
+            ticker = str(raw or "").strip().upper()
+            if not ticker or ticker in seen:
+                continue
+            seen.add(ticker)
+            if self._is_kospi_ticker(ticker):
+                symbols.append({"ticker": ticker, "quote_excd": "KRX"})
+            elif not ticker[:1].isdigit():
+                symbols.append({"ticker": ticker, "quote_excd": ""})
+        return symbols
+
+    def sync_market_features_for_tickers(self, tickers: list[str]) -> MarketSyncResult:
+        """Fetches daily market features only for explicitly supplied account-held tickers."""
+        self._universe_rank_metadata = {}
+        symbols = self._symbols_for_tickers(tickers)
+        for idx, symbol in enumerate(symbols, start=1):
+            self._record_universe_rank_metadata(symbol.get("ticker"), "held", core_rank=idx)
+        return self._sync_market_features_for_symbols(symbols)
+
+    def _sync_market_features_for_symbols(self, symbols: list[dict[str, str]]) -> MarketSyncResult:
+        """Fetches market data for preselected symbols and writes feature rows."""
         if not symbols:
             logger.warning(
                 "[yellow]No tickers selected for market sync[/yellow] target=%s",
@@ -2313,12 +2339,13 @@ class AccountSyncService:
             us_snap = self._sync_overseas()
             kr_snap = self._sync_domestic()
             merged_positions = {**us_snap.positions, **kr_snap.positions}
+            cash_krw = max(us_snap.cash_krw, kr_snap.cash_krw)
             snapshot = AccountSnapshot(
-                cash_krw=us_snap.cash_krw + kr_snap.cash_krw,
+                cash_krw=cash_krw,
                 cash_foreign=us_snap.cash_foreign,
                 cash_foreign_currency=us_snap.cash_foreign_currency,
                 usd_krw_rate=us_snap.usd_krw_rate,
-                total_equity_krw=us_snap.total_equity_krw + kr_snap.total_equity_krw,
+                total_equity_krw=cash_krw + sum(pos.market_value_krw() for pos in merged_positions.values()),
                 positions=merged_positions,
             )
         elif has_us:
@@ -2328,7 +2355,11 @@ class AccountSyncService:
         else:
             raise ValueError(f"unsupported target market for account sync: {self.settings.kis_target_market}")
 
-        self.repo.write_account_snapshot(snapshot)
+        market_scope = str(self.settings.kis_target_market or "").strip().lower()
+        try:
+            self.repo.write_account_snapshot(snapshot, market_scope=market_scope)
+        except TypeError:
+            self.repo.write_account_snapshot(snapshot)
         logger.info(
             "[green]Account sync done[/green] cash=%.0f equity=%.0f positions=%d",
             snapshot.cash_krw,
@@ -2377,7 +2408,7 @@ class BrokerTradeSyncService:
         return bool(self._parsed_markets() & self._US_MARKETS)
 
     def _has_kospi_market(self) -> bool:
-        return "kospi" in self._parsed_markets()
+        return bool(self._parsed_markets() & {"kospi", "kosdaq"})
 
     def _us_exchange_candidates(self) -> list[str]:
         markets = self._parsed_markets()

@@ -359,6 +359,67 @@ _MOBILE_OVERRIDE_OPEN = "<!-- arena-mobile-overrides:start -->"
 _MOBILE_OVERRIDE_CLOSE = "<!-- arena-mobile-overrides:end -->"
 _MOBILE_OVERRIDE_CSS = """\
 <style>
+/* arena: always-on overrides (apply at every viewport width) */
+
+/* ADK 1.31.1 hardcodes `showBuilderAssistant=true` in the chat component
+   constructor (no localStorage hook), so the builder assistant panel pops
+   open the moment chat mounts. The investment chat shell never needs the
+   agent builder UI, so hide the panel entirely. This also takes the
+   theme toggle (which only renders inside app-builder-tabs) with it. */
+app-builder-assistant,
+app-builder-tabs {
+  display: none !important;
+  visibility: hidden !important;
+  width: 0 !important;
+  height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  pointer-events: none !important;
+  position: absolute !important;
+  left: -9999px !important;
+}
+
+/* The chat toolbar still ships a "Builder Assistant" toggle button which
+   could re-open the panel; hide it too. */
+button.builder-mode-action-button[aria-label="Builder Assistant"],
+button.builder-mode-action-button[aria-label="Exit Builder Mode"] {
+  display: none !important;
+}
+
+/* Belt-and-suspenders for the theme toggle in case ADK ever reuses the
+   component outside the builder panel. */
+html app-theme-toggle,
+html theme-toggle-button,
+html .theme-toggle-button,
+html button.theme-toggle-button,
+html button[aria-label="Toggle theme"],
+html [aria-label="Toggle theme"] {
+  display: none !important;
+  visibility: hidden !important;
+  width: 0 !important;
+  height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  pointer-events: none !important;
+}
+
+/* Material reserves 16px below every form-field for hint/error text via the
+   subscript-wrapper / bottom-align pseudo. The chat input never shows those,
+   so the reserve renders as an empty band that doesn't collapse with the
+   textarea. Kill it so the input sits flush against the chat surface. */
+.chat-input .mat-mdc-form-field-subscript-wrapper,
+.chat-input .mat-mdc-form-field-bottom-align {
+  display: none !important;
+  height: 0 !important;
+  min-height: 0 !important;
+}
+.chat-input .mat-mdc-form-field-bottom-align::before {
+  content: none !important;
+  height: 0 !important;
+  display: none !important;
+}
+.chat-input { padding-bottom: 4px !important; }
+
 @media (max-width: 767px) {
   /* fit: release desktop min-widths */
   .chat-card { min-width: 0 !important; }
@@ -541,6 +602,123 @@ _MOBILE_OVERRIDE_CSS = """\
 
 _MOBILE_KEYBOARD_DISMISSAL_SCRIPT = """\
 <script>
+(function installArenaThemeToggleRemoval() {
+  // CSS-level hide is fragile against Angular component encapsulation +
+  // host bindings. Yank the elements out of the DOM the moment they appear and
+  // keep watching, so a re-render can't bring them back. We also yank the
+  // builder assistant panel because ADK 1.31.1 hardcodes it open on chat
+  // mount and the investment chat shell never uses it.
+  var SELECTOR = [
+    'app-builder-assistant',
+    'app-builder-tabs',
+    'app-theme-toggle',
+    '.theme-toggle-button',
+    'button[aria-label="Toggle theme"]',
+    '[aria-label="Toggle theme"]',
+    'button.builder-mode-action-button[aria-label="Builder Assistant"]',
+    'button.builder-mode-action-button[aria-label="Exit Builder Mode"]',
+  ].join(', ');
+
+  window.__ARENA_OVERRIDE_LOADED = true;
+  console.log('[arena-override] script booted at', new Date().toISOString());
+
+  var totalPurged = 0;
+
+  function isThemeIconText(value) {
+    var trimmed = String(value || '').trim().toLowerCase();
+    return trimmed === 'dark_mode' || trimmed === 'light_mode';
+  }
+
+  function purge() {
+    try {
+      var nodes = document.querySelectorAll(SELECTOR);
+
+      // ADK 1.31.1 also renders an inline theme switcher (a plain <button>
+      // wrapping a <mat-icon>dark_mode|light_mode</mat-icon>) that bypasses
+      // the app-theme-toggle component, so it dodges every CSS selector.
+      // Detect it by icon text, then walk up to the enclosing button or its
+      // mat-icon-button host element and remove that.
+      var iconHits = [];
+      var icons = document.querySelectorAll('mat-icon');
+      for (var idx = 0; idx < icons.length; idx++) {
+        var icon = icons[idx];
+        if (!isThemeIconText(icon.textContent)) continue;
+        var btn = icon.closest('button, [mat-icon-button], [role="button"]');
+        iconHits.push(btn || icon);
+      }
+
+      var combined = [];
+      for (var k = 0; k < nodes.length; k++) combined.push(nodes[k]);
+      for (var m = 0; m < iconHits.length; m++) {
+        if (iconHits[m] && combined.indexOf(iconHits[m]) === -1) combined.push(iconHits[m]);
+      }
+
+      if (combined.length) {
+        console.log('[arena-override] purging', combined.length, 'elements:',
+          combined.map(function(n) { return n.tagName.toLowerCase(); }).join(','));
+        totalPurged += combined.length;
+        combined.forEach(function(el) {
+          if (el && el.parentNode) {
+            el.parentNode.removeChild(el);
+          }
+        });
+      }
+    } catch (err) {
+      console.warn('[arena-override] purge failed', err);
+    }
+  }
+
+  purge();
+  if (typeof MutationObserver === 'function') {
+    try {
+      new MutationObserver(purge).observe(document.documentElement, {childList: true, subtree: true});
+      console.log('[arena-override] MutationObserver attached');
+    } catch (err) {
+      console.warn('[arena-override] MutationObserver failed', err);
+    }
+  }
+  document.addEventListener('DOMContentLoaded', function() {
+    purge();
+    console.log('[arena-override] DOMContentLoaded purge total:', totalPurged);
+  });
+  window.addEventListener('load', function() {
+    purge();
+    console.log('[arena-override] window.load purge total:', totalPurged);
+  });
+})();
+
+(function installArenaMessageCardClickSuppression() {
+  // Tapping a message bubble normally surfaces the trace/details side panel.
+  // The arena chat shell intentionally hides that panel, so the click reads as
+  // an accidental nav. Swallow events on the bubble at capture phase before
+  // any Angular handler fires; keep interactive children (buttons / inputs)
+  // live so feedback controls still work.
+  var INTERACTIVE_SELECTOR = 'button, a, [role="button"], .message-feedback-container, mat-icon-button, input, textarea, select, label';
+  var CARD_SELECTOR = '.message-card, app-message-card, [data-message-id], .message-card-container';
+
+  function isInsideCard(node) {
+    return !!(node && typeof node.closest === 'function' && node.closest(CARD_SELECTOR));
+  }
+
+  function isInteractiveTarget(node) {
+    return !!(node && typeof node.closest === 'function' && node.closest(INTERACTIVE_SELECTOR));
+  }
+
+  function suppressIfBubble(event) {
+    var target = event.target;
+    if (!isInsideCard(target)) return;
+    if (isInteractiveTarget(target)) return;
+    if (typeof event.stopImmediatePropagation === 'function') event.stopImmediatePropagation();
+    if (typeof event.stopPropagation === 'function') event.stopPropagation();
+    if (typeof event.preventDefault === 'function') event.preventDefault();
+  }
+
+  // Capture every way Angular / Material might detect a tap on the bubble.
+  ['click', 'auxclick', 'mousedown', 'mouseup', 'pointerdown', 'pointerup', 'touchstart', 'touchend', 'contextmenu'].forEach(function(name) {
+    document.addEventListener(name, suppressIfBubble, true);
+  });
+})();
+
 (function installArenaMobileKeyboardDismissal() {
   var lastFocusedChatInput = null;
 

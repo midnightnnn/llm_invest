@@ -8,6 +8,8 @@ Two layers of confidence:
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import pytest
 
 from arena.data.local.schema import (
@@ -102,6 +104,163 @@ def test_ddls_are_idempotent(duckdb_module):
         assert n == len(ddls)
     finally:
         con.close()
+
+
+def test_duckdb_session_ensure_tables_adds_missing_columns(tmp_path, duckdb_module):
+    from arena.data.local.session import DuckDBSession
+
+    session = DuckDBSession(tmp_path / "arena.duckdb")
+    try:
+        session.execute(
+            """
+            CREATE TABLE account_snapshots (
+              tenant_id VARCHAR NOT NULL,
+              snapshot_at TIMESTAMP NOT NULL,
+              cash_krw DOUBLE NOT NULL,
+              total_equity_krw DOUBLE NOT NULL
+            )
+            """
+        )
+
+        session.ensure_tables()
+
+        cols = {
+            row["column_name"]
+            for row in session.fetch_rows(
+                """
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_name = 'account_snapshots'
+                """
+            )
+        }
+        assert "market_scope" in cols
+        assert "usd_krw_rate" in cols
+    finally:
+        session.close()
+
+
+def test_local_latest_position_tickers_prefers_matching_market_scope(tmp_path, duckdb_module):
+    from arena.data.local.session import DuckDBSession
+    from arena.data.local.sleeve_store import LocalSleeveStore
+
+    session = DuckDBSession(tmp_path / "arena.duckdb", tenant_id="midnightnnn")
+    try:
+        session.ensure_tables()
+        kr_snapshot_at = datetime(2026, 2, 21, 9, 0, tzinfo=timezone.utc)
+        us_snapshot_at = datetime(2026, 2, 21, 10, 0, tzinfo=timezone.utc)
+        session.insert_dict(
+            "account_snapshots",
+            {
+                "tenant_id": "midnightnnn",
+                "snapshot_at": kr_snapshot_at,
+                "market_scope": "kospi,kosdaq",
+                "cash_krw": 1_000_000.0,
+                "total_equity_krw": 2_000_000.0,
+            },
+        )
+        session.insert_dict(
+            "positions_current",
+            {
+                "tenant_id": "midnightnnn",
+                "snapshot_at": kr_snapshot_at,
+                "ticker": "053580",
+                "quantity": 10.0,
+                "avg_price_krw": 1_000.0,
+                "market_price_krw": 1_100.0,
+            },
+        )
+        session.insert_dict(
+            "account_snapshots",
+            {
+                "tenant_id": "midnightnnn",
+                "snapshot_at": us_snapshot_at,
+                "market_scope": "us",
+                "cash_krw": 1_000_000.0,
+                "total_equity_krw": 3_000_000.0,
+            },
+        )
+        session.insert_dict(
+            "positions_current",
+            {
+                "tenant_id": "midnightnnn",
+                "snapshot_at": us_snapshot_at,
+                "ticker": "AAPL",
+                "quantity": 2.0,
+                "avg_price_krw": 150_000.0,
+                "market_price_krw": 160_000.0,
+            },
+        )
+
+        store = LocalSleeveStore(session)
+
+        assert store.get_latest_position_tickers(tenant_id="midnightnnn", market="kosdaq") == ["053580"]
+        assert store.get_latest_position_tickers(tenant_id="midnightnnn", market="nasdaq") == ["AAPL"]
+    finally:
+        session.close()
+
+
+def test_local_latest_position_tickers_requires_combined_market_scope(tmp_path, duckdb_module):
+    from arena.data.local.session import DuckDBSession
+    from arena.data.local.sleeve_store import LocalSleeveStore
+
+    session = DuckDBSession(tmp_path / "arena.duckdb", tenant_id="midnightnnn")
+    try:
+        session.ensure_tables()
+        full_snapshot_at = datetime(2026, 2, 21, 9, 0, tzinfo=timezone.utc)
+        us_snapshot_at = datetime(2026, 2, 21, 10, 0, tzinfo=timezone.utc)
+        session.insert_dict(
+            "account_snapshots",
+            {
+                "tenant_id": "midnightnnn",
+                "snapshot_at": full_snapshot_at,
+                "market_scope": "us,kospi,kosdaq",
+                "cash_krw": 1_000_000.0,
+                "total_equity_krw": 2_000_000.0,
+            },
+        )
+        for ticker in ["053580", "AAPL"]:
+            session.insert_dict(
+                "positions_current",
+                {
+                    "tenant_id": "midnightnnn",
+                    "snapshot_at": full_snapshot_at,
+                    "ticker": ticker,
+                    "quantity": 1.0,
+                    "avg_price_krw": 1_000.0,
+                    "market_price_krw": 1_100.0,
+                },
+            )
+        session.insert_dict(
+            "account_snapshots",
+            {
+                "tenant_id": "midnightnnn",
+                "snapshot_at": us_snapshot_at,
+                "market_scope": "us",
+                "cash_krw": 1_000_000.0,
+                "total_equity_krw": 3_000_000.0,
+            },
+        )
+        session.insert_dict(
+            "positions_current",
+            {
+                "tenant_id": "midnightnnn",
+                "snapshot_at": us_snapshot_at,
+                "ticker": "VZ",
+                "quantity": 2.0,
+                "avg_price_krw": 150_000.0,
+                "market_price_krw": 160_000.0,
+            },
+        )
+
+        store = LocalSleeveStore(session)
+
+        assert store.get_latest_position_tickers(tenant_id="midnightnnn", market="us,kospi,kosdaq") == [
+            "053580",
+            "AAPL",
+        ]
+    finally:
+        session.close()
 
 
 def test_market_features_columns_match(duckdb_module):

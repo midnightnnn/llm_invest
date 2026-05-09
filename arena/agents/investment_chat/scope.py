@@ -4,6 +4,7 @@ from typing import Any
 
 from arena.agents.investment_chat.constants import AGENT_ID
 from arena.agents.investment_chat.context import REQUEST_USER_EMAIL
+from arena.agents.investment_chat.market_scope import account_market_override
 from arena.agents.investment_chat.utils import latest_account_snapshot, safe_float, sources_for_settings
 from arena.config import Settings
 from arena.models import AccountSnapshot
@@ -43,7 +44,12 @@ def snapshot_for_order_scope(
     agent_id: str,
 ) -> tuple[AccountSnapshot | None, dict[str, Any]]:
     if scope == "account":
-        return latest_account_snapshot(repo, tenant_id=tenant_id), {"scope": "account", "target_agent_id": AGENT_ID}
+        market_scope = account_market_override(repo, tenant_id=tenant_id)
+        return latest_account_snapshot(repo, tenant_id=tenant_id, market_scope=market_scope), {
+            "scope": "account",
+            "target_agent_id": AGENT_ID,
+            "market_scope": market_scope,
+        }
 
     builder = getattr(repo, "build_agent_sleeve_snapshot", None)
     if not callable(builder):

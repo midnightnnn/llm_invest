@@ -173,6 +173,51 @@ def test_run_agent_cycle_once_ignores_post_cycle_maintenance_failures(monkeypatc
     assert failure_record.exc_info is not None
 
 
+def test_run_agent_cycle_once_research_uses_account_wide_holdings(monkeypatch) -> None:
+    settings = load_settings()
+    settings.kis_target_market = "us"
+    seen: dict[str, list[str]] = {}
+
+    class _Repo(_FakeRepo):
+        def get_latest_position_tickers(self, *, market="", all_tenants=False):
+            assert market == "us,kospi,kosdaq"
+            assert all_tenants is False
+            return ["AAPL", "053580"]
+
+        def get_all_held_tickers(self, market=None):
+            _ = market
+            return ["AAPL"]
+
+    class _Orchestrator:
+        def run_cycle(self, snapshot=None):
+            _ = snapshot
+            return []
+
+    class _FakeResearchAgent:
+        def __init__(self, settings, repo):
+            self.settings = settings
+            self.repo = repo
+
+        async def run(self, held_tickers):
+            seen["held"] = list(held_tickers)
+            return []
+
+    repo = _Repo()
+    monkeypatch.setattr("arena.agents.research_agent.ResearchAgent", _FakeResearchAgent)
+    monkeypatch.setattr(cli, "_run_post_cycle_maintenance", lambda *args, **kwargs: None)
+
+    cli._run_agent_cycle_once(
+        False,
+        settings=settings,
+        repo=repo,
+        orchestrator=_Orchestrator(),
+        tenant="tenant-a",
+        run_id="run-1",
+    )
+
+    assert seen["held"] == ["AAPL", "053580"]
+
+
 def test_post_cycle_maintenance_runs_relation_extraction_after_compaction(monkeypatch) -> None:
     settings = load_settings()
     calls: list[str] = []
