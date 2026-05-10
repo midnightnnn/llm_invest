@@ -401,6 +401,22 @@ html [aria-label="Toggle theme"] {
   pointer-events: none !important;
 }
 
+/* Live audio/video controls are ADK development chrome. The investment chat
+   product surface keeps file attachments, but does not expose Live calls. */
+app-call-controls,
+.call-btn-container,
+button.audio-rec-btn {
+  display: none !important;
+  visibility: hidden !important;
+  width: 0 !important;
+  height: 0 !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  pointer-events: none !important;
+}
+
 /* Material reserves 16px below every form-field for hint/error text via the
    subscript-wrapper / bottom-align pseudo. The chat input never shows those,
    so the reserve renders as an empty band that doesn't collapse with the
@@ -426,9 +442,142 @@ html [aria-label="Toggle theme"] {
   side-panel-width { width: min(100vw, 92vw) !important; max-width: 100vw !important; }
   .eval-compare-container .actual-result,
   .eval-compare-container .expected-result { min-width: 0 !important; max-width: 100% !important; }
-  .chat-input-container { padding: 12px 12px 16px !important; }
+  .chat-input-container { padding: 0 !important; }
   .chat-messages { padding: 12px !important; }
   html, body { overflow-x: hidden !important; }
+  html,
+  body,
+  app-root,
+  mat-sidenav-container,
+  mat-drawer-container,
+  .mat-drawer-container,
+  mat-sidenav-content,
+  mat-drawer-content,
+  .mat-drawer-content,
+  .mat-sidenav-content,
+  .main-content,
+  .app-content,
+  .page-content {
+    margin-top: 0 !important;
+    padding-top: 0 !important;
+    top: 0 !important;
+  }
+
+  /* mobile product shell: leave only transcript + composer visible inside ADK.
+     The outer arena shell owns history navigation, so ADK's app/session
+     selectors, traces, events, evals, and builder chrome are hidden here. */
+  app-toolbar,
+  .toolbar,
+  mat-toolbar,
+  selector-drawer,
+  app-selector-drawer,
+  app-selector-search,
+  app-selector-list,
+  session-info,
+  app-session-tab,
+  session-tab,
+  app-side-panel,
+  side-panel,
+  .mat-drawer,
+  mat-drawer,
+  .mat-drawer-side,
+  .mat-drawer-over,
+  app-trace-tab,
+  trace-tab,
+  trace-row,
+  app-event-tab,
+  event-tab,
+  app-events-tab,
+  events-tab,
+  app-eval-tab,
+  eval-tab,
+  app-filter,
+  app-filter-panel,
+  filter-panel,
+  mat-button-toggle,
+  .mat-button-toggle,
+  mat-slide-toggle,
+  .mat-mdc-slide-toggle,
+  [aria-label*="Filter" i],
+  [aria-label*="Streaming" i],
+  [aria-label*="Stream" i],
+  [title*="Filter" i],
+  [title*="Streaming" i],
+  [title*="Stream" i],
+  [placeholder*="Filter" i],
+  [class*="filter"],
+  [class*="streaming"],
+  [class*="stream"],
+  .side-panel,
+  .trace-panel,
+  .event-panel,
+  .eval-panel,
+  .bottom-panel,
+  .bottom-resize-handler,
+  .resize-handler {
+    display: none !important;
+    visibility: hidden !important;
+    width: 0 !important;
+    height: 0 !important;
+    min-width: 0 !important;
+    min-height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    pointer-events: none !important;
+  }
+  .mat-drawer-content,
+  mat-drawer-content,
+  .mat-drawer-container,
+  mat-drawer-container {
+    margin-left: 0 !important;
+    margin-right: 0 !important;
+    margin-top: 0 !important;
+    padding-top: 0 !important;
+    transform: none !important;
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+  app-root,
+  app-chat {
+    display: block !important;
+    height: 100dvh !important;
+    min-height: 0 !important;
+    max-height: 100dvh !important;
+    overflow: hidden !important;
+  }
+  .drawer-container,
+  .side-panel-container,
+  .mat-drawer-content,
+  mat-drawer-content,
+  .mat-drawer-container,
+  mat-drawer-container {
+    height: 100dvh !important;
+    min-height: 0 !important;
+    max-height: 100dvh !important;
+    overflow: hidden !important;
+  }
+  app-chat,
+  chat-page,
+  app-chat-page,
+  app-chat-panel,
+  chat-panel,
+  .chat-card,
+  .chat-container {
+    height: 100dvh !important;
+    min-height: 0 !important;
+    max-height: 100dvh !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    overflow: hidden !important;
+  }
+  .chat-messages {
+    flex: 1 1 auto !important;
+    min-height: 0 !important;
+    overflow-y: auto !important;
+  }
+  .chat-input-container {
+    flex: 0 0 auto !important;
+  }
 
   /* messages: contain overflow from markdown tables / long tokens */
   .message-card,
@@ -534,7 +683,7 @@ html [aria-label="Toggle theme"] {
   /* chat input: fill viewport on mobile (was capped to 88%) */
   .chat-input {
     width: 100% !important;
-    padding: 6px 10px 4px !important;
+    padding: 6px 10px 0 !important;
     box-sizing: border-box !important;
   }
   .chat-input-content-row { gap: 8px !important; }
@@ -590,9 +739,10 @@ html [aria-label="Toggle theme"] {
     -webkit-tap-highlight-color: rgba(0, 0, 0, .04);
   }
 
-  /* safe-area inset (iOS notch / home indicator) on bottom-anchored UI */
+  /* The outer shell owns safe area / viewport sizing; do not let ADK reserve
+     an extra white band below the attachment row. */
   .chat-input-container {
-    padding-bottom: max(16px, env(safe-area-inset-bottom)) !important;
+    padding-bottom: 0 !important;
   }
 }
 </style>
@@ -683,6 +833,277 @@ _MOBILE_KEYBOARD_DISMISSAL_SCRIPT = """\
     purge();
     console.log('[arena-override] window.load purge total:', totalPurged);
   });
+})();
+
+(function installArenaMobileChromeRemoval() {
+  var SELECTOR = [
+    'app-toolbar',
+    '.toolbar',
+    'mat-toolbar',
+    'selector-drawer',
+    'app-selector-drawer',
+    'app-selector-search',
+    'app-selector-list',
+    'session-info',
+    'app-session-tab',
+    'session-tab',
+    'app-side-panel',
+    'side-panel',
+    'app-trace-tab',
+    'trace-tab',
+    'trace-row',
+    'app-event-tab',
+    'event-tab',
+    'app-events-tab',
+    'events-tab',
+    'app-eval-tab',
+    'eval-tab',
+    'app-filter',
+    'app-filter-panel',
+    'filter-panel',
+    'mat-button-toggle',
+    '.mat-button-toggle',
+    'mat-slide-toggle',
+    '.mat-mdc-slide-toggle',
+    '[aria-label*="Filter" i]',
+    '[aria-label*="Streaming" i]',
+    '[aria-label*="Stream" i]',
+    '[title*="Filter" i]',
+    '[title*="Streaming" i]',
+    '[title*="Stream" i]',
+    '[placeholder*="Filter" i]',
+    '[class*="filter"]',
+    '[class*="streaming"]',
+    '[class*="stream"]',
+    '.side-panel',
+    '.trace-panel',
+    '.event-panel',
+    '.eval-panel',
+    '.bottom-panel',
+    '.bottom-resize-handler',
+    '.resize-handler'
+  ].join(', ');
+  var DEBUG_CONTROL_TEXT = /^(events?|traces?|filter|streaming)(\\s|:|$)/i;
+
+  function isMobileViewport() {
+    return !window.matchMedia || window.matchMedia('(max-width: 767px)').matches;
+  }
+
+  function purgeMobileChrome() {
+    if (!isMobileViewport()) return;
+    try {
+      var nodes = Array.prototype.slice.call(document.querySelectorAll(SELECTOR));
+      document.querySelectorAll('button, [role="button"], mat-tab, .mat-mdc-tab, mat-chip, mat-slide-toggle, .mat-mdc-slide-toggle, mat-checkbox, mat-button-toggle, .mat-button-toggle, label, span, div').forEach(function(node) {
+        var text = String(node.textContent || node.getAttribute('aria-label') || node.getAttribute('title') || '').trim();
+        if (!DEBUG_CONTROL_TEXT.test(text)) return;
+        var host = node.closest('button, [role="button"], mat-tab, .mat-mdc-tab, mat-chip, mat-slide-toggle, .mat-mdc-slide-toggle, mat-checkbox, mat-button-toggle, .mat-button-toggle, label') || node;
+        if (nodes.indexOf(host) === -1) nodes.push(host);
+      });
+      for (var idx = 0; idx < nodes.length; idx++) {
+        var node = nodes[idx];
+        if (!node || !node.style) continue;
+        node.style.setProperty('display', 'none', 'important');
+        node.style.setProperty('visibility', 'hidden', 'important');
+        node.style.setProperty('width', '0', 'important');
+        node.style.setProperty('height', '0', 'important');
+        node.style.setProperty('pointer-events', 'none', 'important');
+      }
+    } catch (err) {
+      console.warn('[arena-override] mobile chrome purge failed', err);
+    }
+  }
+
+  purgeMobileChrome();
+  if (typeof MutationObserver === 'function') {
+    try {
+      new MutationObserver(purgeMobileChrome).observe(document.documentElement, {childList: true, subtree: true});
+    } catch (err) {
+      console.warn('[arena-override] mobile chrome observer failed', err);
+    }
+  }
+  document.addEventListener('DOMContentLoaded', purgeMobileChrome);
+  window.addEventListener('load', purgeMobileChrome);
+  window.addEventListener('resize', purgeMobileChrome);
+})();
+
+(function installArenaMobileTopGapRemoval() {
+  var SHELL_SELECTOR = [
+    'app-root',
+    'mat-sidenav-container',
+    'mat-drawer-container',
+    '.mat-drawer-container',
+    'mat-sidenav-content',
+    'mat-drawer-content',
+    '.mat-drawer-content',
+    '.mat-sidenav-content',
+    '.main-content',
+    '.app-content',
+    '.page-content'
+  ].join(', ');
+  var EMPTY_TOP_SELECTOR = [
+    'app-toolbar',
+    '.toolbar',
+    'mat-toolbar',
+    '[class*="toolbar"]',
+    '[class*="top-bar"]',
+    '[class*="header"]',
+    '[class*="stream"]'
+  ].join(', ');
+
+  function isMobileViewport() {
+    return !window.matchMedia || window.matchMedia('(max-width: 767px)').matches;
+  }
+
+  function isNearTop(node) {
+    try {
+      var rect = node.getBoundingClientRect();
+      return rect.top >= -2 && rect.top <= 72 && rect.height <= 96;
+    } catch (_err) {
+      return false;
+    }
+  }
+
+  function collapseTopGap() {
+    if (!isMobileViewport()) return;
+    try {
+      document.querySelectorAll(SHELL_SELECTOR).forEach(function(node) {
+        if (!node || !node.style) return;
+        node.style.setProperty('margin-top', '0', 'important');
+        node.style.setProperty('padding-top', '0', 'important');
+        node.style.setProperty('top', '0', 'important');
+      });
+      document.querySelectorAll(EMPTY_TOP_SELECTOR).forEach(function(node) {
+        if (!node || !node.style || !isNearTop(node)) return;
+        node.style.setProperty('display', 'none', 'important');
+        node.style.setProperty('visibility', 'hidden', 'important');
+        node.style.setProperty('height', '0', 'important');
+        node.style.setProperty('min-height', '0', 'important');
+        node.style.setProperty('margin', '0', 'important');
+        node.style.setProperty('padding', '0', 'important');
+      });
+    } catch (err) {
+      console.warn('[arena-override] mobile top gap removal failed', err);
+    }
+  }
+
+  collapseTopGap();
+  if (typeof MutationObserver === 'function') {
+    try {
+      new MutationObserver(collapseTopGap).observe(document.documentElement, {childList: true, subtree: true, attributes: true});
+    } catch (err) {
+      console.warn('[arena-override] mobile top gap observer failed', err);
+    }
+  }
+  document.addEventListener('DOMContentLoaded', collapseTopGap);
+  window.addEventListener('load', collapseTopGap);
+  window.addEventListener('resize', collapseTopGap);
+})();
+
+(function installArenaMobileMessageClickShield() {
+  // ADK opens its hidden side panel from message-card taps on mobile. Keep the
+  // transcript inert while preserving real controls such as feedback buttons.
+  var MESSAGE_SELECTOR = [
+    '.message-card',
+    'app-message-card',
+    '.message-card-container',
+    '.message-content',
+    '.message-text',
+    '[data-message-id]',
+    '[class*="message-card"]',
+    '[class*="message-content"]'
+  ].join(', ');
+  var INTERACTIVE_SELECTOR = [
+    'button',
+    'a',
+    '[role="button"]',
+    'input',
+    'textarea',
+    'select',
+    'label',
+    'mat-icon-button',
+    '.message-feedback-container'
+  ].join(', ');
+  var DRAWER_SELECTOR = [
+    'app-side-panel',
+    'side-panel',
+    '.side-panel',
+    'selector-drawer',
+    'app-selector-drawer',
+    '.mat-drawer',
+    'mat-drawer',
+    '.mat-drawer-side',
+    '.mat-drawer-over'
+  ].join(', ');
+  var DRAWER_CONTENT_SELECTOR = '.mat-drawer-content, mat-drawer-content, .mat-drawer-container, mat-drawer-container';
+
+  function isMobileViewport() {
+    return !window.matchMedia || window.matchMedia('(max-width: 767px)').matches;
+  }
+
+  function closest(node, selector) {
+    return !!(node && typeof node.closest === 'function' && node.closest(selector));
+  }
+
+  function collapseOpenedDrawers() {
+    if (!isMobileViewport()) return;
+    try {
+      var contents = document.querySelectorAll(DRAWER_CONTENT_SELECTOR);
+      for (var idx = 0; idx < contents.length; idx++) {
+        var content = contents[idx];
+        if (!content || !content.style) continue;
+        content.style.setProperty('margin-left', '0', 'important');
+        content.style.setProperty('margin-right', '0', 'important');
+        content.style.setProperty('transform', 'none', 'important');
+        content.style.setProperty('width', '100%', 'important');
+        content.style.setProperty('max-width', '100%', 'important');
+      }
+      var drawers = document.querySelectorAll(DRAWER_SELECTOR);
+      for (var jdx = 0; jdx < drawers.length; jdx++) {
+        var drawer = drawers[jdx];
+        if (!drawer || !drawer.style) continue;
+        drawer.style.setProperty('display', 'none', 'important');
+        drawer.style.setProperty('visibility', 'hidden', 'important');
+        drawer.style.setProperty('width', '0', 'important');
+        drawer.style.setProperty('height', '0', 'important');
+        drawer.style.setProperty('pointer-events', 'none', 'important');
+      }
+    } catch (err) {
+      console.warn('[arena-override] drawer collapse failed', err);
+    }
+  }
+
+  function shieldMessageTap(event) {
+    if (!isMobileViewport()) return;
+    collapseOpenedDrawers();
+    var target = event.target;
+    if (!closest(target, MESSAGE_SELECTOR) || closest(target, INTERACTIVE_SELECTOR)) return;
+    if (typeof event.stopImmediatePropagation === 'function') event.stopImmediatePropagation();
+    if (typeof event.stopPropagation === 'function') event.stopPropagation();
+    if (typeof event.preventDefault === 'function') event.preventDefault();
+    window.setTimeout(collapseOpenedDrawers, 0);
+    window.setTimeout(collapseOpenedDrawers, 80);
+  }
+
+  function addShieldListener(name) {
+    try {
+      document.addEventListener(name, shieldMessageTap, {capture: true, passive: false});
+    } catch (_err) {
+      document.addEventListener(name, shieldMessageTap, true);
+    }
+  }
+
+  ['click', 'auxclick', 'mousedown', 'mouseup', 'pointerdown', 'pointerup', 'touchstart', 'touchend', 'contextmenu'].forEach(addShieldListener);
+  collapseOpenedDrawers();
+  if (typeof MutationObserver === 'function') {
+    try {
+      new MutationObserver(collapseOpenedDrawers).observe(document.documentElement, {childList: true, subtree: true, attributes: true});
+    } catch (err) {
+      console.warn('[arena-override] mobile message shield observer failed', err);
+    }
+  }
+  document.addEventListener('DOMContentLoaded', collapseOpenedDrawers);
+  window.addEventListener('load', collapseOpenedDrawers);
+  window.addEventListener('resize', collapseOpenedDrawers);
 })();
 
 (function installArenaMessageCardClickSuppression() {

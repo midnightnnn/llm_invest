@@ -22,3 +22,11 @@ def test_ui_deploy_script_disables_runtime_schema_ensure_and_uses_configurable_m
     assert 'UI_ENSURE_SCHEMA_ON_STARTUP="${ARENA_UI_ENSURE_SCHEMA_ON_STARTUP:-false}"' in script
     assert 'UI_MEMORY="${CLOUD_RUN_UI_MEMORY:-1Gi}"' in script
     assert '--memory "${UI_MEMORY}"' in script
+
+
+def test_ui_deploy_script_defaults_chat_sessions_to_firestore_without_min_instance() -> None:
+    script = (ROOT / "scripts" / "deploy_cloud_run_ui.sh").read_text()
+
+    assert 'CHAT_SESSION_SERVICE_URI="${ARENA_CHAT_SESSION_SERVICE_URI:-firestore://arena-investment-chat-adk-sessions}"' in script
+    assert "ARENA_CHAT_SESSION_SERVICE_URI=${CHAT_SESSION_SERVICE_URI}" in script
+    assert 'UI_MIN_INSTANCES="${CLOUD_RUN_UI_MIN_INSTANCES:-${CLOUD_RUN_MIN_INSTANCES:-0}}"' in script

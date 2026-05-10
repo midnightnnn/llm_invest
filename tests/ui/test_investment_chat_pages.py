@@ -66,6 +66,24 @@ def test_ui_registers_investment_chat_page_and_adk_mount(monkeypatch) -> None:
     assert "model.addEventListener('change', submitSelection)" not in response.text
     # Iframe + approval toast wiring still present.
     assert "data-adk-chat-frame" in response.text
+    assert "data-chat-session-nav" in response.text
+    assert "data-chat-session-tree-toggle" in response.text
+    assert 'data-open="false"' in response.text
+    assert "data-chat-session-sidebar" not in response.text
+    assert ">대화 기록<" not in response.text
+    assert response.text.index("투자챗봇") < response.text.index("새 대화") < response.text.index("data-chat-session-list") < response.text.index("게시판")
+    assert "investment-chat-mobile-bar" not in response.text
+    assert "data-chat-session-toggle" not in response.text
+    assert "data-chat-session-toggle-desktop" not in response.text
+    assert "investment-chat-desktop-history-toggle" not in response.text
+    assert "data-chat-session-close" not in response.text
+    assert "arena-chat-history-open" not in response.text
+    assert "data-chat-session-list" in response.text
+    assert "loadChatSessions" in response.text
+    assert "/investment-chat/adk/apps/" in response.text
+    assert "investment_chat__local__gpt__m_Z3B0LTUuMg" in response.text
+    assert "session: sessionId" in response.text
+    assert "userId" in response.text
     assert "submitResultMessage" in response.text
     assert "execution_report.message" in response.text
     assert "deliverOrderResultToChat" in response.text
@@ -82,8 +100,12 @@ def test_ui_registers_investment_chat_page_and_adk_mount(monkeypatch) -> None:
     assert "calc(100dvh - var(--mobile-topbar-h))" in response.text
     assert "investment-chat-frame" in response.text
     assert "arena-main-shell" in response.text
+    assert 'body[data-active="investment_chat"] {\n        height: 100dvh;\n        overflow: hidden;' in response.text
     assert 'body[data-active="investment_chat"] .arena-main-shell' in response.text
+    assert "max-height: calc(100dvh - var(--mobile-topbar-h));" in response.text
+    assert 'body[data-active="investment_chat"] main,\n      body[data-active="investment_chat"] main > .mx-auto' in response.text
     assert 'body[data-active="investment_chat"] .sidebar-backdrop.open' in response.text
+    assert 'body[data-active="investment_chat"] .arena-sidebar,\n      body[data-active="investment_chat"] .sidebar-collapse-toggle' not in response.text
     assert any(getattr(route, "path", "") == "/investment-chat/adk" for route in app.routes)
 
 

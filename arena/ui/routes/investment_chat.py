@@ -28,6 +28,7 @@ from arena.agents.investment_chat.selection import (
     tenant_default_chat_selection,
 )
 from arena.providers.registry import canonical_provider, default_model_for_provider, list_adk_provider_specs
+from arena.ui.investment_chat_adk import _chat_app_name
 from arena.ui.investment_chat_providers import tenant_available_provider_specs
 from arena.ui.routes.viewer import ViewerRouteDeps
 from arena.ui.templating import render_ui_template
@@ -241,9 +242,13 @@ def register_investment_chat_routes(app: FastAPI, *, deps: ViewerRouteDeps) -> N
         except Exception:
             pass
 
+        chat_session_app_name = _chat_app_name(tenant, provider_token, model_token) if provider_token and model_token else ""
+        chat_session_user_id = "user"
         body = render_ui_template(
             "investment_chat_body.jinja2",
             iframe_src=_adk_iframe_src(tenant, provider_token, model_token) if provider_token and model_token else "",
+            chat_session_app_name=chat_session_app_name,
+            chat_session_user_id=chat_session_user_id,
             tenant=html.escape(tenant),
         )
         return deps.html_response(
@@ -253,6 +258,8 @@ def register_investment_chat_routes(app: FastAPI, *, deps: ViewerRouteDeps) -> N
                 active="investment_chat",
                 tenant=tenant,
                 user=user,
+                chat_session_app_name=chat_session_app_name,
+                chat_session_user_id=chat_session_user_id,
                 max_width_class="max-w-none",
                 hide_page_header=True,
                 main_class="flex-1 min-w-0 w-full p-0 box-border",

@@ -61,6 +61,39 @@ def test_investment_chat_loader_request_selection_overrides_stale_adk_app_name(m
     assert calls["model_override"] == "gemini-3-flash-preview"
 
 
+def test_investment_chat_adk_mobile_overrides_hide_debug_chrome() -> None:
+    from arena.ui import investment_chat_adk
+
+    css = investment_chat_adk._MOBILE_OVERRIDE_CSS
+    script = investment_chat_adk._MOBILE_KEYBOARD_DISMISSAL_SCRIPT
+
+    assert "@media (max-width: 767px)" in css
+    assert "app-toolbar" in css
+    assert "session-info" in css
+    assert "app-side-panel" in css
+    assert "trace-tab" in css
+    assert "event-tab" in css
+    assert ".mat-drawer-content" in css
+    assert "margin-left: 0" in css
+    assert ".drawer-container" in css
+    assert ".side-panel-container" in css
+    assert "height: 100dvh" in css
+    assert "display: block" in css
+    assert "padding-top: 0" in css
+    assert "margin-top: 0" in css
+    assert "app-root" in css
+    assert "app-eval-tab" in css
+    assert "installArenaMobileChromeRemoval" in script
+    assert "installArenaMobileTopGapRemoval" in script
+    assert "app-toolbar" in script
+    assert "trace-tab" in script
+    assert "filter" in script.lower()
+    assert "streaming" in script.lower()
+    assert "mat-button-toggle" in script
+    assert "DEBUG_CONTROL_TEXT" in script
+    assert "installArenaMobileMessageClickShield" in script
+
+
 def test_investment_chat_adk_api_requires_ui_auth(monkeypatch) -> None:
     import asyncio
 

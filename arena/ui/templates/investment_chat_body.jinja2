@@ -2,6 +2,12 @@
   .investment-chat-shell {
     height: calc(100dvh - var(--mobile-topbar-h));
     min-height: 0;
+    position: relative;
+  }
+  .investment-chat-workspace {
+    position: relative;
+    min-width: 0;
+    min-height: 0;
   }
   .investment-chat-frame {
     display: block;
@@ -16,7 +22,7 @@
     }
   }
 </style>
-<section class="investment-chat-shell flex flex-col overflow-hidden bg-white">
+<section class="investment-chat-shell flex overflow-hidden bg-white">
   {% if iframe_src %}
   <script>
     (function initializeAdkSidePanelClosed() {
@@ -26,14 +32,16 @@
       } catch (_err) {}
     })();
   </script>
-  <iframe
-    src="{{ iframe_src }}"
-    title="투자챗봇"
-    class="investment-chat-frame min-h-0 flex-1 border-0"
-    loading="eager"
-    referrerpolicy="same-origin"
-    data-adk-chat-frame
-  ></iframe>
+  <div class="investment-chat-workspace flex min-w-0 flex-1 flex-col">
+    <iframe
+      src="{{ iframe_src }}"
+      title="투자챗봇"
+      class="investment-chat-frame min-h-0 flex-1 border-0"
+      loading="eager"
+      referrerpolicy="same-origin"
+      data-adk-chat-frame
+    ></iframe>
+  </div>
   <aside
     class="pointer-events-none fixed bottom-4 right-4 z-40 hidden w-[min(420px,calc(100vw-2rem))]"
     data-order-draft-panel
@@ -146,6 +154,217 @@
       });
       installWhenReady(0);
     }
+  })();
+
+  (function() {
+    var lists = Array.prototype.slice.call(document.querySelectorAll('[data-chat-session-list]'));
+    var statuses = Array.prototype.slice.call(document.querySelectorAll('[data-chat-session-status]'));
+    if (!lists.length) return;
+
+    var appName = {{ chat_session_app_name | tojson }};
+    var userId = {{ chat_session_user_id | tojson }};
+    var iframeBaseSrc = {{ iframe_src | tojson }};
+    var currentSessionId = '';
+    var lastListLoadAt = 0;
+
+    function frame() {
+      return document.querySelector('[data-adk-chat-frame]');
+    }
+
+    function setStatus(text) {
+      statuses.forEach(function(status) {
+        status.textContent = text || '';
+      });
+    }
+
+    function withIframeParams(params) {
+      var url = new URL(iframeBaseSrc, window.location.origin);
+      Object.keys(params || {}).forEach(function(key) {
+        var value = params[key];
+        if (value === null || value === undefined || value === '') {
+          url.searchParams.delete(key);
+        } else {
+          url.searchParams.set(key, value);
+        }
+      });
+      url.searchParams.set('_session_v', String(Date.now()));
+      return url.pathname + url.search + url.hash;
+    }
+
+    function closeMainSidebarOnMobile() {
+      if (window.innerWidth >= 768) return;
+      var sidebar = document.getElementById('arena-sidebar');
+      var backdrop = document.getElementById('sidebar-backdrop');
+      if (sidebar) sidebar.classList.remove('open');
+      if (backdrop) backdrop.classList.remove('open');
+    }
+
+    function setSessionTreeOpen(open) {
+      document.querySelectorAll('[data-chat-session-nav]').forEach(function(nav) {
+        nav.dataset.open = open ? 'true' : 'false';
+      });
+      document.querySelectorAll('[data-chat-session-tree-toggle]').forEach(function(button) {
+        button.setAttribute('aria-expanded', open ? 'true' : 'false');
+        button.setAttribute('aria-label', open ? '투자챗봇 대화 목록 닫기' : '투자챗봇 대화 목록 열기');
+      });
+    }
+
+    function sessionTitle(session) {
+      var metadata = session && session.state && session.state.__session_metadata__;
+      var title = metadata && metadata.displayName;
+      title = String(title || '').trim();
+      if (title) return title;
+      var id = String(session && session.id || '').trim();
+      return id ? ('대화 ' + id.slice(0, 8)) : '새 대화';
+    }
+
+    function sessionTime(session) {
+      var raw = Number(session && (session.lastUpdateTime || session.updateTime || session.createTime) || 0);
+      if (!isFinite(raw) || raw <= 0) return '';
+      var millis = raw > 1000000000000 ? raw : raw * 1000;
+      try {
+        return new Intl.DateTimeFormat('ko-KR', {
+          month: 'short',
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit'
+        }).format(new Date(millis));
+      } catch (_err) {
+        return '';
+      }
+    }
+
+    function setActiveSession(sessionId) {
+      currentSessionId = String(sessionId || '');
+      document.querySelectorAll('[data-chat-session-id]').forEach(function(item) {
+        var active = item.getAttribute('data-chat-session-id') === currentSessionId;
+        item.setAttribute('aria-current', active ? 'page' : 'false');
+        item.classList.toggle('bg-white', active);
+        item.classList.toggle('shadow-sm', active);
+        item.classList.toggle('text-ink-950', active);
+      });
+    }
+
+    function renderSessions(sessions) {
+      var rows = (sessions || []).slice().sort(function(a, b) {
+        return Number(b.lastUpdateTime || 0) - Number(a.lastUpdateTime || 0);
+      });
+      lists.forEach(function(list) {
+        list.innerHTML = '';
+        if (!rows.length) {
+          var empty = document.createElement('p');
+          empty.className = 'px-2 py-2 text-xs text-ink-500';
+          empty.textContent = '저장된 대화가 없습니다.';
+          list.appendChild(empty);
+          return;
+        }
+        rows.forEach(function(session) {
+          var id = String(session && session.id || '').trim();
+          if (!id) return;
+          var button = document.createElement('button');
+          button.type = 'button';
+          button.className = list.closest('[data-chat-session-nav]')
+            ? 'chat-session-item'
+            : 'mb-1 flex w-full flex-col rounded-md px-3 py-2 text-left text-sm text-ink-700 hover:bg-white';
+          button.setAttribute('data-chat-session-id', id);
+          button.setAttribute('aria-current', 'false');
+
+          var title = document.createElement('span');
+          title.className = list.closest('[data-chat-session-nav]') ? 'chat-session-title' : 'w-full truncate font-semibold';
+          title.textContent = sessionTitle(session);
+          button.appendChild(title);
+
+          var time = sessionTime(session);
+          if (time) {
+            var meta = document.createElement('span');
+            meta.className = list.closest('[data-chat-session-nav]') ? 'chat-session-meta' : 'mt-1 text-[11px] text-ink-400';
+            meta.textContent = time;
+            button.appendChild(meta);
+          }
+
+          button.addEventListener('click', function() {
+            openSession(id);
+          });
+          list.appendChild(button);
+        });
+      });
+      setActiveSession(currentSessionId);
+    }
+
+    function loadChatSessions(force) {
+      if (!appName || !userId) return Promise.resolve();
+      var now = Date.now();
+      if (!force && now - lastListLoadAt < 15000) return Promise.resolve();
+      lastListLoadAt = now;
+      setStatus('동기화 중');
+      var url = '/investment-chat/adk/apps/' + encodeURIComponent(appName) + '/users/' + encodeURIComponent(userId) + '/sessions';
+      return fetch(url, {credentials: 'same-origin'})
+        .then(function(resp) {
+          if (!resp.ok) throw new Error('session list failed');
+          return resp.json();
+        })
+        .then(function(payload) {
+          var sessions = Array.isArray(payload) ? payload : (payload && payload.items || []);
+          renderSessions(sessions);
+          setStatus(sessions.length ? (sessions.length + '개') : '');
+        })
+        .catch(function() {
+          setStatus('불러오기 실패');
+        });
+    }
+
+    function openSession(sessionId) {
+      var targetFrame = frame();
+      if (!targetFrame) return;
+      setActiveSession(sessionId);
+      targetFrame.src = withIframeParams({session: sessionId, userId: userId});
+      closeMainSidebarOnMobile();
+    }
+
+    function startNewSession() {
+      var targetFrame = frame();
+      if (!targetFrame) return;
+      setActiveSession('');
+      targetFrame.src = withIframeParams({session: '', userId: userId});
+      closeMainSidebarOnMobile();
+    }
+
+    function syncActiveSessionFromFrame() {
+      var targetFrame = frame();
+      try {
+        var href = targetFrame && targetFrame.contentWindow && targetFrame.contentWindow.location.href;
+        if (!href) return;
+        var url = new URL(href);
+        var sessionId = url.searchParams.get('session') || '';
+        if (sessionId && sessionId !== currentSessionId) {
+          setActiveSession(sessionId);
+          loadChatSessions(true);
+        }
+      } catch (_err) {}
+    }
+
+    window.loadChatSessions = loadChatSessions;
+    document.querySelectorAll('[data-chat-session-new]').forEach(function(button) {
+      button.addEventListener('click', startNewSession);
+    });
+    document.querySelectorAll('[data-chat-session-refresh]').forEach(function(button) {
+      button.addEventListener('click', function() { loadChatSessions(true); });
+    });
+    document.querySelectorAll('[data-chat-session-tree-toggle]').forEach(function(button) {
+      button.addEventListener('click', function() {
+        var expanded = button.getAttribute('aria-expanded') === 'true';
+        setSessionTreeOpen(!expanded);
+      });
+    });
+    var targetFrame = frame();
+    if (targetFrame) {
+      targetFrame.addEventListener('load', function() {
+        syncActiveSessionFromFrame();
+      });
+    }
+    loadChatSessions(true);
+    window.setInterval(syncActiveSessionFromFrame, 2000);
+    window.addEventListener('focus', function() { loadChatSessions(false); });
   })();
 
   (function() {

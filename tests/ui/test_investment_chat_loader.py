@@ -37,8 +37,23 @@ def test_adk_browser_mobile_chat_input_uses_compact_bottom_spacing() -> None:
 
     css = investment_chat_adk._MOBILE_OVERRIDE_CSS
 
-    assert ".chat-input {\n    width: 100% !important;\n    padding: 6px 10px 4px !important;" in css
+    assert ".chat-input-container { padding: 0 !important; }" in css
+    assert ".chat-input {\n    width: 100% !important;\n    padding: 6px 10px 0 !important;" in css
     assert ".chat-input-actions { margin-top: 4px !important;" in css
+    assert "padding-bottom: 0 !important;" in css
+    assert "safe area / viewport sizing" in css
+    assert "max(16px, env(safe-area-inset-bottom))" not in css
+
+
+def test_adk_browser_overrides_hide_live_call_controls() -> None:
+    from arena.ui import investment_chat_adk
+
+    css = investment_chat_adk._MOBILE_OVERRIDE_CSS
+
+    assert "app-call-controls" in css
+    assert ".call-btn-container" in css
+    assert "button.audio-rec-btn" in css
+    assert "Live calls" in css
 
 
 def test_investment_chat_loader_binds_default_tenant(monkeypatch) -> None:

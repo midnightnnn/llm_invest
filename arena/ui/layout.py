@@ -30,6 +30,8 @@ def tailwind_layout(
     showcase: bool = False,
     hide_page_header: bool = False,
     main_class: str = "flex-1 min-w-0 w-full px-4 py-8 sm:px-6 lg:px-10 box-border",
+    chat_session_app_name: str = "",
+    chat_session_user_id: str = "",
 ) -> str:
     if showcase:
         _t = html.escape(tenant or "")
@@ -57,6 +59,7 @@ def tailwind_layout(
         {
             "href": href,
             "label": label,
+            "key": key,
             "active": key == active,
         }
         for href, label, key in nav_items
@@ -95,6 +98,8 @@ def tailwind_layout(
         auth_enabled=auth_enabled,
         showcase=showcase,
         hide_page_header=hide_page_header,
+        chat_session_app_name=str(chat_session_app_name or ""),
+        chat_session_user_id=str(chat_session_user_id or "user"),
         status_display=_status_display,
         status_ping_color=_status_ping_color,
         status_dot_color=_status_dot_color,
