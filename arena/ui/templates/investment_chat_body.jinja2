@@ -210,7 +210,8 @@
     }
 
     function sessionTitle(session) {
-      var metadata = session && session.state && session.state.__session_metadata__;
+      var state = session && session.state;
+      var metadata = state && (state.session_metadata || state.__session_metadata__);
       var title = metadata && metadata.displayName;
       title = String(title || '').trim();
       if (title) return title;

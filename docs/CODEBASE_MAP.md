@@ -10,6 +10,7 @@
 3. 설치, 로컬 실행, 주요 CLI는 [`README.md`](../README.md)를 본다.
 4. 메모리 정책을 건드릴 때는 [`memory_system.md`](memory_system.md)를 같이 본다.
 5. fundamentals 백필은 [`fundamentals_backfill_runbook.md`](fundamentals_backfill_runbook.md)를 따른다.
+6. 새 로컬 컴퓨터에서 e2e 환경을 재현할 때는 [`new_local_e2e_setup.md`](new_local_e2e_setup.md)를 따른다.
 
 이 파일의 내용보다 현재 코드와 테스트가 우선이다. 흐름이나 진입점이 바뀌면 이 파일도 같이 갱신한다.
 
