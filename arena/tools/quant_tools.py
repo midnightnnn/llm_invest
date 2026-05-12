@@ -285,10 +285,6 @@ def _opportunity_ranker_freshness(
             status = "unusable"
             reason_code = "older_than_latest_reference_session"
             trading_use = "do_not_use_for_trading"
-        elif window.phase in {"PRE_OPEN", "OPEN", "POST_CLOSE"} and as_of < window.trading_date:
-            status = "degraded"
-            reason_code = "current_session_prep_missing"
-            trading_use = "research_only_until_current_session_prep"
         elif window.phase == "CLOSED":
             reason_code = "market_closed_latest_reference_session"
             trading_use = "research_only_market_closed"

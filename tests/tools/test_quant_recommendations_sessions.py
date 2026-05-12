@@ -73,7 +73,7 @@ def test_recommend_opportunities_uses_calendar_lookup_for_latest_weekend_rows(mo
     assert out["diagnostics"]["freshness"]["by_market"]["us"]["market_phase"] == "CLOSED"
 
 
-def test_recommend_opportunities_marks_open_session_before_current_prep_degraded(monkeypatch) -> None:
+def test_recommend_opportunities_accepts_latest_completed_session_during_open_market(monkeypatch) -> None:
     import arena.tools.quant_tools as qt_module
 
     monkeypatch.setattr(
@@ -119,11 +119,12 @@ def test_recommend_opportunities_marks_open_session_before_current_prep_degraded
 
     out = qt.recommend_opportunities(top_n=3)
 
-    assert out["status"] == "degraded"
+    assert out["status"] == "ok"
     freshness = out["diagnostics"]["freshness"]["by_market"]["us"]
-    assert freshness["status"] == "degraded"
-    assert freshness["reason_code"] == "current_session_prep_missing"
+    assert freshness["status"] == "ok"
+    assert freshness["reason_code"] == "latest_completed_session"
     assert freshness["market_phase"] == "OPEN"
+    assert freshness["previous_session_data"] is True
 
 
 def test_recommend_opportunities_rejects_ranker_before_latest_reference_session(monkeypatch) -> None:
