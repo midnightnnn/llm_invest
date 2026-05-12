@@ -43,6 +43,49 @@ class CredentialStore:
     def _secret_id(self, tenant_id: str, kind: str) -> str:
         return f"{self._safe_token(self.secret_prefix)}-{self._safe_token(tenant_id)}-{self._safe_token(kind)}"
 
+    def _secret_version_id(self, name: str) -> int:
+        token = str(name or "").rsplit("/", 1)[-1]
+        return int(token) if token.isdigit() else -1
+
+    def _secret_version_is_destroyed(self, version: Any) -> bool:
+        state = getattr(version, "state", None)
+        destroyed_state = getattr(secretmanager.SecretVersion.State, "DESTROYED", None)
+        if state == destroyed_state:
+            return True
+        return "DESTROYED" in str(getattr(state, "name", state)).upper()
+
+    def _destroy_non_latest_secret_versions(self, *, secret_name: str) -> None:
+        versions = [
+            version
+            for version in self.client.list_secret_versions(request={"parent": secret_name})
+            if not self._secret_version_is_destroyed(version)
+        ]
+        if len(versions) <= 1:
+            return
+
+        latest = max(versions, key=lambda version: self._secret_version_id(getattr(version, "name", "")))
+        latest_name = str(getattr(latest, "name", ""))
+        for version in versions:
+            version_name = str(getattr(version, "name", ""))
+            if not version_name or version_name == latest_name:
+                continue
+            self.client.destroy_secret_version(request={"name": version_name})
+
+    def _payload_for_change_detection(self, value: Any) -> Any:
+        if isinstance(value, dict):
+            return {
+                str(key): self._payload_for_change_detection(item)
+                for key, item in value.items()
+                if str(key) != "updated_at"
+            }
+        if isinstance(value, list):
+            return [self._payload_for_change_detection(item) for item in value]
+        return value
+
+    def _secret_payload_changed(self, *, secret_id: str, payload: dict[str, Any]) -> bool:
+        current = self._latest_secret_json(secret_id=secret_id)
+        return self._payload_for_change_detection(current) != self._payload_for_change_detection(payload)
+
     def _upsert_secret_json(self, *, secret_id: str, payload: dict[str, Any]) -> str:
         parent = f"projects/{self.project}"
         name = f"{parent}/secrets/{secret_id}"
@@ -57,6 +100,10 @@ class CredentialStore:
         except AlreadyExists:
             pass
 
+        if not self._secret_payload_changed(secret_id=secret_id, payload=payload):
+            self._destroy_non_latest_secret_versions(secret_name=name)
+            return secret_id
+
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.client.add_secret_version(
             request={
@@ -64,6 +111,7 @@ class CredentialStore:
                 "payload": {"data": body},
             }
         )
+        self._destroy_non_latest_secret_versions(secret_name=name)
         return secret_id
 
     def _latest_secret_json(self, *, secret_id: str) -> dict[str, Any]:
@@ -350,7 +398,7 @@ class CredentialStore:
             updated_at=now.isoformat(),
         )
 
-        # Keep one versioned secret per tenant/type and rely on Secret Manager history.
+        # Keep one active Secret Manager version per tenant/type.
         self._upsert_secret_json(secret_id=kis_secret_id, payload=kis_payload)
         self._upsert_secret_json(secret_id=model_secret_id, payload=model_payload)
         model_flags = runtime_credential_flags(parse_model_secret_providers(model_payload))

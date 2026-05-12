@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 
 import pytest
-from google.api_core.exceptions import NotFound
+from google.api_core.exceptions import AlreadyExists, NotFound
 
 from arena.security.credential_store import CredentialStore
 from tests.helpers.repos import FakeRuntimeCredentialsRepo
@@ -59,6 +59,116 @@ def test_latest_secret_json_raises_on_invalid_payload(monkeypatch) -> None:
 
     with pytest.raises(RuntimeError, match="must be a JSON object"):
         store._latest_secret_json(secret_id="tenant-kis")
+
+
+def test_upsert_secret_json_destroys_active_versions_except_latest(monkeypatch) -> None:
+    destroyed: list[str] = []
+
+    class _Version:
+        def __init__(self, name: str, state: str = "ENABLED") -> None:
+            self.name = name
+            self.state = state
+
+    class _FakeClient:
+        def create_secret(self, request):
+            _ = request
+            raise AlreadyExists("exists")
+
+        def access_secret_version(self, request):
+            _ = request
+            raise NotFound("missing")
+
+        def add_secret_version(self, request):
+            _ = request
+
+            class _Resp:
+                name = "projects/proj/secrets/tenant-models/versions/4"
+
+            return _Resp()
+
+        def list_secret_versions(self, request):
+            parent = request["parent"]
+            return [
+                _Version(f"{parent}/versions/1"),
+                _Version(f"{parent}/versions/2", state="DISABLED"),
+                _Version(f"{parent}/versions/3", state="DESTROYED"),
+                _Version(f"{parent}/versions/4"),
+            ]
+
+        def destroy_secret_version(self, request):
+            destroyed.append(request["name"])
+
+    monkeypatch.setattr(
+        "arena.security.credential_store.secretmanager.SecretManagerServiceClient",
+        lambda: _FakeClient(),
+    )
+    store = CredentialStore(project="proj", repo=FakeRuntimeCredentialsRepo())
+
+    store._upsert_secret_json(secret_id="tenant-models", payload={"api_key": "new"})
+
+    assert destroyed == [
+        "projects/proj/secrets/tenant-models/versions/1",
+        "projects/proj/secrets/tenant-models/versions/2",
+    ]
+
+
+def test_upsert_secret_json_skips_new_version_when_payload_is_unchanged(monkeypatch) -> None:
+    added: list[dict] = []
+    listed: list[str] = []
+
+    class _Version:
+        def __init__(self, name: str, state: str = "ENABLED") -> None:
+            self.name = name
+            self.state = state
+
+    class _FakeClient:
+        def create_secret(self, request):
+            _ = request
+            raise AlreadyExists("exists")
+
+        def access_secret_version(self, request):
+            _ = request
+
+            class _Resp:
+                class payload:  # noqa: N801
+                    data = json.dumps(
+                        {
+                            "providers": {"gemini": {"api_key": "same-key"}},
+                            "gemini_api_key": "same-key",
+                            "updated_at": "old timestamp",
+                        }
+                    ).encode("utf-8")
+
+            return _Resp()
+
+        def add_secret_version(self, request):
+            added.append(dict(request))
+
+        def list_secret_versions(self, request):
+            parent = request["parent"]
+            listed.append(parent)
+            return [_Version(f"{parent}/versions/7")]
+
+        def destroy_secret_version(self, request):
+            raise AssertionError(f"unexpected destroy: {request}")
+
+    monkeypatch.setattr(
+        "arena.security.credential_store.secretmanager.SecretManagerServiceClient",
+        lambda: _FakeClient(),
+    )
+    store = CredentialStore(project="proj", repo=FakeRuntimeCredentialsRepo())
+
+    store._upsert_secret_json(
+        secret_id="tenant-models",
+        payload={
+            "providers": {"gemini": {"api_key": "same-key"}},
+            "gemini_api_key": "same-key",
+            "updated_at": "new timestamp",
+        },
+    )
+
+    assert added == []
+    assert listed == ["projects/proj/secrets/tenant-models"]
 
 
 def test_list_kis_accounts_meta_skips_secret_lookup_without_runtime_secret_ref(monkeypatch) -> None:
