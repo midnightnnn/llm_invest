@@ -1,8 +1,13 @@
-"""Signal-IC meta-learner for the opportunity ranker.
+"""Opportunity ranker wrapper plus legacy Signal-IC comparison ranker.
 
-Design: instead of regressing noisy utility_20d directly on features, this
-module learns how each Layer 1 signal's information coefficient (IC)
-varies with regime features. The runtime score for a ticker is then
+Production ``build_and_store_opportunity_ranker`` delegates to
+``joint_policy_ranker``. The Signal-IC meta-learner in this module remains
+available through ``build_and_store_signal_ic_ranker`` for comparison runs.
+
+Legacy Signal-IC design: instead of regressing noisy utility_20d directly on
+features, this module learns how each Layer 1 signal's information
+coefficient (IC) varies with regime features. The runtime score for a ticker
+is then
 
     score = sum_i( predicted_IC_i(today_regime) * signal_i(today_ticker) )
 
@@ -347,7 +352,7 @@ def _ranker_version(*, as_of_date: date, signals_count: int, regime_count: int) 
     return f"opportunity_ranker_ic_{as_of_date.isoformat().replace('-', '')}_{digest}"
 
 
-def build_and_store_opportunity_ranker(
+def build_and_store_signal_ic_ranker(
     repo: Any,
     settings: Settings,
     *,
@@ -357,12 +362,7 @@ def build_and_store_opportunity_ranker(
     min_ic_dates: int = 60,
     min_valid_signals: int = 3,
 ) -> OpportunityRankerBuildResult:
-    """Trains IC predictors and writes signal-weighted scores to BigQuery.
-
-    The public name is kept to avoid breaking the CLI / pipeline contract; the
-    underlying algorithm has changed from flat return regression to signal-IC
-    meta-learning. See module docstring for motivation.
-    """
+    """Trains the legacy Signal-IC comparison ranker."""
     now = _utc_now()
     run_id = "ranker_" + uuid.uuid4().hex[:24]
     sources = daily_history_sources(
@@ -590,6 +590,35 @@ def build_and_store_opportunity_ranker(
         )
 
 
+def build_and_store_opportunity_ranker(
+    repo: Any,
+    settings: Settings,
+    *,
+    lookback_days: int = 540,
+    horizon_days: int = 20,
+    max_scoring_rows: int = 500,
+    min_ic_dates: int = 60,
+    min_valid_signals: int = 3,
+) -> OpportunityRankerBuildResult:
+    """Builds the production opportunity ranker.
+
+    Production uses the regularized joint policy ranker. The legacy signal-IC
+    ranker remains available as ``build_and_store_signal_ic_ranker`` for
+    comparison runs, but is not used as a fallback.
+    """
+    from arena.recommendation.joint_policy_ranker import build_and_store_joint_policy_ranker
+
+    return build_and_store_joint_policy_ranker(
+        repo,
+        settings,
+        lookback_days=lookback_days,
+        horizon_days=horizon_days,
+        max_scoring_rows=max_scoring_rows,
+        min_ic_dates=min_ic_dates,
+        min_valid_signals=min_valid_signals,
+    )
+
+
 def _build_score_rows(
     *,
     scoring_rows: list[dict[str, Any]],
@@ -691,6 +720,7 @@ def _append_run(
     ic: float | None,
     hit: float | None,
     detail: dict[str, Any],
+    score_source: str = "learned_ic",
 ) -> None:
     appender = getattr(repo, "append_opportunity_ranker_run", None)
     if not callable(appender):
@@ -702,7 +732,7 @@ def _append_run(
                 "created_at": created_at.isoformat(),
                 "ranker_version": ranker_version,
                 "status": status,
-                "score_source": "learned_ic",
+                "score_source": score_source,
                 "training_rows": int(training_rows),
                 "validation_rows": int(validation_rows),
                 "scoring_rows": int(scoring_rows),

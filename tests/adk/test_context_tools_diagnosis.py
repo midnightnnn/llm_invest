@@ -73,6 +73,81 @@ def test_portfolio_diagnosis_returns_derived_fields_not_raw_portfolio_echo() -> 
     assert "hrp_allocation" not in out
 
 
+def test_portfolio_diagnosis_adds_joint_policy_scores_for_current_holdings() -> None:
+    class _Repo(_RepoForPortfolioDiagnosis):
+        def __init__(self) -> None:
+            self.ranker_kwargs: dict[str, object] | None = None
+
+        def latest_opportunity_ranker_scores(self, **kwargs):  # noqa: ANN001
+            self.ranker_kwargs = dict(kwargs)
+            return [
+                {
+                    "ticker": "AAPL",
+                    "market": "us",
+                    "profile": "balanced",
+                    "bucket": "momentum",
+                    "recommendation_rank": 4,
+                    "recommendation_score": 0.12,
+                    "score_source": "joint_policy_v1",
+                    "ranker_version": "opportunity_ranker_joint_policy_20260512_test",
+                    "model_confidence": "medium",
+                    "action": "watchlist",
+                    "explanation_json": {
+                        "top_contributions": [
+                            {"signal": "forecast_er", "contribution": 0.07},
+                            {"signal": "ret_20d", "contribution": 0.05},
+                        ]
+                    },
+                },
+                {
+                    "ticker": "MSFT",
+                    "market": "us",
+                    "profile": "balanced",
+                    "bucket": "defensive",
+                    "recommendation_rank": 9,
+                    "recommendation_score": -0.03,
+                    "score_source": "joint_policy_v1",
+                    "ranker_version": "opportunity_ranker_joint_policy_20260512_test",
+                    "model_confidence": "low",
+                    "action": "watchlist",
+                    "explanation_json": {"top_contributions": []},
+                },
+            ]
+
+    tool = _ContextTools.__new__(_ContextTools)
+    repo = _Repo()
+    tool.repo = repo
+    tool.settings = load_settings()
+    tool.settings.kis_target_market = "nasdaq"
+    tool._context = {
+        "portfolio": {
+            "cash_krw": 1_000.0,
+            "positions": {
+                "AAPL": {"quantity": 10.0, "avg_price_krw": 100.0},
+                "MSFT": {"quantity": 5.0, "avg_price_krw": 200.0},
+            },
+        },
+        "market_features": [
+            {"ticker": "AAPL", "close_price_krw": 110.0, "volatility_20d": 0.2, "ret_20d": 0.08, "ret_5d": 0.03},
+            {"ticker": "MSFT", "close_price_krw": 208.0, "volatility_20d": 0.1, "ret_20d": 0.04, "ret_5d": 0.01},
+        ],
+    }
+
+    out = tool.portfolio_diagnosis(mdd_days=5, top_n=2)
+
+    assert repo.ranker_kwargs is not None
+    assert repo.ranker_kwargs["tickers"] == ["AAPL", "MSFT"]
+    assert repo.ranker_kwargs["score_sources"] == ["joint_policy_v1"]
+    assert repo.ranker_kwargs["markets"] == ["us"]
+    joint = out["joint_policy"]
+    assert joint["status"] == "ok"
+    assert joint["coverage"] == {"held": 2, "scored": 2, "missing": 0}
+    assert joint["weighted_score"] == pytest.approx(0.032102, abs=1e-6)
+    assert joint["holdings"][0]["ticker"] == "AAPL"
+    assert joint["holdings"][0]["score"] == 0.12
+    assert joint["holdings"][0]["top_contributions"][0] == {"signal": "forecast_er", "contribution": 0.07}
+
+
 def test_trade_performance_handles_mixed_naive_and_aware_execution_times() -> None:
     class _Repo:
         def filled_execution_reports_since(self, **kwargs):
@@ -237,6 +312,16 @@ def test_compact_portfolio_diagnosis_no_hrp_allocation() -> None:
             "momentum_20d_weighted": 0.07,
             "momentum_5d_weighted": 0.02,
             "volatility_20d_weighted": 0.18,
+            "joint_policy": {
+                "status": "ok",
+                "score_source": "joint_policy_v1",
+                "coverage": {"held": 2, "scored": 2, "missing": 0},
+                "weighted_score": 0.032102,
+                "holdings": [
+                    {"ticker": "AAPL", "weight": 0.35, "score": 0.12, "rank": 4},
+                    {"ticker": "MSFT", "weight": 0.33, "score": -0.03, "rank": 9},
+                ],
+            },
             "mdd": {"days": 60, "value": -0.12},
             "benchmark": {
                 "ticker": "SPY",
@@ -267,6 +352,8 @@ def test_compact_portfolio_diagnosis_no_hrp_allocation() -> None:
     assert "hrp_allocation" not in out
     assert "alpha_vs_benchmark" not in out["benchmark"]
     assert out["benchmark"]["excess_return_vs_benchmark"] == -0.06
+    assert out["joint_policy"]["weighted_score"] == 0.032102
+    assert out["joint_policy"]["holdings"][0] == {"ticker": "AAPL", "weight": 0.35, "score": 0.12, "rank": 4}
     assert "not risk-adjusted alpha" in out["benchmark"]["alpha_definition"]
     assert "alpha_vs_benchmark" not in out["benchmarks"]["current_sleeve"]
     assert "alpha_vs_benchmark" not in out["benchmarks"]["cumulative"]

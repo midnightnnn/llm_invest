@@ -1420,6 +1420,57 @@ class MarketStore:
         """
         return self.session.fetch_rows(sql, params)
 
+    def load_signal_policy_training_rows(
+        self,
+        *,
+        lookback_days: int = 540,
+        market: str | None = None,
+    ) -> list[dict[str, Any]]:
+        dataset = self.session.dataset_fqn
+        signal_columns = [
+            "signal_momentum_20d",
+            "signal_pullback",
+            "signal_meanrev_5d",
+            "signal_lowvol",
+            "signal_sentiment",
+            "signal_forecast_er",
+            "signal_forecast_prob",
+            "signal_rsi_reversal",
+            "signal_ma_crossover",
+            "signal_bollinger_position",
+            "signal_ep",
+            "signal_bp",
+            "signal_sp",
+            "signal_roe",
+            "signal_revenue_growth",
+            "signal_eps_growth",
+            "signal_low_debt",
+        ]
+        params = {
+            "lookback_days": max(40, min(int(lookback_days), 1500)),
+            "market": str(market or "").strip().lower() or None,
+        }
+        columns = ", ".join(
+            [
+                "as_of_date",
+                "ticker",
+                "market",
+                *signal_columns,
+                "fwd_excess_return_20d",
+                "label_ready",
+            ]
+        )
+        sql = f"""
+        SELECT {columns}
+        FROM `{dataset}.signal_daily_values`
+        WHERE label_ready
+          AND fwd_excess_return_20d IS NOT NULL
+          AND as_of_date >= DATE_SUB(CURRENT_DATE(), INTERVAL @lookback_days DAY)
+          AND (@market IS NULL OR market = @market OR market IS NULL)
+        ORDER BY as_of_date, ticker
+        """
+        return self.session.fetch_rows(sql, params)
+
     def load_regime_daily_features(
         self,
         *,
@@ -1810,10 +1861,16 @@ class MarketStore:
         profiles: list[str] | None = None,
         buckets: list[str] | None = None,
         markets: list[str] | None = None,
+        score_sources: list[str] | None = None,
         per_profile_limit: int | None = None,
         limit: int = 50,
         max_age_hours: int = 30,
     ) -> list[dict[str, Any]]:
+        source_tokens = [
+            str(value or "").strip()
+            for value in (score_sources if score_sources is not None else ["joint_policy_v1"])
+            if str(value or "").strip()
+        ]
         profile_limit = 0
         if per_profile_limit is not None:
             profile_limit = max(0, min(int(per_profile_limit), 100))
@@ -1830,6 +1887,10 @@ class MarketStore:
             "per_profile_limit": profile_limit,
             "max_return_rows": max_return_rows,
         }
+        if source_tokens:
+            batch_filters.append("score_source IN UNNEST(@score_sources)")
+            row_filters.append("s.score_source IN UNNEST(@score_sources)")
+            params["score_sources"] = list(dict.fromkeys(source_tokens))
         if tickers:
             tokens = [str(t).strip().upper() for t in tickers if str(t).strip()]
             if tokens:

@@ -102,7 +102,7 @@ newest `created_at` winning.
 
 ## 5. Train the ranker on fundamentals
 
-After derived daily is fresh, run the signal/IC/regime refresh + ranker build.
+After derived daily is fresh, run the signal/regime refresh + joint-policy ranker build.
 The signal SQL joins `fundamentals_derived_daily` as an optional PIT source, so
 the new signals only contribute once this prep step has run at least once.
 
@@ -125,9 +125,9 @@ manually is useful for the first post-backfill bootstrap or for debugging.
   optional enrichment/fallback source when a paid tier is available.
 - Coverage report (`llm-arena fundamentals-coverage`) as a smoke test before
   large ranker changes.
-- `opportunity_ranker_runs.detail_json.per_signal_train_rows` reveals which
-  fundamental signals still have insufficient IC history — investigate before
-  trusting their predicted weights.
+- `opportunity_ranker_runs.detail_json.policy_coefficients` reveals which
+  fundamental signals received non-zero joint policy weight; low training-date
+  counts or clipped coefficients should be investigated before trusting them.
 
 ## Rollback
 

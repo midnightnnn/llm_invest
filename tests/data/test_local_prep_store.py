@@ -52,7 +52,7 @@ def test_local_forecast_store_methods_fallback_from_live_sources(tmp_path, monke
                     "prob_up": 0.67,
                     "model_votes_up": 4,
                     "model_votes_total": 6,
-                    "consensus": "BUY",
+                    "consensus": "MODEL_UP",
                 }
             ],
             run_date=date.today(),

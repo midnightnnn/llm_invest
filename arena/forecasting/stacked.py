@@ -52,6 +52,18 @@ _BASE_MODEL_ALIASES: dict[str, str] = {
 }
 
 
+def _model_direction_label(prob_up: float) -> str:
+    if prob_up >= 0.8:
+        return "MODEL_UP_STRONG"
+    if prob_up >= 0.6:
+        return "MODEL_UP"
+    if prob_up <= 0.2:
+        return "MODEL_DOWN_STRONG"
+    if prob_up <= 0.4:
+        return "MODEL_DOWN"
+    return "MODEL_MIXED"
+
+
 @dataclass(frozen=True, slots=True)
 class ForecastBuildResult:
     run_date: str
@@ -190,16 +202,7 @@ def _build_and_store_local_baseline_forecasts(
         daily_vol = float(series.std()) if len(series) > 1 else 0.0
         period_return = float(np.exp(daily_mu * horizon) - 1.0)
         prob_up = float((series > 0).mean())
-        if prob_up >= 0.8:
-            consensus = "STRONG_BUY"
-        elif prob_up >= 0.6:
-            consensus = "BUY"
-        elif prob_up <= 0.2:
-            consensus = "STRONG_SELL"
-        elif prob_up <= 0.4:
-            consensus = "SELL"
-        else:
-            consensus = "NEUTRAL"
+        consensus = _model_direction_label(prob_up)
         rows.append(
             {
                 "run_date": run_date.isoformat(),
@@ -724,16 +727,7 @@ def build_and_store_stacked_forecasts(
         votes_up = sum(1 for v in feats.values() if v > 0)
         votes_total = len(active_models)
         prob_up = votes_up / votes_total if votes_total else 0.0
-        if prob_up >= 0.8:
-            consensus = "STRONG_BUY"
-        elif prob_up >= 0.6:
-            consensus = "BUY"
-        elif prob_up <= 0.2:
-            consensus = "STRONG_SELL"
-        elif prob_up <= 0.4:
-            consensus = "SELL"
-        else:
-            consensus = "NEUTRAL"
+        consensus = _model_direction_label(prob_up)
 
         classification_fields = {
             "prob_up": round(prob_up, 4),

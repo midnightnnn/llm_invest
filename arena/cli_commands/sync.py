@@ -472,7 +472,7 @@ def cmd_build_opportunity_ranker(args: object) -> Any:
     )
     log_fn = logger.info if result.status == "ok" else logger.warning
     log_fn(
-        "[bold %s]Opportunity ranker build %s[/bold %s] version=%s status=%s training=%d validation=%d scoring=%d written=%d ic=%s hit=%s note=%s",
+        "[bold %s]Opportunity ranker build %s[/bold %s] version=%s status=%s training=%d validation=%d scoring=%d written=%d metric=%s hit=%s note=%s",
         "green" if result.status == "ok" else "yellow",
         "finished" if result.status == "ok" else "degraded",
         "green" if result.status == "ok" else "yellow",

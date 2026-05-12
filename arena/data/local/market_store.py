@@ -1377,6 +1377,39 @@ class LocalMarketStore:
             params,
         )
 
+    def load_signal_policy_training_rows(
+        self,
+        *,
+        lookback_days: int = 540,
+        market: str | None = None,
+    ) -> list[dict[str, Any]]:
+        start = utc_now().date() - timedelta(days=max(40, min(int(lookback_days or 540), 1500)))
+        market_key = str(market or "").strip().lower() or None
+        params: dict[str, Any] = {"start": start}
+        where = "as_of_date >= $start AND label_ready AND fwd_excess_return_20d IS NOT NULL"
+        if market_key:
+            where += " AND (market = $market OR market IS NULL)"
+            params["market"] = market_key
+        columns = ", ".join(
+            [
+                "as_of_date",
+                "ticker",
+                "market",
+                *_SIGNAL_COLUMNS,
+                "fwd_excess_return_20d",
+                "label_ready",
+            ]
+        )
+        return self.session.fetch_rows(
+            f"""
+            SELECT {columns}
+            FROM signal_daily_values
+            WHERE {where}
+            ORDER BY as_of_date, ticker
+            """,
+            params,
+        )
+
     def load_regime_daily_features(
         self,
         *,
@@ -1520,10 +1553,16 @@ class LocalMarketStore:
         profiles: list[str] | None = None,
         buckets: list[str] | None = None,
         markets: list[str] | None = None,
+        score_sources: list[str] | None = None,
         per_profile_limit: int | None = None,
         limit: int = 50,
         max_age_hours: int = 30,
     ) -> list[dict[str, Any]]:
+        source_tokens = [
+            str(value or "").strip()
+            for value in (score_sources if score_sources is not None else ["joint_policy_v1"])
+            if str(value or "").strip()
+        ]
         profile_limit = max(0, min(int(per_profile_limit or 0), 100))
         params: dict[str, Any] = {
             "limit": max(1, min(int(limit or 50), 500)),
@@ -1533,6 +1572,10 @@ class LocalMarketStore:
         }
         filters = ["computed_at >= (CURRENT_TIMESTAMP - $max_age_hours * INTERVAL '1 hour')"]
         row_filters = ["s.computed_at >= (CURRENT_TIMESTAMP - $max_age_hours * INTERVAL '1 hour')"]
+        if source_tokens:
+            filters.append("score_source IN (SELECT unnest($score_sources))")
+            row_filters.append("s.score_source IN (SELECT unnest($score_sources))")
+            params["score_sources"] = list(dict.fromkeys(source_tokens))
         for name, values, transform in (
             ("tickers", tickers, lambda x: str(x or "").strip().upper()),
             ("profiles", profiles, lambda x: str(x or "").strip().lower()),

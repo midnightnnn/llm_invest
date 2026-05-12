@@ -170,6 +170,31 @@ def test_compact_tool_result_screen_market_keeps_bucket_reason_and_value_fields(
     assert out[0]["pbr"] == 1.1
 
 
+def test_compact_tool_result_forecast_returns_uses_model_direction() -> None:
+    out = _compact_tool_result_for_prompt(
+        "forecast_returns",
+        [
+            {
+                "run_date": "2026-05-12",
+                "ticker": "AAPL",
+                "exp_return_period": 0.042,
+                "forecast_horizon": 20,
+                "forecast_model": "ensemble_wmae",
+                "is_stacked": True,
+                "forecast_score": 0.12,
+                "prob_up": 0.82,
+                "model_votes_up": 6,
+                "model_votes_total": 7,
+                "consensus": "STRONG_BUY",
+            }
+        ],
+    )
+
+    assert out[0]["ticker"] == "AAPL"
+    assert out[0]["model_direction"] == "MODEL_UP_STRONG"
+    assert "consensus" not in out[0]
+
+
 def test_compact_tool_result_recommend_opportunities_keeps_validation_fields() -> None:
     out = _compact_tool_result_for_prompt(
         "recommend_opportunities",

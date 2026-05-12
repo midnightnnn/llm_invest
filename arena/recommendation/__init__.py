@@ -1,4 +1,8 @@
-from .ranker import OpportunityRankerBuildResult, build_and_store_opportunity_ranker
+from .ranker import (
+    OpportunityRankerBuildResult,
+    build_and_store_opportunity_ranker,
+    build_and_store_signal_ic_ranker,
+)
 from .signals import (
     ALL_SIGNALS,
     REGIME_FEATURES,
@@ -13,6 +17,7 @@ from .signals import (
 __all__ = [
     "OpportunityRankerBuildResult",
     "build_and_store_opportunity_ranker",
+    "build_and_store_signal_ic_ranker",
     "ALL_SIGNALS",
     "REGIME_FEATURES",
     "SIGNAL_BY_COLUMN",

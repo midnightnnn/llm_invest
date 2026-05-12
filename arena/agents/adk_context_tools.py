@@ -17,6 +17,7 @@ from arena.memory.policy import (
 )
 from arena.models import utc_now
 from arena.tools.allocation import optimize_hrp
+from arena.tools._market_scope import MarketScope, MarketScopeError
 
 _PEER_LESSON_SOURCES = frozenset({"memory_compaction", "thesis_chain_compaction"})
 _PUBLIC_RESEARCH_CATEGORIES = ("global_market", "geopolitical", "sector_trends")
@@ -536,6 +537,132 @@ class _ContextTools:
         weights = {ticker: (value / total) for ticker, value in values.items() if value > 0}
         return weights, stock_mv, cash
 
+    @staticmethod
+    def _dict_or_json(value: object) -> dict[str, Any]:
+        if isinstance(value, dict):
+            return dict(value)
+        if isinstance(value, str) and value.strip():
+            try:
+                parsed = json.loads(value)
+            except Exception:
+                return {}
+            return dict(parsed) if isinstance(parsed, dict) else {}
+        return {}
+
+    def _portfolio_joint_policy_view(self, weights: dict[str, float], *, top: int) -> dict[str, Any] | None:
+        loader = getattr(self.repo, "latest_opportunity_ranker_scores", None)
+        if not callable(loader) or not weights:
+            return None
+
+        tickers = list(weights.keys())
+        markets: list[str] | None = None
+        try:
+            markets = MarketScope.from_context(
+                self._context,
+                fallback=getattr(self.settings, "kis_target_market", None),
+            ).row_market_filter() or None
+        except MarketScopeError:
+            markets = None
+
+        max_age_hours = max(
+            1,
+            min(
+                int(getattr(self.settings, "forecast_ranker_max_age_hours", 24 * 14) or (24 * 14)),
+                24 * 14,
+            ),
+        )
+        try:
+            rows = loader(
+                limit=max(len(tickers), max(1, int(top))),
+                max_age_hours=max_age_hours,
+                tickers=tickers,
+                markets=markets,
+                score_sources=["joint_policy_v1"],
+            ) or []
+        except Exception as exc:
+            logger.warning(
+                "[yellow]portfolio diagnosis joint policy load failed[/yellow] agent=%s err=%s",
+                getattr(self, "agent_id", ""),
+                str(exc)[:160],
+            )
+            return {
+                "status": "unavailable",
+                "score_source": "joint_policy_v1",
+                "error": str(exc)[:160],
+            }
+
+        scored: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            ticker = str(row.get("ticker") or "").strip().upper()
+            if ticker not in weights:
+                continue
+            score = self._float_or_none(row.get("recommendation_score"))
+            if score is None:
+                continue
+            explanation = self._dict_or_json(row.get("explanation_json"))
+            top_contributions: list[dict[str, Any]] = []
+            for item in list(explanation.get("top_contributions") or [])[:3]:
+                if not isinstance(item, dict):
+                    continue
+                signal = str(item.get("signal") or "").strip()
+                if not signal:
+                    continue
+                contribution = self._float_or_none(item.get("contribution"))
+                top_contributions.append(
+                    {
+                        "signal": signal,
+                        "contribution": (
+                            round(float(contribution), 6)
+                            if contribution is not None
+                            else item.get("contribution")
+                        ),
+                    }
+                )
+            entry: dict[str, Any] = {
+                "ticker": ticker,
+                "weight": round(float(weights.get(ticker, 0.0)), 6),
+                "score": round(float(score), 6),
+                "rank": row.get("recommendation_rank"),
+                "profile": str(row.get("profile") or "").strip().lower() or None,
+                "bucket": str(row.get("bucket") or "").strip().lower() or None,
+                "action": str(row.get("action") or "").strip().lower() or None,
+                "confidence": str(row.get("model_confidence") or "").strip().lower() or None,
+                "score_source": str(row.get("score_source") or "joint_policy_v1"),
+                "ranker_version": str(row.get("ranker_version") or ""),
+            }
+            if top_contributions:
+                entry["top_contributions"] = top_contributions
+            scored[ticker] = entry
+
+        holdings = [
+            scored[ticker]
+            for ticker, _weight in sorted(weights.items(), key=lambda kv: kv[1], reverse=True)
+            if ticker in scored
+        ][: max(1, min(int(top), 20))]
+        missing = [ticker for ticker in tickers if ticker not in scored]
+        weighted_score = sum(
+            float(weights.get(ticker, 0.0)) * float(item.get("score") or 0.0)
+            for ticker, item in scored.items()
+        )
+        out: dict[str, Any] = {
+            "status": "ok" if holdings else "missing",
+            "score_source": "joint_policy_v1",
+            "coverage": {
+                "held": len(tickers),
+                "scored": len(scored),
+                "missing": len(missing),
+            },
+            "weighted_score": round(float(weighted_score), 6),
+            "holdings": holdings,
+        }
+        if holdings and holdings[0].get("ranker_version"):
+            out["ranker_version"] = holdings[0]["ranker_version"]
+        if missing:
+            out["missing_tickers"] = missing
+        return out
+
     def _load_aligned_returns(
         self,
         tickers: list[str],
@@ -823,6 +950,9 @@ class _ContextTools:
             "momentum_5d_weighted": round(short, 6),
             "volatility_20d_weighted": round(vol_weighted, 6),
         }
+        joint_policy = self._portfolio_joint_policy_view(weights, top=top)
+        if joint_policy is not None:
+            out["joint_policy"] = joint_policy
 
         try:
             import numpy as np

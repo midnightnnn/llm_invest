@@ -3,9 +3,10 @@
 Each signal is a **deterministic** function of market/forecast/fundamentals data.
 All signals share the same shape: one scalar per (as_of_date, ticker).
 
-The ranker consumes these signals and learns the time-varying *information
-coefficient* (IC) of each. The runtime score is a regime-conditional linear
-combination: ``score = sum(predicted_IC_i * signal_i)``.
+The production ranker consumes these signals and learns a regularized joint
+policy coefficient vector. The runtime score is a linear combination:
+``score = sum(policy_coef_i * transformed_signal_i)``. The legacy Signal-IC
+comparison ranker still estimates time-varying ICs for research runs.
 
 No signal depends on another signal. Correlated signals are allowed but
 surface during IC audits.

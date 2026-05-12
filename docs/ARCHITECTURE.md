@@ -145,8 +145,9 @@ arena/                           Core business logic
 │   ├── sector_map.py            US 101 + KOSPI 579 sector mapping (688L)
 │   ├── _market_scope.py         Per-market ticker/universe scoping helper (152L)
 │   └── registry.py              ToolRegistry with two-phase selection (90L)
-├── recommendation/               Signal-IC meta-learner + Layer 1 signals
-│   ├── ranker.py                Builds opportunity_ranker_scores_latest (713L)
+├── recommendation/               Regularized joint policy ranker + Layer 1 signals
+│   ├── ranker.py                Production ranker wrapper + legacy Signal-IC comparison
+│   ├── joint_policy_ranker.py   Regularized joint signal policy scorer
 │   └── signals.py               Layer 1 signal definitions + regime features (205L)
 ├── data/                         Repository layer (BigQuery default, DuckDB for ARENA_MODE=local)
 │   ├── bq.py                   BigQueryRepository facade (144L)
@@ -389,8 +390,8 @@ OSS quickstart / 로컬 평가용. GCP 결제·인증 없이 동일 코드 경�
 | `fundamentals_derived_daily` | 매일 가격과 결합한 PIT-safe ratio (pe/pb/ep/bp/roe/growth/d2e) |
 | `fundamentals_snapshot_latest` | 최신 fundamentals 스냅샷 materialized view |
 | `fundamentals_ingest_runs` | KIS/SEC/FMP ingest job metadata (status, tickers_attempted, quarters_inserted) |
-| `opportunity_ranker_scores_latest` | signal-IC 합산 점수 (런타임 `recommend_opportunities` 소스) |
-| `opportunity_ranker_runs` | ranker 학습 run metadata (per-signal OOS accuracy, predicted_IC) |
+| `opportunity_ranker_scores_latest` | regularized joint-policy signal 점수 (런타임 `recommend_opportunities` 소스) |
+| `opportunity_ranker_runs` | ranker 학습 run metadata (policy coefficients, optimizer params, legacy predicted_IC when comparison run) |
 | `memory_relation_triples` / `memory_relation_extraction_runs` / `memory_relation_tuning_runs` | Semantic triple 저장소 + LLM 추출 감사 + shadow↔inject 튜닝 이력 |
 | `alloc_backtest_runs` / `alloc_backtest_allocations` / `alloc_backtest_nav` | Allocation walk-forward 백테스트 아티팩트 |
 
@@ -728,7 +729,7 @@ ToolEntry의 callable은 ADK wrapper를 통과하기 전에 schema metadata를 �
 
 | Tool | Function |
 |------|----------|
-| `recommend_opportunities` | signal-IC meta-learner 기반 추천. prep 단계에서 signal-IC 학습 → `opportunity_ranker_scores_latest`에 predict_IC × signal 합산 점수 저장, runtime은 읽기만. Tactical ETP 프로필 자동 분리 |
+| `recommend_opportunities` | regularized joint-policy 기반 추천. prep 단계에서 label-ready signal history로 turnover-regularized elastic-net policy coefficient 학습 → `opportunity_ranker_scores_latest`에 `joint_policy_v1` 점수 저장, runtime은 읽기만. Tactical ETP 프로필 자동 분리 |
 | `screen_market` | 저수준 진단용 bucket screen. 기본 비활성, `recommend_opportunities` 내부에서 사용 |
 | `optimize_portfolio` | Max-Sharpe, HRP, forecast-enhanced + graceful degrade |
 | `forecast_returns` | 7-model ensemble → prob_up + 컨센서스 |
@@ -767,7 +768,8 @@ ToolEntry의 callable은 ADK wrapper를 통과하기 전에 schema metadata를 �
 `recommend_opportunities` 도구의 백엔드. Prep 단계에서만 학습/스코어링하고 runtime은 읽기 전용.
 
 - `signals.py` — Layer 1 signal 정의(momentum, pullback, 평균회귀, 저변동성, forecast, RSI/MA/볼린저, EP/BP/SP/ROE/growth/debt) + `REGIME_FEATURES`
-- `ranker.py` — Signal별 IC를 regime feature로 조건화하여 학습. Runtime score `= Σ predicted_IC_i(today_regime) × signal_i(ticker)`. 결과를 `opportunity_ranker_scores_latest`에 저장 + per-signal contribution, `opportunity_ranker_runs`에 학습 감사 로그. Tactical ETP(인버스/레버리지/헤지)는 별도 profile로 분리.
+- `joint_policy_ranker.py` — 17개 Layer 1 signal의 characteristic return 시계열을 만들고 elastic-net(λ1 Lasso + λ2 Ridge) + coefficient-turnover penalty(λΔ)로 joint policy coefficient를 학습. Runtime score `= Σ policy_coef_i × transformed_signal_i(ticker)`. 결과를 `opportunity_ranker_scores_latest(score_source='joint_policy_v1')`에 저장 + per-signal contribution, `opportunity_ranker_runs`에 coefficient/optimizer 감사 로그.
+- `ranker.py` — production wrapper는 joint policy ranker를 호출. Legacy Signal-IC meta-learner는 `build_and_store_signal_ic_ranker()`로 남겨 비교용 실행만 지원하며 production fallback으로 쓰지 않음.
 - `arena/forecast_selection.py` — forecast 후보 ticker를 ranker 바스켓에서 선별하는 헬퍼. `FORECAST_RANKER_BUCKETS = (momentum, pullback, recovery, defensive)`, `FORECAST_RANKER_PROFILES = (aggressive, balanced, defensive)`. `cli_commands/sync.py:_build_forecast_tickers`가 `repo.latest_opportunity_ranker_scores(buckets=…, profiles=…, markets=…)`를 호출해 bucket당 `forecast_ranker_top_per_bucket`(default 10)을 뽑은 뒤, 보유 ticker + 폴백을 합쳐 `forecast_max_tickers`(default 80)에 맞춰 dedupe합니다. 스코어가 `forecast_ranker_max_age_hours`(default 336h)보다 오래되면 사용하지 않습니다.
 
 ### 6.8 Investment Chat Tools (`agents/investment_chat/`)
@@ -1168,7 +1170,7 @@ llm-arena sync-dividends                    # 배당 귀속
 
 # Forecasting & Ranker
 llm-arena build-forecasts                   # 7-model ensemble
-llm-arena build-opportunity-ranker          # signal-IC meta-learner + latest scores
+llm-arena build-opportunity-ranker          # regularized joint policy + latest scores
 llm-arena refresh-signals                   # signal_daily_values만 재계산 (debug)
 llm-arena refresh-signal-ic                 # signal_daily_ic만 재계산 (debug)
 llm-arena refresh-regime-features           # regime_daily_features만 재계산 (debug)
@@ -1281,7 +1283,7 @@ Cloud Run Service
 | `tests/data/test_clone_bq_local.py` / `tests/data/test_init_local_cli.py` / `tests/data/test_duckdb_schema.py` | Local DuckDB bootstrap/clone/schema |
 | `test_execution_reconcile.py` | Order reconciliation vs. broker |
 | `test_forecasting_stacked.py` | 7-model stacking |
-| `tests/data/test_opportunity_ranker.py` | Signal-IC meta-learner 학습/스코어링 |
+| `tests/data/test_opportunity_ranker.py` | joint policy ranker + legacy Signal-IC comparison 학습/스코어링 |
 | `tests/data/test_signals.py` | Layer 1 signal definitions |
 | `test_new_tools.py` | 신규 도구 (`recommend_opportunities`, `trade_performance`) |
 | `tests/ui/test_investment_chat_*.py` | Chat ADK shell, order/config approval bridges, tool schema quality |
@@ -1355,7 +1357,7 @@ class TradingAgent(Protocol):
  5. Forecast + Ranker (Shared Prep)
     │  build_and_store_stacked_forecasts()     ← 7-model ensemble → predicted_expected_returns
     │  refresh signal_daily_values / signal_daily_ic / regime_daily_features
-    │  build_and_store_opportunity_ranker()    ← signal-IC meta-learner → opportunity_ranker_scores_latest
+    │  build_and_store_opportunity_ranker()    ← joint_policy_v1 → opportunity_ranker_scores_latest
     │
  6. Research Agent (Gemini + Google Search)
     │  held tickers + movers → briefing board post

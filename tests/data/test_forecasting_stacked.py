@@ -236,3 +236,11 @@ def test_build_and_store_stacked_forecasts_keeps_tickers_with_partial_model_cove
     assert not any(row["forecast_model"] == "ModelA" for row in tsla_rows)
     tsla_stack = next(row for row in tsla_rows if row["forecast_model"] == "ensemble_wmae")
     assert int(tsla_stack["model_votes_total"]) == 1
+
+
+def test_model_direction_labels_are_forecast_outputs_not_trade_actions() -> None:
+    assert stacked_mod._model_direction_label(0.85) == "MODEL_UP_STRONG"
+    assert stacked_mod._model_direction_label(0.65) == "MODEL_UP"
+    assert stacked_mod._model_direction_label(0.50) == "MODEL_MIXED"
+    assert stacked_mod._model_direction_label(0.35) == "MODEL_DOWN"
+    assert stacked_mod._model_direction_label(0.15) == "MODEL_DOWN_STRONG"

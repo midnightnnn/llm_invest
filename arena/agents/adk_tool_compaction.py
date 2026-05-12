@@ -3,6 +3,22 @@ from __future__ import annotations
 from typing import Any
 
 
+_FORECAST_MODEL_DIRECTION_ALIASES: dict[str, str] = {
+    "STRONG_BUY": "MODEL_UP_STRONG",
+    "BUY": "MODEL_UP",
+    "NEUTRAL": "MODEL_MIXED",
+    "SELL": "MODEL_DOWN",
+    "STRONG_SELL": "MODEL_DOWN_STRONG",
+}
+
+
+def _normalize_model_direction(value: Any) -> str | None:
+    label = str(value or "").strip().upper()
+    if not label:
+        return None
+    return _FORECAST_MODEL_DIRECTION_ALIASES.get(label, label)
+
+
 def _clip_text(value: Any, *, max_len: int = 180) -> str:
     text = str(value or "").strip()
     if len(text) <= max_len:
@@ -226,7 +242,7 @@ def _compact_tool_result_for_prompt(
                 "prob_up",
                 "model_votes_up",
                 "model_votes_total",
-                "consensus",
+                "model_direction",
                 "best_base_model",
                 "best_base_return",
             ),
@@ -237,6 +253,14 @@ def _compact_tool_result_for_prompt(
             for src, item in zip(core[:12], rows):
                 if not isinstance(src, dict):
                     continue
+                if item.get("model_direction") is None:
+                    model_direction = _normalize_model_direction(src.get("model_direction") or src.get("consensus"))
+                    if model_direction is not None:
+                        item["model_direction"] = model_direction
+                elif isinstance(item.get("model_direction"), str):
+                    model_direction = _normalize_model_direction(item.get("model_direction"))
+                    if model_direction is not None:
+                        item["model_direction"] = model_direction
                 stacked = _compact_rows(
                     src.get("stacked_models"),
                     fields=("forecast_model", "exp_return_period", "forecast_score"),
@@ -536,6 +560,32 @@ def _compact_tool_result_for_prompt(
             "momentum_5d_weighted": core.get("momentum_5d_weighted"),
             "volatility_20d_weighted": core.get("volatility_20d_weighted"),
         }
+        joint_policy = core.get("joint_policy")
+        if isinstance(joint_policy, dict):
+            compacted["joint_policy"] = {
+                "status": joint_policy.get("status"),
+                "score_source": joint_policy.get("score_source"),
+                "ranker_version": joint_policy.get("ranker_version"),
+                "coverage": joint_policy.get("coverage"),
+                "weighted_score": joint_policy.get("weighted_score"),
+                "holdings": _compact_rows(
+                    joint_policy.get("holdings"),
+                    fields=(
+                        "ticker",
+                        "weight",
+                        "score",
+                        "rank",
+                        "profile",
+                        "bucket",
+                        "action",
+                        "confidence",
+                        "top_contributions",
+                    ),
+                    limit=5,
+                ),
+            }
+            if joint_policy.get("missing_tickers"):
+                compacted["joint_policy"]["missing_tickers"] = list(joint_policy.get("missing_tickers") or [])[:5]
         if core.get("mdd") is not None:
             compacted["mdd"] = core.get("mdd")
         if isinstance(core.get("benchmarks"), dict):

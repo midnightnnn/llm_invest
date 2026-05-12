@@ -29,7 +29,7 @@ def test_admin_tools_lists_core_and_optional(monkeypatch) -> None:
     assert optional_entry["tier"] == "optional"
     assert optional_entry["label_ko"] == "통합 기회 추천"
     assert "신규 매수 후보" in str(optional_entry["description_ko"])
-    assert "signal-IC" in str(optional_entry["description_ko"])
+    assert "joint-policy" in str(optional_entry["description_ko"])
     assert forecast_entry["label_ko"] == "수익률 예측"
     assert "self-discovered 후보 바스켓" in str(forecast_entry["description_ko"])
 

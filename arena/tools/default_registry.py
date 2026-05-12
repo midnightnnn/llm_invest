@@ -90,13 +90,14 @@ def _base_entries(
             tool_id="portfolio_diagnosis",
             description=(
                 "Diagnoses current holdings: concentration (HHI), per-ticker risk contribution, portfolio MDD, "
-                "weighted momentum/volatility, and benchmark excess return. Pure diagnosis — no allocation advice. "
+                "weighted momentum/volatility, benchmark excess return, and current-holding joint-policy ranker scores. "
+                "Pure diagnosis — no allocation advice. "
                 "Use optimize_portfolio afterwards if you need rebalancing weights."
             ),
             category="quant",
             tier="core",
             label_ko="포트폴리오 진단",
-            description_ko="현재 보유 종목의 집중도(HHI), 개별 리스크 기여도, 최대 낙폭(MDD), 가중 모멘텀/변동성, 벤치마크 대비 초과수익을 종합 진단합니다. 진단 전용 — 리밸런싱이 필요하면 optimize_portfolio를 사용하세요.",
+            description_ko="현재 보유 종목의 집중도(HHI), 개별 리스크 기여도, 최대 낙폭(MDD), 가중 모멘텀/변동성, 벤치마크 대비 초과수익, 보유종목별 joint-policy ranker 점수를 종합 진단합니다. 진단 전용 — 리밸런싱이 필요하면 optimize_portfolio를 사용하세요.",
             sort_order=40,
         ),
         _tool(
@@ -115,12 +116,12 @@ def _base_entries(
             tool_id="recommend_opportunities",
             description=(
                 "Finds fresh buy and replacement ideas across the runtime universe. "
-                "Uses the latest signal-IC meta-learner scores from shared prep, combining "
+                "Uses the latest regularized joint-policy ranker scores from shared prep, combining "
                 "momentum, pullback, mean reversion, low volatility, sentiment, forecasts, "
                 "RSI/MA/Bollinger technicals, and EP/BP/SP/ROE/growth/debt fundamentals. "
                 "Returns global top_n recommendations plus aggressive/balanced/defensive/"
                 "value/tactical profile context, with action, model confidence, risk notes, "
-                "and per-signal contributions explaining why each ticker surfaced. "
+                "and per-signal joint-policy contributions explaining why each ticker surfaced. "
                 "Useful when looking for new positions, portfolio rotation candidates, "
                 "or replacements for weaker holdings. Freshness is market-calendar aware: "
                 "weekend/holiday previous-session data is allowed with freshness metadata, "
@@ -131,7 +132,7 @@ def _base_entries(
             tier="optional",
             callable=qt.recommend_opportunities,
             label_ko="통합 기회 추천",
-            description_ko="런타임 유니버스에서 신규 매수 후보, 포트폴리오 교체 후보, 약한 보유종목의 대체 아이디어를 찾는 고수준 discovery 도구입니다. shared prep에서 계산한 signal-IC meta-learner 점수를 사용해 모멘텀·눌림목·평균회귀·저변동성·센티먼트·forecast·RSI/MA/볼린저·EP/BP/SP/ROE/성장/부채 signal을 조합합니다. 전체 top_n 추천과 공격형/균형형/방어형/가치형/전술형 profile 문맥을 함께 반환하며, action·model confidence·risk note·signal별 기여도로 왜 해당 종목이 올라왔는지 설명합니다. freshness는 시장 캘린더 기준으로 판단합니다. 주말/휴일의 직전 거래일 데이터는 freshness metadata와 함께 허용하고, 장중인데 해당 세션 prep이 아직 없으면 status='degraded', 정말 오래된 데이터는 status='unusable'로 명시합니다.",
+            description_ko="런타임 유니버스에서 신규 매수 후보, 포트폴리오 교체 후보, 약한 보유종목의 대체 아이디어를 찾는 고수준 discovery 도구입니다. shared prep에서 계산한 regularized joint-policy ranker 점수를 사용해 모멘텀·눌림목·평균회귀·저변동성·센티먼트·forecast·RSI/MA/볼린저·EP/BP/SP/ROE/성장/부채 signal을 조합합니다. 전체 top_n 추천과 공격형/균형형/방어형/가치형/전술형 profile 문맥을 함께 반환하며, action·model confidence·risk note·signal별 joint-policy 기여도로 왜 해당 종목이 올라왔는지 설명합니다. freshness는 시장 캘린더 기준으로 판단합니다. 주말/휴일의 직전 거래일 데이터는 freshness metadata와 함께 허용하고, 장중인데 해당 세션 prep이 아직 없으면 status='degraded', 정말 오래된 데이터는 status='unusable'로 명시합니다.",
             sort_order=105,
         ),
         _tool(
@@ -139,13 +140,13 @@ def _base_entries(
             description=(
                 "Low-level diagnostic candidate generator used by recommend_opportunities. "
                 "Surfaces raw screen-only rows across discovery buckets. "
-                "Use when inspecting raw bucket screens; it is screen-only and does not provide learned confidence or per-signal IC contributions."
+                "Use when inspecting raw bucket screens; it is screen-only and does not provide joint-policy confidence or per-signal ranker contributions."
             ),
             category="quant",
             tier="optional",
             callable=qt.screen_market,
             label_ko="시장 스크리닝",
-            description_ko="원시 버킷 스크린을 점검하는 저수준 진단 도구입니다. discovery bucket의 screen-only 결과를 반환하며 learned confidence나 signal-IC 기여도는 제공하지 않습니다.",
+            description_ko="원시 버킷 스크린을 점검하는 저수준 진단 도구입니다. discovery bucket의 screen-only 결과를 반환하며 joint-policy confidence나 signal별 ranker 기여도는 제공하지 않습니다.",
             enabled=False,
             sort_order=110,
         ),
@@ -173,14 +174,14 @@ def _base_entries(
         _tool(
             tool_id="forecast_returns",
             description=(
-                "Runs seven time-series models and summarizes each ticker with direction probability, vote counts, consensus, "
-                "and compact model details. If tickers are omitted, it defaults to the self-discovered candidate basket plus current holdings."
+                "Runs seven time-series models and summarizes each ticker with model-implied direction probability, vote counts, "
+                "model_direction label, and compact model details. If tickers are omitted, it defaults to the self-discovered candidate basket plus current holdings."
             ),
             category="quant",
             tier="optional",
             callable=qt.forecast_returns,
             label_ko="수익률 예측",
-            description_ko="7가지 시계열 모델(ARIMA, ETS, Prophet 등)을 동시에 돌려 각 종목의 방향 확률, 투표 수, 컨센서스를 요약합니다. ticker를 명시하지 않으면 방금 탐색한 self-discovered 후보 바스켓과 현재 보유 종목을 기본 분석 대상으로 사용합니다. 여러 후보의 기대수익률을 한눈에 비교하여 매수·매도 판단의 정량적 근거로 활용합니다.",
+            description_ko="7가지 시계열 모델(ARIMA, ETS, Prophet 등)을 동시에 돌려 각 종목의 모델상 방향 확률, 투표 수, model_direction 라벨을 요약합니다. ticker를 명시하지 않으면 방금 탐색한 self-discovered 후보 바스켓과 현재 보유 종목을 기본 분석 대상으로 사용합니다. 여러 후보의 기대수익률을 한눈에 비교하여 의사결정의 정량적 참고값으로 활용합니다.",
             sort_order=130,
         ),
         _tool(

@@ -70,7 +70,8 @@ def test_forecast_returns_compacts_model_rows_by_ticker() -> None:
     assert row["ticker"] == "AAPL"
     assert row["forecast_model"] == "ensemble_wmae"
     assert row["is_stacked"] is True
-    assert row["consensus"] == "STRONG_BUY"
+    assert row["model_direction"] == "MODEL_UP_STRONG"
+    assert "consensus" not in row
     assert row["model_votes_up"] == 4
     assert row["model_votes_total"] == 4
     assert len(row["stacked_models"]) == 2

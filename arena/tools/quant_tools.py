@@ -85,6 +85,13 @@ _OPPORTUNITY_PROFILE_ALIASES: dict[str, tuple[str, ...]] = {
     "tactical_inverse": ("tactical_inverse",),
     "tactical_hedge": ("tactical_hedge",),
 }
+_FORECAST_MODEL_DIRECTION_ALIASES: dict[str, str] = {
+    "STRONG_BUY": "MODEL_UP_STRONG",
+    "BUY": "MODEL_UP",
+    "NEUTRAL": "MODEL_MIXED",
+    "SELL": "MODEL_DOWN",
+    "STRONG_SELL": "MODEL_DOWN_STRONG",
+}
 
 
 def _utc_now() -> datetime:
@@ -103,6 +110,13 @@ def _clean_lower_tokens(values: list[str] | None) -> list[str]:
             if str(value or "").strip()
         ]
     )
+
+
+def _normalize_model_direction(value: Any) -> str | None:
+    label = str(value or "").strip().upper()
+    if not label:
+        return None
+    return _FORECAST_MODEL_DIRECTION_ALIASES.get(label, label)
 
 
 def _expand_opportunity_profile_token(token: str) -> tuple[str, ...]:
@@ -725,7 +739,7 @@ class QuantTools:
 
         Preserves the top-level summary fields agents care about while moving
         model-specific detail into compact ``base_models`` / ``stacked_models``
-        lists to avoid repeating ticker/run_date/consensus on every row.
+        lists to avoid repeating ticker/run_date/model_direction on every row.
         """
         if not rows:
             return []
@@ -785,10 +799,14 @@ class QuantTools:
                 "prob_up",
                 "model_votes_up",
                 "model_votes_total",
-                "consensus",
             ):
                 if preferred_primary.get(key) is not None:
                     entry[key] = preferred_primary.get(key)
+            model_direction = _normalize_model_direction(
+                preferred_primary.get("model_direction") or preferred_primary.get("consensus")
+            )
+            if model_direction is not None:
+                entry["model_direction"] = model_direction
 
             def _mini(rows_in: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 out: list[dict[str, Any]] = []
@@ -1266,8 +1284,9 @@ class QuantTools:
             action = str(raw.get("action") or "watchlist").strip().lower()
             confidence = str(raw.get("model_confidence") or "low").strip().lower()
             ranker_version = str(raw.get("ranker_version") or "").strip()
+            score_source = str(raw.get("score_source") or "joint_policy_v1")
             reasons_for = [
-                f"Learned IC ranker score={score:+.4f}",
+                f"Joint-policy ranker score={score:+.4f}",
             ]
             top_contribs = list(explanation_json.get("top_contributions") or [])
             if top_contribs:
@@ -1303,7 +1322,7 @@ class QuantTools:
                     "recommendation_rank": raw.get("recommendation_rank"),
                     "score": round(float(score), 6),
                     "recommendation_score": round(float(score), 6),
-                    "score_source": str(raw.get("score_source") or "learned_ic"),
+                    "score_source": score_source,
                     "ranker_version": ranker_version,
                     "predicted_excess_return_20d": pred_excess,
                     "prob_outperform_20d": prob_outperform,
@@ -1314,7 +1333,7 @@ class QuantTools:
                     "evidence_level": str(raw.get("evidence_level") or "validated"),
                     "reason": "; ".join(reasons_for),
                     "reason_for": "; ".join(reasons_for),
-                    "reason_risk": "; ".join(risk_notes) or "Learned IC ranker output; inspect per-signal IC freshness.",
+                    "reason_risk": "; ".join(risk_notes) or "Regularized joint-policy ranker output; inspect ranker freshness and per-signal contributions.",
                     "signal_contributions": top_contribs,
                     "predicted_ic": explanation_json.get("predicted_ic"),
                     "forecast": {
@@ -1359,8 +1378,8 @@ class QuantTools:
         first_explanation = self._json_dict(rows[0].get("explanation_json")) if rows else {}
         ranker = {
             "mode": "learned",
-            "score_source": str(rows[0].get("score_source") or "learned_ic") if rows else "learned_ic",
-            "model_family": first_explanation.get("model_family", "signal_ic_meta_learner"),
+            "score_source": str(rows[0].get("score_source") or "joint_policy_v1") if rows else "joint_policy_v1",
+            "model_family": first_explanation.get("model_family", "regularized_joint_policy"),
             "version": str(rows[0].get("ranker_version") or "") if rows else "",
             "rows": len(rows),
             "blended_oos_ic_accuracy": first_explanation.get("blended_oos_ic_accuracy"),
@@ -1386,7 +1405,7 @@ class QuantTools:
         include_watchlist: bool = True,
         max_score_age_hours: int = _OPPORTUNITY_DEFAULT_MAX_SCORE_AGE_HOURS,
     ) -> dict[str, Any]:
-        """Returns precomputed signal-IC-weighted opportunities from BigQuery.
+        """Returns precomputed regularized joint-policy opportunities from BigQuery.
 
         Reads ``opportunity_ranker_scores_latest`` and classifies freshness by
         market calendar. Latest previous-session rows are usable on weekends
@@ -1405,7 +1424,7 @@ class QuantTools:
         )
         lookup_max_age_hours = max(requested_max_age_hours, _calendar_lookup_min_hours())
         diagnostics: dict[str, Any] = {
-            "pipeline": ["signal_ic_meta_learner", "opportunity_ranker_scores_latest"],
+            "pipeline": ["regularized_joint_policy", "opportunity_ranker_scores_latest"],
             "max_score_age_hours": max_score_age_hours,
             "requested_max_score_age_hours": requested_max_age_hours,
             "effective_lookup_max_age_hours": lookup_max_age_hours,
@@ -1746,7 +1765,7 @@ class QuantTools:
     ) -> list[dict]:
         """Loads direction forecasts from 7-model ensemble (NBEATSx, NHITS, PatchTST, iTransformer, Chronos, TimesFM, Lag-Llama).
 
-        Returns prob_up (0~1), model_votes_up/total, consensus label, and exp_return_period.
+        Returns prob_up (0~1), model_votes_up/total, model_direction label, and exp_return_period.
         If *tickers* is omitted, prefers unresolved discovery candidates plus current holdings
         from the active cycle context before falling back to the broader forecast universe.
         """
@@ -1799,7 +1818,7 @@ class QuantTools:
             )
             return []
         compact_rows = self._compact_forecast_rows(rows)
-        self._log_tool_result("forecast_returns", compact_rows, key_fields=["ticker", "prob_up", "consensus", "model_votes_up", "model_votes_total", "exp_return_period", "forecast_model"])
+        self._log_tool_result("forecast_returns", compact_rows, key_fields=["ticker", "prob_up", "model_direction", "model_votes_up", "model_votes_total", "exp_return_period", "forecast_model"])
         return compact_rows
 
     def _technical_signals_one(self, ticker: str, *, lookback_days: int) -> dict[str, Any]:

@@ -14,6 +14,11 @@ from arena.recommendation import (
     REGIME_FEATURES,
     SIGNAL_NAMES,
     build_and_store_opportunity_ranker,
+    build_and_store_signal_ic_ranker,
+)
+from arena.recommendation.joint_policy_ranker import (
+    JointPolicyParams,
+    fit_turnover_regularized_policy,
 )
 
 
@@ -111,6 +116,21 @@ class _FakeICRepo:
     def append_opportunity_ranker_run(self, row: dict) -> int:
         self.run_rows.append(dict(row))
         return 1
+
+
+class _FakePolicyRepo(_FakeICRepo):
+    def __init__(
+        self,
+        *,
+        policy_rows: list[dict],
+        regime_rows: list[dict],
+        scoring_rows: list[dict],
+    ) -> None:
+        super().__init__(ic_rows=[], regime_rows=regime_rows, scoring_rows=scoring_rows)
+        self._policy_rows = list(policy_rows)
+
+    def load_signal_policy_training_rows(self, **_: object) -> list[dict]:
+        return [dict(row) for row in self._policy_rows]
 
 
 def _synthetic_ic_rows(days: int = 120) -> tuple[list[dict], list[dict], list[dict]]:
@@ -232,13 +252,189 @@ def _synthetic_ic_rows(days: int = 120) -> tuple[list[dict], list[dict], list[di
     return ic_rows, regime_rows, scoring_rows
 
 
-def test_build_and_store_opportunity_ranker_writes_ic_scores() -> None:
+def _synthetic_policy_rows(days: int = 90) -> tuple[list[dict], list[dict], list[dict]]:
+    rng = random.Random(20260513)
+    start = date(2025, 1, 1)
+    tickers = [f"T{i:02d}" for i in range(20)]
+    policy_rows: list[dict] = []
+    regime_rows: list[dict] = []
+    for d in range(days):
+        as_of = start + timedelta(days=d)
+        phase = math.sin(d / 18.0)
+        regime_rows.append(
+            {
+                "as_of_date": as_of.isoformat(),
+                "market": "us",
+                "regime_vol_level": 0.02 + 0.01 * phase,
+                "regime_vol_dispersion": 0.01,
+                "regime_trend": 0.002 * math.cos(d / 12.0),
+                "regime_short_reversal": 0.0,
+                "regime_dispersion": 0.02,
+                "regime_sentiment": 0.0,
+                "sample_size": len(tickers),
+            }
+        )
+        for idx, ticker in enumerate(tickers):
+            momentum = (idx - 9.5) / 5.0
+            lowvol = -momentum * 0.35 + rng.gauss(0.0, 0.15)
+            y = 0.055 * momentum - 0.020 * lowvol + rng.gauss(0.0, 0.004)
+            row = {
+                "as_of_date": as_of.isoformat(),
+                "ticker": ticker,
+                "market": "us",
+                "fwd_excess_return_20d": y,
+                "label_ready": True,
+                "signal_momentum_20d": momentum,
+                "signal_lowvol": lowvol,
+                "signal_pullback": 0.0,
+                "signal_meanrev_5d": 0.0,
+                "signal_sentiment": 0.0,
+                "signal_forecast_er": 0.0,
+                "signal_forecast_prob": 0.0,
+                "signal_rsi_reversal": 0.0,
+                "signal_ma_crossover": 0.0,
+                "signal_bollinger_position": 0.0,
+                "signal_ep": 0.0,
+                "signal_bp": 0.0,
+                "signal_sp": 0.0,
+                "signal_roe": 0.0,
+                "signal_revenue_growth": 0.0,
+                "signal_eps_growth": 0.0,
+                "signal_low_debt": 0.0,
+            }
+            policy_rows.append(row)
+    scoring_date = start + timedelta(days=days)
+    scoring_rows = [
+        {
+            "as_of_date": scoring_date.isoformat(),
+            "ticker": "AAA",
+            "market": "us",
+            "bucket": "momentum",
+            "profile": "aggressive",
+            "signal_momentum_20d": 1.8,
+            "signal_lowvol": -0.2,
+            "signal_pullback": 0.0,
+            "signal_meanrev_5d": 0.0,
+        },
+        {
+            "as_of_date": scoring_date.isoformat(),
+            "ticker": "CCC",
+            "market": "us",
+            "bucket": "defensive",
+            "profile": "defensive",
+            "signal_momentum_20d": -1.4,
+            "signal_lowvol": 0.1,
+            "signal_pullback": 0.0,
+            "signal_meanrev_5d": 0.0,
+        },
+    ]
+    return policy_rows, regime_rows, scoring_rows
+
+
+def test_turnover_penalty_reduces_joint_policy_coefficient_change() -> None:
+    char_returns = np.array([[0.04, 0.0]] * 20 + [[-0.04, 0.0]], dtype=float)
+
+    loose = fit_turnover_regularized_policy(
+        char_returns,
+        signal_names=("momentum_20d", "lowvol"),
+        params=JointPolicyParams(
+            lambda_l2=0.05,
+            lambda_turnover=0.0,
+            gamma=0.0,
+            trailing_window=1,
+            min_training_dates=1,
+        ),
+    )
+    sticky = fit_turnover_regularized_policy(
+        char_returns,
+        signal_names=("momentum_20d", "lowvol"),
+        params=JointPolicyParams(
+            lambda_l2=0.05,
+            lambda_turnover=2.0,
+            gamma=0.0,
+            trailing_window=1,
+            min_training_dates=1,
+        ),
+    )
+
+    loose_delta = abs(loose.coefficients["momentum_20d"] - loose.previous_coefficients["momentum_20d"])
+    sticky_delta = abs(sticky.coefficients["momentum_20d"] - sticky.previous_coefficients["momentum_20d"])
+    assert sticky_delta < loose_delta
+
+
+def test_l1_penalty_sparsifies_weak_joint_policy_coefficients() -> None:
+    char_returns = np.array([[0.05, 0.0002]] * 10, dtype=float)
+
+    no_l1 = fit_turnover_regularized_policy(
+        char_returns,
+        signal_names=("momentum_20d", "lowvol"),
+        params=JointPolicyParams(
+            lambda_l1=0.0,
+            lambda_l2=0.05,
+            lambda_turnover=0.0,
+            gamma=0.0,
+            trailing_window=10,
+            min_training_dates=1,
+            max_abs_weight=10.0,
+        ),
+    )
+    with_l1 = fit_turnover_regularized_policy(
+        char_returns,
+        signal_names=("momentum_20d", "lowvol"),
+        params=JointPolicyParams(
+            lambda_l1=0.001,
+            lambda_l2=0.05,
+            lambda_turnover=0.0,
+            gamma=0.0,
+            trailing_window=10,
+            min_training_dates=1,
+            max_abs_weight=10.0,
+        ),
+    )
+
+    assert abs(no_l1.coefficients["lowvol"]) > 0.0
+    assert abs(with_l1.coefficients["lowvol"]) <= 1e-12
+    assert abs(with_l1.lambda_l1 - 0.001) <= 1e-12
+
+
+def test_build_and_store_opportunity_ranker_writes_joint_policy_scores() -> None:
+    policy_rows, regime_rows, scoring_rows = _synthetic_policy_rows(days=90)
+    repo = _FakePolicyRepo(policy_rows=policy_rows, regime_rows=regime_rows, scoring_rows=scoring_rows)
+    settings = load_settings()
+    settings.kis_target_market = "us"
+
+    result = build_and_store_opportunity_ranker(
+        repo,
+        settings,
+        lookback_days=120,
+        horizon_days=20,
+        min_ic_dates=30,
+        max_scoring_rows=10,
+    )
+
+    assert result.status == "ok"
+    assert result.ranker_version.startswith("opportunity_ranker_joint_policy_")
+    assert result.scores_written == len(scoring_rows)
+    assert repo.refreshes == {"values": 1, "regime": 1}
+    top = repo.score_rows[0]
+    assert top["score_source"] == "joint_policy_v1"
+    assert top["ticker"] == "AAA"
+    explanation = top["explanation_json"]
+    assert explanation["model_family"] == "regularized_joint_policy"
+    assert "policy_coefficients" in explanation
+    assert explanation["optimizer"]["lambda_l1"] > 0.0
+    assert "top_contributions" in explanation
+    assert repo.run_rows[-1]["score_source"] == "joint_policy_v1"
+    assert "policy_coefficients" in repo.run_rows[-1]["detail_json"]
+
+
+def test_build_and_store_signal_ic_ranker_writes_ic_scores() -> None:
     ic_rows, regime_rows, scoring_rows = _synthetic_ic_rows(days=120)
     repo = _FakeICRepo(ic_rows=ic_rows, regime_rows=regime_rows, scoring_rows=scoring_rows)
     settings = load_settings()
     settings.kis_target_market = "us"
 
-    result = build_and_store_opportunity_ranker(
+    result = build_and_store_signal_ic_ranker(
         repo,
         settings,
         lookback_days=200,
@@ -277,7 +473,7 @@ def test_build_and_store_opportunity_ranker_refreshes_daily_sources_only() -> No
     settings = load_settings()
     settings.kis_target_market = "us"
 
-    result = build_and_store_opportunity_ranker(
+    result = build_and_store_signal_ic_ranker(
         repo,
         settings,
         lookback_days=200,
@@ -304,7 +500,7 @@ def test_ranker_returns_unusable_when_ic_history_is_short() -> None:
     settings = load_settings()
     settings.kis_target_market = "us"
 
-    result = build_and_store_opportunity_ranker(
+    result = build_and_store_signal_ic_ranker(
         repo,
         settings,
         lookback_days=60,
@@ -323,7 +519,7 @@ def test_ranker_handles_empty_scoring_rows_gracefully() -> None:
     settings = load_settings()
     settings.kis_target_market = "us"
 
-    result = build_and_store_opportunity_ranker(
+    result = build_and_store_signal_ic_ranker(
         repo,
         settings,
         lookback_days=200,
@@ -341,7 +537,7 @@ def test_aaa_outranks_ccc_when_momentum_ic_is_positive() -> None:
     settings = load_settings()
     settings.kis_target_market = "us"
 
-    build_and_store_opportunity_ranker(
+    build_and_store_signal_ic_ranker(
         repo,
         settings,
         lookback_days=200,

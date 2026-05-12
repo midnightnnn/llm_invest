@@ -135,6 +135,8 @@ def test_latest_opportunity_ranker_scores_reads_fresh_latest_batch() -> None:
     sql, params = store.session.call_pairs[-1]
     assert "opportunity_ranker_scores_latest" in sql
     assert "latest_batch" in sql
+    assert "score_source IN UNNEST(@score_sources)" in sql
+    assert "s.score_source IN UNNEST(@score_sources)" in sql
     assert "s.ticker IN UNNEST(@tickers)" in sql
     assert "s.profile IN UNNEST(@profiles)" in sql
     assert "s.bucket IN UNNEST(@buckets)" in sql
@@ -144,9 +146,26 @@ def test_latest_opportunity_ranker_scores_reads_fresh_latest_batch() -> None:
     assert "s.market = b.market" in sql
     assert params["max_age_hours"] == 12
     assert params["buckets"] == ["momentum"]
+    assert params["score_sources"] == ["joint_policy_v1"]
     assert params["per_profile_limit"] == 2
     assert params["max_return_rows"] == 19
     assert "markets" not in params
+
+
+def test_load_signal_policy_training_rows_reads_label_ready_values() -> None:
+    store = _make_market_store([[{"ticker": "AAPL", "fwd_excess_return_20d": 0.02}]])
+
+    rows = store.load_signal_policy_training_rows(lookback_days=180, market="us")
+
+    assert rows[0]["ticker"] == "AAPL"
+    sql, params = store.session.call_pairs[-1]
+    assert "signal_daily_values" in sql
+    assert "label_ready" in sql
+    assert "fwd_excess_return_20d IS NOT NULL" in sql
+    assert "signal_momentum_20d" in sql
+    assert "signal_low_debt" in sql
+    assert params["lookback_days"] == 180
+    assert params["market"] == "us"
 
 
 def test_latest_opportunity_ranker_scores_filters_by_market() -> None:
