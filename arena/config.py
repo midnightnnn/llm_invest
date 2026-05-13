@@ -456,7 +456,8 @@ def normalize_agent_settings(settings: Settings) -> Settings:
         memory_compaction_model = ""
 
         if existing is not None:
-            provider = str(existing.provider or "").strip().lower()
+            raw_provider = str(existing.provider or "").strip().lower()
+            provider = canonical_provider(raw_provider) or raw_provider
             model = str(existing.model or "").strip()
             target_market = str(existing.target_market or "").strip().lower()
             if isinstance(existing.system_prompt, str) and existing.system_prompt.strip():
@@ -1047,7 +1048,8 @@ def apply_runtime_overrides(settings: Settings, repo: Any, tenant_id: str) -> Se
                 parsed_models[aid] = model
 
             # Per-agent provider (new field; fallback: infer from id)
-            provider = str(entry.get("provider") or "").strip().lower()
+            raw_provider = str(entry.get("provider") or "").strip().lower()
+            provider = canonical_provider(raw_provider) or raw_provider
             if not provider:
                 provider = canonical_provider(aid)
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from arena.config import AgentConfig, apply_runtime_overrides, load_settings, merge_agent_risk_settings
+from arena.config import AgentConfig, apply_runtime_overrides, load_settings, merge_agent_risk_settings, validate_settings
 from tests.config.agents_config_helpers import _FakeConfigRepo
 
 
@@ -183,6 +183,31 @@ def test_agents_config_infers_provider_from_id() -> None:
     )
 
     out = apply_runtime_overrides(settings, repo, tenant_id="t")
+
+    assert out.agent_configs["gpt"].provider == "gpt"
+    assert out.agent_configs["gemini"].provider == "gemini"
+    assert out.agent_configs["claude"].provider == "claude"
+
+
+def test_agents_config_canonicalizes_provider_aliases_for_validation() -> None:
+    settings = load_settings()
+    settings.openai_api_key = "test-openai-key"
+    settings.gemini_api_key = "test-gemini-key"
+    settings.anthropic_api_key = "test-anthropic-key"
+    settings.anthropic_use_vertexai = False
+    settings.research_enabled = False
+    repo = _FakeConfigRepo(
+        {
+            "agents_config": json.dumps([
+                {"id": "gpt", "provider": "openai", "model": "gpt-5.2"},
+                {"id": "gemini", "provider": "google", "model": "gemini-3-flash-preview"},
+                {"id": "claude", "provider": "anthropic", "model": "claude-sonnet-4-6"},
+            ]),
+        }
+    )
+
+    out = apply_runtime_overrides(settings, repo, tenant_id="t")
+    validate_settings(out, require_llm=True)
 
     assert out.agent_configs["gpt"].provider == "gpt"
     assert out.agent_configs["gemini"].provider == "gemini"
