@@ -39,7 +39,7 @@ def test_credential_draft_api_lists_and_applies_model_key(monkeypatch, tmp_path)
         for item in build_credential_tool_entries(repo=repo, settings=load_settings(), tenant_id="local")
         if item.name == "propose_model_key_change"
     )
-    draft = tool(provider="gemini", model="gemini-3-flash-preview", action="upsert")
+    draft = tool(provider="gemini", action="upsert")
     token = draft["approval_token"]
 
     listing = client.get("/investment-chat/credential-drafts", params={"tenant_id": "local"})
@@ -59,7 +59,8 @@ def test_credential_draft_api_lists_and_applies_model_key(monkeypatch, tmp_path)
     body = response.json()
     assert body["status"] == "applied"
     assert body["provider"] == "gemini"
-    assert body["reload_url"] == "/investment-chat?tenant_id=local&provider=gemini&model=gemini-3-flash-preview"
+    assert body["model"]
+    assert body["reload_url"] == f"/investment-chat?tenant_id=local&provider=gemini&model={body['model']}"
     assert repo.runtime_credentials["local"]["has_gemini"] is True
 
 

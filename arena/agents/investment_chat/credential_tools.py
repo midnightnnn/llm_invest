@@ -6,17 +6,16 @@ from typing import Any, Literal
 from uuid import uuid4
 
 from arena.agents.investment_chat.audit import append_chat_audit
-from arena.agents.investment_chat.context import REQUEST_MODEL, REQUEST_PROVIDER, normalize_tenant
+from arena.agents.investment_chat.context import REQUEST_PROVIDER, normalize_tenant
 from arena.agents.investment_chat.drafts import (
     approval_token,
     load_credential_draft,
     save_credential_draft,
 )
 from arena.agents.investment_chat.scope import chat_actor_email
-from arena.agents.investment_chat.selection import normalize_chat_model_selection
 from arena.agents.investment_chat.utils import utc_iso
 from arena.config import Settings
-from arena.providers.registry import canonical_provider, default_model_for_provider, list_adk_provider_specs
+from arena.providers.registry import canonical_provider, list_adk_provider_specs
 from arena.tools.registry import ToolEntry
 
 CREDENTIAL_CHANGE_PROPOSE_ACTION = "chat_credential_change_propose"
@@ -87,14 +86,6 @@ def _normalize_provider(value: str | None) -> str:
     if not requested:
         requested = canonical_provider(REQUEST_PROVIDER.get()) or str(REQUEST_PROVIDER.get() or "").strip().lower()
     return requested if requested in _allowed_provider_ids() else ""
-
-
-def _normalize_model(settings: Settings, provider: str, value: str | None) -> str:
-    raw = str(value or "").strip() or str(REQUEST_MODEL.get() or "").strip()
-    model = normalize_chat_model_selection(provider, raw)
-    if not model:
-        model = normalize_chat_model_selection(provider, default_model_for_provider(settings, provider))
-    return model
 
 
 def credential_draft_status_row(token: str, draft: dict[str, Any]) -> dict[str, Any]:
@@ -169,7 +160,6 @@ def build_credential_tool_entries(
 
     def propose_model_key_change(
         provider: str = "",
-        model: str = "",
         action: CredentialAction = "upsert",
         rationale: str = "",
     ) -> dict[str, Any]:
@@ -180,9 +170,6 @@ def build_credential_tool_entries(
         provider_token = _normalize_provider(provider)
         if not provider_token:
             return {"status": "error", "tenant_id": tenant, "error": "provider is required"}
-        model_token = _normalize_model(settings, provider_token, model) if action_token == "upsert" else ""
-        if action_token == "upsert" and not model_token:
-            return {"status": "error", "tenant_id": tenant, "error": "model is required"}
 
         now = datetime.now(timezone.utc)
         expires_at = now + timedelta(minutes=15)
@@ -190,13 +177,12 @@ def build_credential_tool_entries(
         if action_token == "delete":
             summary = f"{provider_label} LLM API key 삭제"
         else:
-            summary = f"{provider_label} LLM API key 추가/변경 ({model_token})"
+            summary = f"{provider_label} LLM API key 추가/변경"
         token = approval_token(
             {
                 "tenant_id": tenant,
                 "action": action_token,
                 "provider": provider_token,
-                "model": model_token,
                 "nonce": uuid4().hex,
             }
         )
@@ -207,7 +193,6 @@ def build_credential_tool_entries(
             "action": action_token,
             "provider": provider_token,
             "provider_label": provider_label,
-            "model": model_token,
             "created_at": utc_iso(now),
             "expires_at": utc_iso(expires_at),
             "summary": summary,
@@ -220,7 +205,7 @@ def build_credential_tool_entries(
             tenant_id=tenant,
             action=CREDENTIAL_CHANGE_PROPOSE_ACTION,
             status="draft",
-            detail={"approval_token": token, "action": action_token, "provider": provider_token, "model": model_token},
+            detail={"approval_token": token, "action": action_token, "provider": provider_token},
             user_email=chat_actor_email(),
         )
         return {
@@ -233,7 +218,6 @@ def build_credential_tool_entries(
             "action": action_token,
             "provider": provider_token,
             "provider_label": provider_label,
-            "model": model_token,
             "expires_at": draft["expires_at"],
             "summary": summary,
             "message": "LLM API key 입력/삭제 패널을 열었습니다. 실제 API key 값은 채팅에 쓰지 말고 화면의 별도 입력칸에 입력해야 합니다.",

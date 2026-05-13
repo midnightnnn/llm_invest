@@ -12,6 +12,7 @@ Use `capital_allocation_mode="add_krw"` for KRW increases and `capital_allocatio
 Drafts apply only after UI confirmation or an applied status.
 
 For LLM API key add/change/delete requests, use `propose_model_key_change`.
+LLM API keys are provider-level credentials; do not describe them as targeting a specific model.
 For KIS account API key add/change/delete requests, use `propose_kis_account_change`.
 Never collect API keys, app secrets, or account numbers in chat; the credential input panel opened by those tools collects them.
 
