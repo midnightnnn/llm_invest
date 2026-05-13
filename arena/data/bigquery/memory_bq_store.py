@@ -52,6 +52,20 @@ def _json_safe(value: Any) -> Any:
     return value
 
 
+def _json_or_none(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, (dict, list)):
+        return value
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return json.loads(text)
+    except Exception:
+        return None
+
+
 class MemoryBQStore:
     """Memory events, board posts, graph nodes/edges, and research briefings."""
 
@@ -143,7 +157,10 @@ class MemoryBQStore:
         ORDER BY created_at DESC
         LIMIT @limit
         """
-        return self.session.fetch_rows(sql, params)
+        rows = self.session.fetch_rows(sql, params)
+        for row in rows:
+            row["detail_json"] = _json_or_none(row.get("detail_json"))
+        return rows
 
     # ------------------------------------------------------------------
     # Memory events
@@ -1844,6 +1861,12 @@ class MemoryBQStore:
         for row in rows:
             payload = dict(row)
             payload["tenant_id"] = tenant
+            if "detail_json" in payload:
+                payload["detail_json"] = json.dumps(
+                    _json_safe(payload.get("detail_json") or {}),
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
             graph_rows.append(dict(payload))
             safe_rows.append(_json_safe(payload))
         errors = self.session.client.insert_rows_json(table_id, safe_rows)
@@ -1892,7 +1915,7 @@ class MemoryBQStore:
             conditions.append(f"({' OR '.join(filters)})")
 
         sql = f"""
-        SELECT briefing_id, created_at, ticker, category, headline, summary, sources
+        SELECT briefing_id, created_at, ticker, category, headline, summary, detail_json, sources
         FROM `{self.session.dataset_fqn}.research_briefings`
         WHERE {' AND '.join(conditions)}
         ORDER BY created_at DESC

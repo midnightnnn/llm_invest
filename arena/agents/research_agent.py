@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
+import re
 from typing import Any
 
 from google.adk import Agent, Runner
@@ -26,6 +28,102 @@ def _today_str() -> str:
     return utc_now().date().isoformat()
 
 
+def _research_output_schema_instruction() -> str:
+    return (
+        "\n\nReturn only valid JSON. Do not use markdown. All field values must be in English. "
+        "Use this schema exactly: "
+        '{"headline": "short title", '
+        '"summary": "25-35 words max compact investment summary", '
+        '"key_points": ["max 3 concise factual bullets"], '
+        '"investment_read": "one concise portfolio implication", '
+        '"risks": ["max 3 concise risks"], '
+        '"horizon": "days|weeks_to_months|months", '
+        '"sentiment": "positive|neutral|negative|mixed", '
+        '"confidence": 0.0}. '
+        "Keep summary compact enough for prompt injection; put supporting detail in key_points, investment_read, and risks."
+    )
+
+
+def _trim_text(value: object, *, max_len: int) -> str:
+    text = str(value or "").strip()
+    text = re.sub(r"\s+", " ", text)
+    if len(text) <= max_len:
+        return text
+    return text[: max_len - 3].rstrip() + "..."
+
+
+def _clean_text_list(value: object, *, max_items: int = 3, max_len: int = 96) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    out: list[str] = []
+    for item in value:
+        text = _trim_text(item, max_len=max_len)
+        if text:
+            out.append(text)
+        if len(out) >= max_items:
+            break
+    return out
+
+
+def _extract_json_object(text: str) -> dict[str, Any] | None:
+    raw = str(text or "").strip()
+    if not raw:
+        return None
+    fence = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw, flags=re.IGNORECASE | re.DOTALL)
+    candidates = [fence.group(1)] if fence else []
+    candidates.append(raw)
+    first = raw.find("{")
+    last = raw.rfind("}")
+    if 0 <= first < last:
+        candidates.append(raw[first : last + 1])
+    for candidate in candidates:
+        try:
+            parsed = json.loads(candidate)
+        except Exception:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return None
+
+
+def _parse_research_schema(raw_text: str, *, fallback_label: str, fallback_category: str) -> dict[str, Any]:
+    parsed = _extract_json_object(raw_text) or {}
+    label = str(fallback_label or "").strip() or "Research"
+    category = str(fallback_category or "").strip().lower() or "general"
+    headline = _trim_text(parsed.get("headline") or f"{label} research brief", max_len=90)
+    summary = _trim_text(parsed.get("summary") or raw_text, max_len=260)
+    key_points = _clean_text_list(parsed.get("key_points"), max_items=3)
+    risks = _clean_text_list(parsed.get("risks"), max_items=3)
+    investment_read = _trim_text(parsed.get("investment_read"), max_len=180)
+    horizon = str(parsed.get("horizon") or "").strip().lower()
+    if horizon not in {"days", "weeks_to_months", "months"}:
+        horizon = "weeks_to_months" if category == "held" else "days"
+    sentiment = str(parsed.get("sentiment") or "").strip().lower()
+    if sentiment not in {"positive", "neutral", "negative", "mixed"}:
+        sentiment = "neutral"
+    try:
+        confidence = float(parsed.get("confidence"))
+    except (TypeError, ValueError):
+        confidence = 0.0
+    confidence = max(0.0, min(1.0, confidence))
+    detail_json = {
+        "schema_version": "research_briefing.v1",
+        "headline": headline,
+        "summary": summary,
+        "key_points": key_points,
+        "investment_read": investment_read,
+        "risks": risks,
+        "horizon": horizon,
+        "sentiment": sentiment,
+        "confidence": confidence,
+    }
+    return {
+        "headline": headline,
+        "summary": summary,
+        "detail_json": detail_json,
+    }
+
+
 def _global_prompt() -> str:
     today = _today_str()
     return (
@@ -33,7 +131,8 @@ def _global_prompt() -> str:
         "미국·유럽·아시아 주요 지수의 **오늘 장중 또는 가장 최근 마감 기준** 등락률, "
         "중앙은행 정책(금리·양적완화), 원자재·유가·금 가격 변동, 달러 인덱스, 채권 수익률 등을 포괄하라. "
         "반드시 오늘 또는 직전 거래일의 수치를 사용하고, 며칠 전 데이터를 최신인 것처럼 쓰지 마라. "
-        "핵심 팩트·수치·방향만 구조화해서 한국어 300자 내외로 요약하라."
+        "핵심 팩트·수치·방향만 구조화하라."
+        + _research_output_schema_instruction()
     )
 
 
@@ -44,7 +143,8 @@ def _geopolitical_prompt() -> str:
         "전쟁·군사 충돌, 무역 분쟁·관세, 제재, 선거·정권 교체, "
         "에너지 공급 위기, 사이버 공격 등 금융시장에 영향을 줄 수 있는 "
         "지정학 이벤트를 빠짐없이 파악하라. "
-        "핵심 이벤트·관련국·시장 영향만 한국어 300자 내외로 요약하라."
+        "핵심 이벤트·관련국·시장 영향만 구조화하라."
+        + _research_output_schema_instruction()
     )
 
 
@@ -54,7 +154,8 @@ def _sector_prompt() -> str:
         f"오늘은 {today}이다. 최근 1주일({today} 기준)간 미국 주식시장 섹터별 동향을 Google 검색으로 조사하라. "
         "기술(AI/반도체), 헬스케어, 에너지, 금융, 소비재, 산업재, 유틸리티 등 "
         "주요 섹터의 실적 발표, 규제 변화, 수급 변동, 핵심 테마를 파악하라. "
-        "섹터 로테이션 시그널과 강세/약세 섹터를 한국어 300자 내외로 요약하라."
+        "섹터 로테이션 시그널과 강세/약세 섹터를 구조화하라."
+        + _research_output_schema_instruction()
     )
 
 
@@ -63,7 +164,8 @@ def _ticker_prompt(ticker: str) -> str:
     return (
         f"오늘은 {today}이다. 종목 {ticker}의 최근 1주일({today} 기준) 주요 뉴스와 이슈를 정리하라. "
         "다른 투자 에이전트가 매매 판단에 바로 활용할 수 있도록, "
-        "핵심 요인·리스크·촉매만 구조화해서 한국어 200~300자 내외로 핵심만 요약하라."
+        "핵심 요인·리스크·촉매만 구조화하라."
+        + _research_output_schema_instruction()
     )
 
 
@@ -199,10 +301,15 @@ class ResearchAgent:
                                 text += part.text
                 return text.strip()
 
-            summary = await asyncio.wait_for(_run(), timeout=self.settings.timeout_for("research"))
+            raw_summary = await asyncio.wait_for(_run(), timeout=self.settings.timeout_for("research"))
 
-            if not summary:
+            if not raw_summary:
                 return None
+            parsed = _parse_research_schema(
+                raw_summary,
+                fallback_label=label,
+                fallback_category=category,
+            )
 
             briefing_id = f"brf_{effective_ticker}_{int(utc_now().timestamp() * 1000)}"
             return {
@@ -210,8 +317,9 @@ class ResearchAgent:
                 "created_at": utc_now(),
                 "ticker": effective_ticker,
                 "category": category,
-                "headline": f"{label} 리서치 브리핑",
-                "summary": summary,
+                "headline": parsed["headline"],
+                "summary": parsed["summary"],
+                "detail_json": parsed["detail_json"],
                 "sources": "[]",
                 "trading_mode": self.settings.trading_mode,
             }

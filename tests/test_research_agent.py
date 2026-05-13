@@ -5,7 +5,7 @@ import asyncio
 import pytest
 from unittest.mock import MagicMock
 
-from arena.agents.research_agent import ResearchAgent
+from arena.agents.research_agent import ResearchAgent, _global_prompt, _parse_research_schema
 from arena.config import Settings
 from arena.data.bq import BigQueryRepository
 
@@ -76,6 +76,45 @@ def test_research_agent_stays_gemini_for_single_gpt_trader(mock_repo):
 # ---------------------------------------------------------------------------
 
 class TestResearchPhase:
+    def test_prompts_require_compact_english_json_schema(self):
+        """Research prompts ask Gemini for compact English structured JSON."""
+        prompt = _global_prompt()
+
+        assert "Return only valid JSON" in prompt
+        assert '"summary"' in prompt
+        assert '"key_points"' in prompt
+        assert "English" in prompt
+        assert "25-35 words" in prompt
+
+    def test_parse_research_schema_extracts_full_detail_and_compact_summary(self):
+        """Structured Gemini output becomes full detail_json plus compact summary fields."""
+        raw = """
+        ```json
+        {
+          "headline": "VZ research brief",
+          "summary": "EPS beat; FY26 guide raised; postpaid adds positive; defensive telecom thesis intact.",
+          "key_points": ["Q1 EPS beat", "FY26 adjusted EPS guide raised", "Postpaid adds positive"],
+          "investment_read": "Positive for defensive quality sleeve; monitor valuation after sharp move.",
+          "risks": ["Frontier integration", "Valuation after rally"],
+          "horizon": "weeks_to_months",
+          "sentiment": "positive",
+          "confidence": 0.74
+        }
+        ```
+        """
+
+        parsed = _parse_research_schema(raw, fallback_label="VZ", fallback_category="held")
+
+        assert parsed["headline"] == "VZ research brief"
+        assert parsed["summary"] == "EPS beat; FY26 guide raised; postpaid adds positive; defensive telecom thesis intact."
+        assert parsed["detail_json"]["key_points"] == [
+            "Q1 EPS beat",
+            "FY26 adjusted EPS guide raised",
+            "Postpaid adds positive",
+        ]
+        assert parsed["detail_json"]["risks"] == ["Frontier integration", "Valuation after rally"]
+        assert parsed["detail_json"]["sentiment"] == "positive"
+
     def test_success(self, research_agent):
         """_research_phase가 정상 결과 dict를 반환한다."""
         async def _mock_phase():

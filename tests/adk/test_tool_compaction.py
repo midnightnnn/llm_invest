@@ -247,6 +247,80 @@ def test_compact_tool_result_recommend_opportunities_keeps_validation_fields() -
     assert out["selection_scope"]["loaded_rows"] == 73
 
 
+def test_compact_memory_context_candidate_uses_lean_payload_without_summary_truncation() -> None:
+    long_reason = (
+        "Learned IC ranker score=+0.8661; contribs: momentum_20d(+0.2992) "
+        "meanrev_5d(+0.2325) pullback(+0.1566) lowvol(+0.1165); prob_up=50.0%"
+    )
+    out = _compact_tool_result_for_prompt(
+        "macro_snapshot",
+        {
+            "status": "ok",
+            "_memory_context": [
+                {
+                    "event_id": "mem_007610",
+                    "created_date": "2026-05-07",
+                    "event_type": "candidate_watchlist",
+                    "summary": "007610 candidate_watchlist: " + ("x" * 400),
+                    "importance_score": 0.38,
+                    "payload": {
+                        "source": "candidate_discovery",
+                        "ticker": "007610",
+                        "candidate_status": "watchlist",
+                        "source_tools": ["recommend_opportunities:aggressive"],
+                        "analyzed_by": ["forecast_returns", "get_fundamentals", "technical_signals"],
+                        "last_seen_rank": 1,
+                        "discovery_evidence": {
+                            "score": 0.86605,
+                            "reason_for": long_reason,
+                            "reason_risk": "blended_oos_ic=-0.024; signals_scored=17; model_confidence=low",
+                        },
+                    },
+                }
+            ],
+        },
+    )
+
+    memory = out["_memory_context"][0]
+    assert memory["event_id"] == "mem_007610"
+    assert memory["d"] == "2026-05-07"
+    assert memory["type"] == "candidate_watchlist"
+    assert memory["t"] == "007610"
+    assert memory["src"] == "recommend_opportunities:aggressive"
+    assert memory["checked"] == ["forecast_returns", "get_fundamentals", "technical_signals"]
+    assert memory["rank"] == 1
+    assert memory["score"] == 0.86605
+    assert memory["why"] == long_reason
+    assert memory["risk"] == "blended_oos_ic=-0.024; signals_scored=17; model_confidence=low"
+    assert "xxx" not in str(memory)
+    assert "..." not in memory["why"]
+
+
+def test_compact_memory_context_generic_keeps_full_summary() -> None:
+    summary = "Risk lesson: " + ("position sizing discipline matters. " * 20)
+    out = _compact_tool_result_for_prompt(
+        "macro_snapshot",
+        {
+            "status": "ok",
+            "_memory_context": [
+                {
+                    "event_id": "mem_lesson",
+                    "created_date": "2026-05-01",
+                    "event_type": "strategy_reflection",
+                    "summary": summary,
+                    "importance_score": 0.7,
+                    "outcome_label": "win",
+                }
+            ],
+        },
+    )
+
+    memory = out["_memory_context"][0]
+    assert memory["summary"] == summary
+    assert not memory["summary"].endswith("...")
+    assert memory["outcome"] == "win"
+
+
 def test_tool_wrapper_injects_memory_for_macro_tools_with_typed_query() -> None:
     captured: dict[str, object] = {}
 
@@ -261,7 +335,26 @@ def test_tool_wrapper_injects_memory_for_macro_tools_with_typed_query() -> None:
 
     def search_tool_memories(query):
         captured["query"] = query
-        return [{"event_id": "mem_macro", "summary": "High-rate regimes require smaller gross exposure."}]
+        return [
+            {
+                "event_id": "mem_macro",
+                "created_date": "2026-05-07",
+                "event_type": "candidate_watchlist",
+                "payload": {
+                    "source": "candidate_discovery",
+                    "ticker": "007610",
+                    "candidate_status": "watchlist",
+                    "source_tools": ["recommend_opportunities:aggressive"],
+                    "analyzed_by": ["forecast_returns"],
+                    "last_seen_rank": 1,
+                    "discovery_evidence": {
+                        "score": 0.86605,
+                        "reason_for": "Full reason survives in macro tool memory context.",
+                        "reason_risk": "Full risk survives too.",
+                    },
+                },
+            }
+        ]
 
     wrapper = build_tool_wrapper(
         ToolEntry(
@@ -281,7 +374,11 @@ def test_tool_wrapper_injects_memory_for_macro_tools_with_typed_query() -> None:
 
     out = wrapper()
 
-    assert out["_memory_context"][0]["summary"] == "High-rate regimes require smaller gross exposure."
+    memory = out["_memory_context"][0]
+    assert memory["t"] == "007610"
+    assert memory["src"] == "recommend_opportunities:aggressive"
+    assert memory["why"] == "Full reason survives in macro tool memory context."
+    assert memory["risk"] == "Full risk survives too."
     query = captured["query"]
     assert getattr(query, "key_type") == "regime"
     assert "regime:high_rates" in query.search_text()

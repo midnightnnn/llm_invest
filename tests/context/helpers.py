@@ -65,11 +65,17 @@ class FakeRepo:
         return [self.memory_by_id[eid] for eid in event_ids if eid in self.memory_by_id]
 
     def get_research_briefings(self, *, tickers=None, categories=None, limit=10, trading_mode="paper", tenant_id=None):
-        _ = (tickers, trading_mode, tenant_id)
+        _ = (trading_mode, tenant_id)
         rows = list(self.research_briefings)
+        filters = []
+        if tickers:
+            allowed_tickers = {str(ticker).strip().upper() for ticker in tickers if str(ticker).strip()}
+            filters.append(lambda row: str(row.get("ticker") or "").strip().upper() in allowed_tickers)
         if categories:
             allowed = {str(cat).strip().lower() for cat in categories}
-            rows = [row for row in rows if str(row.get("category") or "").strip().lower() in allowed]
+            filters.append(lambda row: str(row.get("category") or "").strip().lower() in allowed)
+        if filters:
+            rows = [row for row in rows if any(check(row) for check in filters)]
         return rows[:limit]
 
     def append_memory_access_events(self, rows, *, tenant_id=None):

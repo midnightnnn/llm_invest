@@ -180,6 +180,197 @@ class ContextBuilder:
             return text[:max_len]
         return text[: max_len - 3] + "..."
 
+    @staticmethod
+    def _json_dict(value: object) -> dict[str, Any]:
+        if isinstance(value, dict):
+            return value
+        if value is None:
+            return {}
+        try:
+            parsed = json.loads(str(value))
+        except Exception:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+
+    @staticmethod
+    def _research_sentiment_marker(value: object) -> str:
+        token = str(value or "").strip().lower()
+        if token == "positive":
+            return "+"
+        if token == "negative":
+            return "-"
+        if token == "mixed":
+            return "~"
+        return "0"
+
+    @staticmethod
+    def _date_token(value: object) -> str:
+        if isinstance(value, datetime):
+            return value.date().isoformat()
+        if isinstance(value, date):
+            return value.isoformat()
+        text = str(value or "").strip()
+        return text[:10] if len(text) >= 10 else ""
+
+    @staticmethod
+    def _clean_research_digest_text(value: object) -> str:
+        text = str(value or "").strip()
+        text = re.sub(r"[*_`#>]+", "", text)
+        text = re.sub(r"^\s*[-•]\s*", "", text, flags=re.MULTILINE)
+        text = re.sub(r"\s+", " ", text)
+        return text.strip()
+
+    def _render_research_context_line(self, row: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
+        ticker = str(row.get("ticker") or "").strip().upper()
+        category = str(row.get("category") or "").strip().lower()
+        label = ticker or category or "research"
+        headline = self._trim_text(row.get("headline"), max_len=90)
+        summary = self._trim_text(row.get("summary"), max_len=160)
+        detail = self._json_dict(row.get("detail_json"))
+        if detail:
+            digest = self._trim_text(detail.get("summary") or summary, max_len=180)
+            if not digest:
+                return None
+            date_token = self._date_token(row.get("created_at"))
+            sentiment = self._research_sentiment_marker(detail.get("sentiment"))
+            label_parts = [label]
+            if date_token:
+                label_parts.append(date_token)
+            if sentiment:
+                label_parts.append(sentiment)
+            risks = detail.get("risks")
+            if isinstance(risks, list) and risks:
+                risk = self._trim_text(risks[0], max_len=70)
+                if risk:
+                    digest = f"{digest} Risk: {risk}"
+            line = f"- [{' '.join(label_parts)}] {digest}"
+        else:
+            digest = self._trim_text(self._clean_research_digest_text(summary or headline), max_len=180)
+            if not digest:
+                return None
+            date_token = self._date_token(row.get("created_at"))
+            label_parts = [label]
+            if date_token:
+                label_parts.append(date_token)
+            line = f"- [{' '.join(label_parts)}] {digest}"
+        compact = {
+            "briefing_id": str(row.get("briefing_id") or "").strip(),
+            "created_at": row.get("created_at"),
+            "ticker": ticker or None,
+            "category": category or None,
+            "headline": headline,
+            "summary": summary,
+        }
+        if detail:
+            compact["detail_json"] = detail
+        return line, compact
+
+    @staticmethod
+    def _fmt_qty(value: object) -> str:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return "0"
+        if math.isfinite(number) and abs(number - round(number)) < 1e-9:
+            return str(int(round(number)))
+        return f"{number:.4f}".rstrip("0").rstrip(".")
+
+    @staticmethod
+    def _fmt_pct_brief(value: object, *, signed: bool = True) -> str:
+        try:
+            number = float(value) * 100.0
+        except (TypeError, ValueError):
+            number = 0.0
+        if not math.isfinite(number):
+            number = 0.0
+        prefix = "+" if signed and number >= 0 else ""
+        return f"{prefix}{number:.1f}%"
+
+    @staticmethod
+    def _fmt_sentiment_brief(value: object) -> str:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            number = 0.0
+        if not math.isfinite(number):
+            number = 0.0
+        return f"{number:+.4f}"
+
+    @staticmethod
+    def _fmt_krw_brief(value: object) -> str:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            number = 0.0
+        if not math.isfinite(number):
+            number = 0.0
+        return f"{number:,.0f} KRW"
+
+    @staticmethod
+    def _fmt_price_brief(*, native: object, krw: object, currency: object) -> str:
+        code = str(currency or "").strip().upper()
+        try:
+            native_value = float(native) if native is not None else None
+        except (TypeError, ValueError):
+            native_value = None
+        if native_value is not None and math.isfinite(native_value) and code:
+            if code == "USD":
+                return f"${native_value:,.2f}"
+            return f"{native_value:,.2f} {code}"
+        return ContextBuilder._fmt_krw_brief(krw)
+
+    def _build_positions_brief(
+        self,
+        *,
+        position_rows: list[dict[str, Any]],
+        market_rows: list[dict[str, Any]],
+    ) -> list[str]:
+        """Builds compact prompt-facing lines by joining positions with market features."""
+        market_by_ticker = {
+            str(row.get("ticker") or "").strip().upper(): row
+            for row in market_rows
+            if isinstance(row, dict) and str(row.get("ticker") or "").strip()
+        }
+        lines: list[str] = []
+        for row in position_rows:
+            ticker = str(row.get("ticker") or "").strip().upper()
+            if not ticker:
+                continue
+            market = market_by_ticker.get(ticker) or {}
+            quote_currency = row.get("quote_currency") or market.get("quote_currency") or ""
+            parts = [
+                ticker,
+                f"qty={self._fmt_qty(row.get('quantity'))}",
+                f"weight={self._fmt_pct_brief(row.get('weight'), signed=False)}",
+                "avg="
+                + self._fmt_price_brief(
+                    native=row.get("avg_price_native"),
+                    krw=row.get("avg_price_krw"),
+                    currency=quote_currency,
+                ),
+                "price="
+                + self._fmt_price_brief(
+                    native=row.get("market_price_native"),
+                    krw=row.get("market_price_krw"),
+                    currency=quote_currency,
+                ),
+                f"value={self._fmt_krw_brief(row.get('market_value_krw'))}",
+                f"uPnL={self._fmt_pct_brief(row.get('unrealized_pnl_ratio'))}",
+            ]
+            if market.get("ret_5d") is not None:
+                parts.append(f"r5={self._fmt_pct_brief(market.get('ret_5d'))}")
+            if market.get("ret_20d") is not None:
+                parts.append(f"r20={self._fmt_pct_brief(market.get('ret_20d'))}")
+            if market.get("volatility_20d") is not None:
+                parts.append(f"vol20={self._fmt_pct_brief(market.get('volatility_20d'), signed=False)}")
+            if market.get("sentiment_score") is not None:
+                parts.append(f"sentiment={self._fmt_sentiment_brief(market.get('sentiment_score'))}")
+            as_of = str(market.get("as_of_ts") or "").strip()
+            if as_of:
+                parts.append(f"asof={as_of[:10]}")
+            lines.append(" ".join(parts))
+        return lines
+
     def _append_keyword(self, keywords: list[str], value: object) -> None:
         """Adds one normalized ticker keyword if it is non-empty and unique."""
         token = str(value or "").strip().upper()
@@ -1463,24 +1654,12 @@ class ContextBuilder:
         for row in rows[:6]:
             if not isinstance(row, dict):
                 continue
-            ticker = str(row.get("ticker") or "").strip().upper()
-            category = str(row.get("category") or "").strip().lower()
-            headline = self._trim_text(row.get("headline"), max_len=90)
-            summary = self._trim_text(row.get("summary"), max_len=160)
-            label = ticker or category or "research"
-            text = " - ".join(part for part in [headline, summary] if part)
-            if text:
-                lines.append(f"- [{label}] {text}")
-            compact_rows.append(
-                {
-                    "briefing_id": str(row.get("briefing_id") or "").strip(),
-                    "created_at": row.get("created_at"),
-                    "ticker": ticker or None,
-                    "category": category or None,
-                    "headline": headline,
-                    "summary": summary,
-                }
-            )
+            rendered = self._render_research_context_line(row)
+            if rendered is None:
+                continue
+            line, compact = rendered
+            lines.append(line)
+            compact_rows.append(compact)
         return "\n".join(lines), compact_rows
 
     def _compress_relation_context(self, rows: list[dict[str, Any]]) -> str:
@@ -2680,6 +2859,10 @@ class ContextBuilder:
         for row in prompt_memory_rows[:12]:
             key = str(row.get("event_type") or "").strip().lower() or "unknown"
             memory_event_counts[key] = memory_event_counts.get(key, 0) + 1
+        positions_brief = self._build_positions_brief(
+            position_rows=pos_rows,
+            market_rows=market_rows,
+        )
         logger.info(
             "[cyan]context summary[/cyan] agent=%s cycle_id=%s memories=%d active_theses=%d graph=%d board=%d types=%s",
             agent_id,
@@ -2738,6 +2921,7 @@ class ContextBuilder:
             "order_budget": _safe_json(order_budget),
             "sleeve_state": _safe_json(sleeve_state),
             "fx_info": _safe_json(fx_info),
+            "positions_brief": _safe_json(positions_brief),
             "performance_context": "\n".join(perf_lines).strip(),
             "active_thesis_context": active_thesis_context,
             "market_context": _safe_json(market_rows),

@@ -7,6 +7,7 @@ those optional dependencies are unavailable, callers should use
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from pathlib import Path
@@ -133,6 +134,7 @@ class LocalChromaVectorStore:
         primary_strategy_tag: str = "",
         primary_sector: str = "",
         context_tags: dict[str, Any] | None = None,
+        payload: dict[str, Any] | None = None,
         graph_node_id: str = "",
         causal_chain_id: str = "",
     ) -> None:
@@ -163,6 +165,8 @@ class LocalChromaVectorStore:
             if context_tags:
                 for key, value in context_tags.items():
                     metadata[f"context_{key}"] = ",".join(str(v) for v in value) if isinstance(value, list) else str(value)
+            if payload:
+                metadata["payload_json"] = json.dumps(payload, ensure_ascii=False, default=str)
             collection.upsert(ids=[event_id], documents=[summary], embeddings=[vector], metadatas=[metadata])
         except Exception as exc:
             logger.warning("[yellow]Local vector save skipped[/yellow] event=%s err=%s", str(event_id)[:8], str(exc))
@@ -191,6 +195,15 @@ class LocalChromaVectorStore:
         ):
             if meta.get(key) is not None:
                 row[key] = meta.get(key)
+        payload_json = meta.get("payload_json")
+        if isinstance(payload_json, str) and payload_json.strip():
+            try:
+                parsed = json.loads(payload_json)
+            except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, dict):
+                row["payload"] = parsed
+                row["payload_json"] = payload_json
         return row
 
     def search_similar_memories(

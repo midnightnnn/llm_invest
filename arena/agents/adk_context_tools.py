@@ -24,6 +24,32 @@ _PUBLIC_RESEARCH_CATEGORIES = ("global_market", "geopolitical", "sector_trends")
 logger = logging.getLogger(__name__)
 
 
+def _parse_json_field(value: Any) -> Any:
+    if isinstance(value, (dict, list)):
+        return value
+    if value is None:
+        return None
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return json.loads(text)
+    except Exception:
+        return value
+
+
+def _normalize_research_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        normalized = dict(row)
+        if "detail_json" in normalized:
+            normalized["detail_json"] = _parse_json_field(normalized.get("detail_json"))
+        out.append(normalized)
+    return out
+
+
 class _ContextTools:
     """Exposes per-cycle context as callable ADK tools."""
 
@@ -436,6 +462,7 @@ class _ContextTools:
                 tenant_id=self.tenant_id,
             )
         )
+        rows = _normalize_research_rows(rows)
         if len(rows) >= max_limit:
             return rows[:max_limit]
 
@@ -466,6 +493,7 @@ class _ContextTools:
                 tenant_id=fallback_tenant,
             )
         )
+        fallback_rows = _normalize_research_rows(fallback_rows)
         if not fallback_rows:
             return rows[:max_limit]
 

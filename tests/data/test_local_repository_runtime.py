@@ -20,6 +20,12 @@ def test_research_briefings_round_trip_with_filters(repo):
                 "category": "global_market",
                 "headline": "Global",
                 "summary": "Macro update",
+                "detail_json": {
+                    "summary": "Macro update",
+                    "key_points": ["Stocks firm", "Oil higher"],
+                    "risks": ["Inflation pressure"],
+                    "sentiment": "neutral",
+                },
                 "sources": "[]",
                 "trading_mode": "paper",
             },
@@ -54,6 +60,7 @@ def test_research_briefings_round_trip_with_filters(repo):
 
     category_rows = repo.get_research_briefings(categories=["global_market"], limit=10)
     assert [row["briefing_id"] for row in category_rows] == ["brf_global"]
+    assert category_rows[0]["detail_json"]["key_points"] == ["Stocks firm", "Oil higher"]
 
     live_rows = repo.get_research_briefings(trading_mode="live", limit=10)
     assert [row["briefing_id"] for row in live_rows] == ["brf_live"]

@@ -1044,6 +1044,7 @@ TABLE_DDLS: tuple[str, ...] = (
       category STRING NOT NULL,
       headline STRING NOT NULL,
       summary STRING NOT NULL,
+      detail_json JSON,
       sources STRING,
       trading_mode STRING NOT NULL
     )

@@ -88,6 +88,52 @@ class _MemoryStoreForDedupedToolMemory:
         return "local"
 
 
+class _VectorStoreForLegacyCandidateMemory:
+    def search_similar_memories(self, **kwargs):
+        _ = kwargs
+        return [
+            {
+                "event_id": "mem_candidate",
+                "summary": "007610 candidate_watchlist: surfaced by recommend_opportunities:aggressive rank=1. Reas...",
+                "importance_score": 0.38,
+                "created_at": datetime.fromisoformat("2026-05-07T00:00:00+00:00"),
+            }
+        ]
+
+
+class _RepoForLegacyCandidateMemory:
+    def memory_event_by_id(self, *, event_id: str, tenant_id: str | None = None):
+        assert event_id == "mem_candidate"
+        assert tenant_id == "local"
+        return {
+            "event_id": "mem_candidate",
+            "event_type": "candidate_watchlist",
+            "summary": "007610 candidate_watchlist: full stored memory summary",
+            "payload_json": {
+                "source": "candidate_discovery",
+                "ticker": "007610",
+                "candidate_status": "watchlist",
+                "source_tools": ["recommend_opportunities:aggressive"],
+                "analyzed_by": ["forecast_returns", "get_fundamentals", "technical_signals"],
+                "last_seen_rank": 1,
+                "discovery_evidence": {
+                    "score": 0.86605,
+                    "reason_for": "Learned IC ranker score=+0.8661; contribs: momentum_20d(+0.2992)",
+                    "reason_risk": "model_confidence=low",
+                },
+            },
+        }
+
+
+class _MemoryStoreForLegacyCandidateMemory:
+    def __init__(self) -> None:
+        self.vector_store = _VectorStoreForLegacyCandidateMemory()
+        self.repo = _RepoForLegacyCandidateMemory()
+
+    def _tenant(self) -> str:
+        return "local"
+
+
 class _RepoForToolSummary:
     def __init__(self) -> None:
         self.events = []
@@ -145,6 +191,38 @@ def test_persist_candidate_memories_uses_candidate_ledger() -> None:
     assert call["cycle_id"] == "cycle_candidate"
     assert call["phase"] == "execution"
     assert "MSFT" in call["candidate_ledger"]
+
+
+def test_record_memory_passes_payload_to_vector_store() -> None:
+    calls: list[dict] = []
+
+    class Repo:
+        def write_memory_event(self, event) -> None:
+            self.event = event
+
+    class VectorStore:
+        def save_memory_vector(self, **kwargs) -> None:
+            calls.append(kwargs)
+
+    from arena.memory.store import MemoryStore
+
+    store = MemoryStore(repo=Repo(), vector_store=VectorStore(), trading_mode="paper", memory_policy=None)
+    payload = {
+        "source": "candidate_discovery",
+        "ticker": "007610",
+        "discovery_evidence": {"reason_for": "reason survives"},
+    }
+
+    store.record_memory(
+        agent_id="claude",
+        summary="007610 candidate_watchlist: reason survives",
+        event_type="candidate_watchlist",
+        score=0.38,
+        payload=payload,
+    )
+
+    assert calls
+    assert calls[0]["payload"] == payload
 
 
 def test_decide_orders_keeps_tool_events_reference_for_wrapped_tools(monkeypatch) -> None:
@@ -256,6 +334,50 @@ def test_search_tool_memories_includes_created_date() -> None:
     assert rows[0]["created_date"] == "2026-03-05"
     assert rows[0]["created_at"].startswith("2026-03-05T00:00:00")
     assert rows[0]["outcome_label"] == "win"
+
+
+def test_search_tool_memories_keeps_full_summary_without_slice() -> None:
+    long_summary = "Macro-sensitive trim discipline mattered. " * 20
+
+    class VectorStore:
+        def search_similar_memories(self, **kwargs):
+            _ = kwargs
+            return [{"event_id": "mem_long", "summary": long_summary, "importance_score": 0.8}]
+
+    class MemoryStore:
+        vector_store = VectorStore()
+
+        def _tenant(self) -> str:
+            return "local"
+
+    runner = _ADKDecisionRunner.__new__(_ADKDecisionRunner)
+    runner.agent_id = "gpt"
+    runner.settings = type("SettingsStub", (), {"trading_mode": "paper", "memory_policy": None})()
+    runner._memory_store = MemoryStore()
+    runner._seen_memory_ids = set()
+
+    rows = runner._search_tool_memories("macro regime trim discipline")
+
+    assert rows is not None
+    assert rows[0]["summary"] == long_summary
+    assert not rows[0]["summary"].endswith("...")
+
+
+def test_search_tool_memories_enriches_legacy_vector_hit_from_repo_payload() -> None:
+    runner = _ADKDecisionRunner.__new__(_ADKDecisionRunner)
+    runner.agent_id = "claude"
+    runner.settings = type("SettingsStub", (), {"trading_mode": "paper", "memory_policy": None})()
+    runner._memory_store = _MemoryStoreForLegacyCandidateMemory()
+    runner._seen_memory_ids = set()
+
+    rows = runner._search_tool_memories("007610 opportunity")
+
+    assert rows is not None
+    assert rows[0]["event_id"] == "mem_candidate"
+    assert rows[0]["event_type"] == "candidate_watchlist"
+    assert rows[0]["summary"] == "007610 candidate_watchlist: full stored memory summary"
+    assert rows[0]["payload"]["ticker"] == "007610"
+    assert rows[0]["payload"]["discovery_evidence"]["score"] == 0.86605
 
 
 def test_search_tool_memories_skips_initially_injected_event_ids() -> None:

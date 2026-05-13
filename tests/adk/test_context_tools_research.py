@@ -9,6 +9,27 @@ from tests.adk.context_tools_helpers import (
 )
 
 
+class _RepoForStructuredResearch:
+    def get_research_briefings(self, *, tickers=None, categories=None, limit=10, trading_mode="paper", tenant_id=None):
+        _ = (tickers, categories, trading_mode, tenant_id)
+        return [
+            {
+                "briefing_id": "brf_vz",
+                "ticker": "VZ",
+                "category": "held",
+                "headline": "VZ research brief",
+                "summary": "EPS beat; FY26 guide raised; postpaid adds positive.",
+                "detail_json": {
+                    "summary": "EPS beat; FY26 guide raised; postpaid adds positive.",
+                    "key_points": ["Q1 EPS beat", "FY26 guide raised"],
+                    "risks": ["valuation after rally"],
+                    "sentiment": "positive",
+                    "confidence": 0.74,
+                },
+            }
+        ][:limit]
+
+
 def test_search_peer_lessons_returns_only_compactor_reflections() -> None:
     tool = _ContextTools.__new__(_ContextTools)
     tool.repo = _RepoForPeerLessons()
@@ -98,3 +119,17 @@ def test_get_research_briefing_does_not_fallback_for_ticker_queries(monkeypatch)
             "tenant_id": "tenant-a",
         }
     ]
+
+
+def test_get_research_briefing_returns_full_structured_schema() -> None:
+    tool = _ContextTools.__new__(_ContextTools)
+    tool.repo = _RepoForStructuredResearch()
+    tool.settings = load_settings()
+    tool.settings.trading_mode = "paper"
+    tool.tenant_id = "tenant-a"
+
+    out = tool.get_research_briefing(tickers=["VZ"], limit=1)
+
+    assert out[0]["detail_json"]["key_points"] == ["Q1 EPS beat", "FY26 guide raised"]
+    assert out[0]["detail_json"]["risks"] == ["valuation after rally"]
+    assert out[0]["detail_json"]["confidence"] == 0.74

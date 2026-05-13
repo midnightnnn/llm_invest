@@ -237,3 +237,68 @@ def test_context_builder_returns_empty_memory_when_state_query_has_no_vector_hit
     context = builder.build(agent_id="gpt", snapshot=snapshot)
     assert context["memory_events"] == []
     assert context["memory_context"] == ""
+
+
+def test_context_builder_renders_research_detail_json_as_compact_digest() -> None:
+    repo = FakeRepo()
+    repo.research_briefings = [
+        {
+            "briefing_id": "brf_vz",
+            "created_at": "2026-05-12T04:09:05Z",
+            "ticker": "VZ",
+            "category": "held",
+            "headline": "Verbose headline should not be repeated",
+            "summary": "EPS beat; FY26 guide raised; postpaid adds positive.",
+            "detail_json": {
+                "summary": "EPS beat; FY26 guide raised; postpaid adds positive.",
+                "risks": ["valuation after rally", "integration execution"],
+                "sentiment": "positive",
+            },
+        }
+    ]
+    snapshot = AccountSnapshot(
+        cash_krw=1_000_000,
+        total_equity_krw=1_200_000,
+        positions={
+            "VZ": Position(
+                ticker="VZ",
+                quantity=1,
+                avg_price_krw=100_000,
+                market_price_krw=120_000,
+            )
+        },
+    )
+    builder = ContextBuilder(repo=repo, memory=FakeMemory(), board=FakeBoard(), settings=_settings())
+
+    context = builder.build(agent_id="gpt", snapshot=snapshot)
+
+    assert context["research_context"] == (
+        "- [VZ 2026-05-12 +] EPS beat; FY26 guide raised; postpaid adds positive. "
+        "Risk: valuation after rally"
+    )
+    assert context["research_briefings"][0]["detail_json"]["risks"] == [
+        "valuation after rally",
+        "integration execution",
+    ]
+
+
+def test_context_builder_renders_legacy_research_as_compact_fallback() -> None:
+    repo = FakeRepo()
+    repo.research_briefings = [
+        {
+            "briefing_id": "brf_global_old",
+            "created_at": "2026-05-09T06:42:27Z",
+            "ticker": "GLOBAL",
+            "category": "global_market",
+            "headline": "GLOBAL 리서치 브리핑",
+            "summary": "**글로벌 증시:**\n* 미국 증시는 강세였고 중동 리스크로 유가와 금리가 상승했습니다.",
+        }
+    ]
+    snapshot = AccountSnapshot(cash_krw=1_000_000, total_equity_krw=1_000_000, positions={})
+    builder = ContextBuilder(repo=repo, memory=FakeMemory(), board=FakeBoard(), settings=_settings())
+
+    context = builder.build(agent_id="gpt", snapshot=snapshot)
+
+    assert context["research_context"] == (
+        "- [GLOBAL 2026-05-09] 글로벌 증시: 미국 증시는 강세였고 중동 리스크로 유가와 금리가 상승했습니다."
+    )

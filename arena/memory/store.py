@@ -540,6 +540,7 @@ class MemoryStore:
                         primary_strategy_tag=str((context_tags.get("strategies") or [""])[0] or ""),
                         primary_sector=str((context_tags.get("sectors") or [""])[0] or ""),
                         context_tags=context_tags or None,
+                        payload=payload,
                         graph_node_id=graph_node_id,
                         causal_chain_id=causal_chain_id,
                     )
@@ -590,6 +591,7 @@ class MemoryStore:
                 primary_strategy_tag=event.primary_strategy_tag or "",
                 primary_sector=event.primary_sector or "",
                 context_tags=event.context_tags or None,
+                payload=event.payload,
                 graph_node_id=event.graph_node_id or "",
                 causal_chain_id=event.causal_chain_id or "",
             )
@@ -746,6 +748,7 @@ class MemoryStore:
                 primary_strategy_tag=event.primary_strategy_tag or "",
                 primary_sector=event.primary_sector or "",
                 context_tags=event.context_tags or None,
+                payload=event.payload,
                 graph_node_id=event.graph_node_id or "",
                 causal_chain_id=event.causal_chain_id or "",
             )

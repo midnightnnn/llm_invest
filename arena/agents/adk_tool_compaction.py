@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from arena.agents.adk_memory_context import model_memory_context_rows
+
 
 _FORECAST_MODEL_DIRECTION_ALIASES: dict[str, str] = {
     "STRONG_BUY": "MODEL_UP_STRONG",
@@ -98,13 +100,7 @@ def _compaction_meta(
 
 
 def _compact_memory_context_rows(rows: Any) -> list[dict[str, Any]]:
-    return _compact_rows(
-        rows,
-        fields=("event_id", "created_date", "summary", "score", "author_id", "agent_id", "memory_source"),
-        limit=3,
-        text_fields=("summary",),
-        max_text=180,
-    )
+    return model_memory_context_rows(rows, limit=3)
 
 
 def _compact_tool_result_for_prompt(

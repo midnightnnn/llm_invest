@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime
 from typing import Any
@@ -28,6 +29,54 @@ def _tool_memory_search_text(query: Any) -> str:
     if raw_query is not None:
         return str(raw_query or "").strip()
     return str(query or "").strip()
+
+
+def _payload_from_memory_row(row: dict[str, Any]) -> dict[str, Any]:
+    payload = row.get("payload")
+    if isinstance(payload, dict):
+        return dict(payload)
+    payload_json = row.get("payload_json")
+    if isinstance(payload_json, dict):
+        return dict(payload_json)
+    if isinstance(payload_json, str) and payload_json.strip():
+        try:
+            parsed = json.loads(payload_json)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _enrich_tool_memory_hit(memory_store: Any, memory: dict[str, Any]) -> dict[str, Any]:
+    row = dict(memory)
+    if row.get("payload") or row.get("payload_json") or not row.get("event_id"):
+        return row
+    repo = getattr(memory_store, "repo", None)
+    loader = getattr(repo, "memory_event_by_id", None)
+    if not callable(loader):
+        return row
+    try:
+        full = loader(event_id=str(row.get("event_id")), tenant_id=memory_store._tenant())
+    except Exception:
+        return row
+    if not isinstance(full, dict):
+        return row
+    for key in (
+        "summary",
+        "event_type",
+        "payload_json",
+        "score",
+        "importance_score",
+        "memory_source",
+        "memory_tier",
+        "agent_id",
+    ):
+        if full.get(key) is not None:
+            row[key] = full.get(key)
+    payload = _payload_from_memory_row(row)
+    if payload:
+        row["payload"] = payload
+    return row
 
 
 def truncate_tool_result(value: Any, max_list: int = 30, max_str: int = 2000) -> Any:
@@ -125,6 +174,8 @@ def search_tool_memories(
         event_id = str(memory.get("event_id") or "").strip()
         if event_id and event_id in seen_memory_ids:
             continue
+        memory = _enrich_tool_memory_hit(memory_store, memory)
+        payload = _payload_from_memory_row(memory)
 
         outcome_score = memory.get("outcome_score")
         outcome_label = ""
@@ -139,13 +190,19 @@ def search_tool_memories(
                 outcome_label = "loss"
 
         row: dict[str, Any] = {
-            "summary": str(memory.get("summary") or "")[:220],
+            "event_id": event_id or None,
+            "summary": str(memory.get("summary") or ""),
             "importance_score": (
                 memory.get("importance_score")
                 if memory.get("importance_score") is not None
                 else memory.get("score", 0.5)
             ),
         }
+        for key in ("event_type", "score", "memory_source", "memory_tier", "agent_id"):
+            if memory.get(key) is not None:
+                row[key] = memory.get(key)
+        if payload:
+            row["payload"] = payload
         created = memory.get("created_at")
         if created and isinstance(created, datetime):
             row["created_at"] = created.isoformat()

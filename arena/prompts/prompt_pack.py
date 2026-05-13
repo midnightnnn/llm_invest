@@ -3,6 +3,7 @@ from __future__ import annotations
 import functools
 import json
 import logging
+import math
 from datetime import date, datetime
 from typing import Any, Callable
 
@@ -36,6 +37,108 @@ BOARD_FORMAT = load_prompt_text("adk", "board_format.txt")
 
 class PromptPack:
     """Single entrypoint for ADK prompt sections and rendered prompt payloads."""
+
+    @staticmethod
+    def _round_krw(value: Any) -> int:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            number = 0.0
+        if not math.isfinite(number):
+            number = 0.0
+        return int(round(number))
+
+    @staticmethod
+    def _round_usd(value: Any) -> float:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            number = 0.0
+        if not math.isfinite(number):
+            number = 0.0
+        return round(number, 2)
+
+    @staticmethod
+    def _int_or_zero(value: Any) -> int:
+        try:
+            return int(value or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    @staticmethod
+    def _compact_explore_analysis_funnel(value: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(value, dict):
+            return {"status": "none"}
+        skip_reasons = value.get("skip_reasons")
+        compact = {
+            key: int(raw)
+            for key, raw in value.items()
+            if key != "skip_reasons"
+            and isinstance(raw, int)
+            and int(raw) != 0
+        }
+        if isinstance(skip_reasons, dict) and skip_reasons:
+            compact["skip_reasons"] = dict(skip_reasons)
+        return compact or {"status": "none"}
+
+    @staticmethod
+    def _compact_explore_tool_budget(max_tool_calls: int) -> dict[str, Any]:
+        return {
+            "max_tool_calls": max_tool_calls,
+            "final_json_before_exhaustion": True,
+        }
+
+    @staticmethod
+    def _compact_explore_risk_policy(value: Any) -> dict[str, Any]:
+        raw = value if isinstance(value, dict) else {}
+        compact: dict[str, Any] = {}
+        for key in (
+            "max_position_ratio",
+            "min_cash_buffer_ratio",
+            "ticker_cooldown_seconds",
+            "single_share_buy_exception_enabled",
+        ):
+            if key in raw and raw.get(key) is not None:
+                compact[key] = raw[key]
+        return compact
+
+    @staticmethod
+    def _compact_explore_order_budget(value: Any) -> dict[str, Any]:
+        raw = value if isinstance(value, dict) else {}
+        compact: dict[str, Any] = {}
+        for key in ("cash_krw", "min_cash_required_krw", "max_buy_notional_krw"):
+            if key in raw and raw.get(key) is not None:
+                compact[key] = PromptPack._round_krw(raw.get(key))
+
+        caps: dict[str, int] = {}
+        cap_sources = (
+            ("cash", "max_buy_notional_by_cash_krw"),
+            ("sleeve", "max_buy_notional_by_sleeve_krw"),
+            ("turnover", "remaining_turnover_krw"),
+            ("order", "max_order_krw"),
+        )
+        for label, key in cap_sources:
+            if key in raw and raw.get(key) is not None:
+                caps[label] = PromptPack._round_krw(raw.get(key))
+        if caps:
+            compact["buy_caps_krw"] = caps
+
+        if "today_intents" in raw:
+            compact["today_intents"] = PromptPack._int_or_zero(raw.get("today_intents"))
+        if "daily_orders_cap" in raw:
+            cap = raw.get("daily_orders_cap")
+            if cap is None:
+                compact["daily_orders"] = "unlimited"
+            else:
+                daily_orders: dict[str, int] = {"cap": PromptPack._int_or_zero(cap)}
+                if raw.get("remaining_daily_orders") is not None:
+                    daily_orders["remaining"] = PromptPack._int_or_zero(raw.get("remaining_daily_orders"))
+                compact["daily_orders"] = daily_orders
+        if raw.get("usd_krw_rate") is not None:
+            compact["usd_krw_rate"] = PromptPack._round_krw(raw.get("usd_krw_rate"))
+        if raw.get("cash_usd") is not None:
+            compact["cash_usd"] = PromptPack._round_usd(raw.get("cash_usd"))
+        return compact
 
     @staticmethod
     @functools.lru_cache(maxsize=1)
@@ -185,27 +288,81 @@ class PromptPack:
         if not isinstance(analysis_funnel, dict):
             analysis_funnel = model_facing_funnel_metrics(context.get("analysis_funnel", {}))
 
-        payload = {
-            "cycle_phase": phase,
-            "performance_context": context.get("performance_context", ""),
-            "active_thesis_context": context.get("active_thesis_context", ""),
-            "memory_context": context.get("memory_context", ""),
-            "board_context": context.get("board_context", ""),
-            "market_context": context.get("market_context", context.get("market_features", [])),
-            "research_context": context.get("research_context", ""),
-            "portfolio": context.get("portfolio", {}),
-            "ticker_names": context.get("ticker_names", {}),
-            "risk_policy": context.get("risk_policy", {}),
-            "order_budget": context.get("order_budget", {}),
-            "analysis_funnel": analysis_funnel,
-            "candidate_cases": context.get("candidate_cases", []),
-            "decision_frame": context.get("decision_frame", ""),
-            "investment_style_context": context.get("investment_style_context", ""),
-            "tool_budget": {
-                "max_tool_calls": max_tool_calls,
-                "note": f"You have up to {max_tool_calls} tool calls. Plan accordingly and always output final JSON before exhausting your budget.",
-            },
+        tool_budget = {
+            "max_tool_calls": max_tool_calls,
+            "note": f"You have up to {max_tool_calls} tool calls. Plan accordingly and always output final JSON before exhausting your budget.",
         }
+        if phase == "explore":
+            payload = {
+                "cycle_phase": phase,
+                "analysis_funnel": PromptPack._compact_explore_analysis_funnel(analysis_funnel),
+                "tool_budget": PromptPack._compact_explore_tool_budget(max_tool_calls),
+            }
+            for key in (
+                "performance_context",
+                "active_thesis_context",
+                "memory_context",
+                "board_context",
+                "research_context",
+                "ticker_names",
+                "candidate_cases",
+                "decision_frame",
+                "investment_style_context",
+            ):
+                value = context.get(key)
+                if value:
+                    payload[key] = value
+            risk_policy = PromptPack._compact_explore_risk_policy(context.get("risk_policy", {}))
+            if risk_policy:
+                payload["risk_policy"] = risk_policy
+            order_budget = PromptPack._compact_explore_order_budget(context.get("order_budget", {}))
+            if order_budget:
+                payload["order_budget"] = order_budget
+            positions_brief = context.get("positions_brief")
+            if positions_brief:
+                payload["positions_brief"] = positions_brief
+                portfolio = context.get("portfolio", {})
+                positions = portfolio.get("positions") if isinstance(portfolio, dict) else {}
+                held_tickers = {
+                    str(ticker or "").strip().upper()
+                    for ticker in (positions.keys() if isinstance(positions, dict) else [])
+                    if str(ticker or "").strip()
+                }
+                market_context = context.get("market_context", context.get("market_features", []))
+                if isinstance(market_context, list) and held_tickers:
+                    nonheld_market_rows = [
+                        row for row in market_context
+                        if not isinstance(row, dict)
+                        or str(row.get("ticker") or "").strip().upper() not in held_tickers
+                    ]
+                    if nonheld_market_rows:
+                        payload["market_context"] = nonheld_market_rows
+            else:
+                portfolio = context.get("portfolio", {})
+                market_context = context.get("market_context", context.get("market_features", []))
+                if portfolio:
+                    payload["portfolio"] = portfolio
+                if market_context:
+                    payload["market_context"] = market_context
+        else:
+            payload = {
+                "cycle_phase": phase,
+                "performance_context": context.get("performance_context", ""),
+                "active_thesis_context": context.get("active_thesis_context", ""),
+                "memory_context": context.get("memory_context", ""),
+                "board_context": context.get("board_context", ""),
+                "market_context": context.get("market_context", context.get("market_features", [])),
+                "research_context": context.get("research_context", ""),
+                "portfolio": context.get("portfolio", {}),
+                "ticker_names": context.get("ticker_names", {}),
+                "risk_policy": context.get("risk_policy", {}),
+                "order_budget": context.get("order_budget", {}),
+                "analysis_funnel": analysis_funnel,
+                "candidate_cases": context.get("candidate_cases", []),
+                "decision_frame": context.get("decision_frame", ""),
+                "investment_style_context": context.get("investment_style_context", ""),
+                "tool_budget": tool_budget,
+            }
         relation_context = str(context.get("relation_context") or "").strip()
         if relation_context:
             payload["relation_context"] = relation_context
@@ -245,26 +402,25 @@ class PromptPack:
         ]
         if board_ctx:
             parts += ["", "[다른 에이전트 의견]", board_ctx]
+        payload = {
+            "order_budget": PromptPack._compact_explore_order_budget(context.get("order_budget", {})),
+            "risk_policy": PromptPack._compact_explore_risk_policy(context.get("risk_policy", {})),
+            "analysis_funnel": PromptPack._compact_explore_analysis_funnel(
+                model_facing_funnel_metrics(analysis_funnel)
+            ),
+            "tool_budget": PromptPack._compact_explore_tool_budget(max_tool_events),
+        }
+        candidate_cases = context.get("candidate_cases", [])
+        if candidate_cases:
+            payload["candidate_cases"] = candidate_cases
+        decision_frame = str(context.get("decision_frame") or "").strip()
+        if decision_frame:
+            payload["decision_frame"] = decision_frame
         parts += [
             "",
             EXECUTION_FORMAT,
             "",
-            json.dumps(
-                safe_json(
-                    {
-                        "order_budget": context.get("order_budget", {}),
-                        "risk_policy": context.get("risk_policy", {}),
-                        "analysis_funnel": model_facing_funnel_metrics(analysis_funnel),
-                        "candidate_cases": context.get("candidate_cases", []),
-                        "decision_frame": context.get("decision_frame", ""),
-                        "tool_budget": {
-                            "max_tool_calls": max_tool_events,
-                            "note": f"You have up to {max_tool_events} remaining tool calls.",
-                        },
-                    }
-                ),
-                ensure_ascii=False,
-            ),
+            json.dumps(safe_json(payload), ensure_ascii=False),
         ]
         return "\n".join(parts)
 

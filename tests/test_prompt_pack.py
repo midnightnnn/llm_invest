@@ -1,8 +1,27 @@
 from __future__ import annotations
 
+import json
+
 from arena.prompts.loader import prompt_path
 from arena.prompts.prompt_pack import PromptPack
 from arena.tools.registry import ToolEntry, ToolRegistry
+
+
+def _decision_payload_from_prompt(prompt: str) -> dict:
+    marker = "Context payload JSON"
+    json_start = prompt.index("{", prompt.index(marker))
+    return json.loads(prompt[json_start:])
+
+
+def _json_suffix_from_text(text: str) -> dict:
+    for idx, char in enumerate(text):
+        if char != "{":
+            continue
+        try:
+            return json.loads(text[idx:])
+        except json.JSONDecodeError:
+            continue
+    raise AssertionError("JSON suffix not found")
 
 
 def test_prompt_pack_renders_explore_prompt_from_single_entrypoint() -> None:
@@ -20,6 +39,172 @@ def test_prompt_pack_renders_explore_prompt_from_single_entrypoint() -> None:
     assert '"explore_status": "complete"' in prompt
     assert "Context payload JSON" in prompt
     assert '"max_tool_calls": 7' in prompt
+
+
+def test_explore_payload_uses_positions_brief_and_omits_raw_position_duplicates() -> None:
+    prompt = PromptPack.render_decision_prompt(
+        {
+            "cycle_phase": "explore",
+            "share_explore_summary": True,
+            "positions_brief": ["AAPL qty=2 weight=80.0% avg=$70.00 price=$80.00"],
+            "portfolio": {"positions": {"AAPL": {"quantity": 2, "market_price_krw": 120_000}}},
+            "market_context": [{"ticker": "AAPL", "close_price_native": 80.0}],
+            "performance_context": "NAV 300,000 KRW",
+            "active_thesis_context": "",
+            "memory_context": "",
+            "board_context": "",
+            "research_context": "- [AAPL] Research stays intact.",
+            "ticker_names": {},
+            "risk_policy": {"max_position_ratio": 0.35},
+            "order_budget": {"max_buy_notional_krw": 30_000},
+            "candidate_cases": [],
+            "decision_frame": "",
+            "investment_style_context": "",
+            "relation_context": "",
+            "graph_context": "",
+        },
+        [],
+        max_tool_calls=7,
+    )
+
+    payload = _decision_payload_from_prompt(prompt)
+
+    assert payload["positions_brief"] == ["AAPL qty=2 weight=80.0% avg=$70.00 price=$80.00"]
+    assert "portfolio" not in payload
+    assert "market_context" not in payload
+    assert "board_context" not in payload
+    assert "ticker_names" not in payload
+    assert "candidate_cases" not in payload
+    assert "decision_frame" not in payload
+    assert "memory_context" not in payload
+    assert "relation_context" not in payload
+    assert "graph_context" not in payload
+    assert payload["research_context"] == "- [AAPL] Research stays intact."
+    assert payload["risk_policy"] == {"max_position_ratio": 0.35}
+    assert payload["order_budget"] == {"max_buy_notional_krw": 30_000}
+
+
+def test_explore_payload_preserves_nonheld_market_rows_when_positions_brief_exists() -> None:
+    prompt = PromptPack.render_decision_prompt(
+        {
+            "cycle_phase": "explore",
+            "positions_brief": ["AAPL qty=2 weight=80.0% avg=$70.00 price=$80.00"],
+            "portfolio": {"positions": {"AAPL": {"quantity": 2}}},
+            "market_context": [
+                {"ticker": "AAPL", "close_price_native": 80.0},
+                {"ticker": "MSFT", "close_price_native": 210.0},
+            ],
+        },
+        [],
+        max_tool_calls=7,
+    )
+
+    payload = _decision_payload_from_prompt(prompt)
+
+    assert payload["positions_brief"] == ["AAPL qty=2 weight=80.0% avg=$70.00 price=$80.00"]
+    assert payload["market_context"] == [{"ticker": "MSFT", "close_price_native": 210.0}]
+    assert "portfolio" not in payload
+
+
+def test_explore_payload_compacts_budget_policy_funnel_and_tool_budget() -> None:
+    prompt = PromptPack.render_decision_prompt(
+        {
+            "cycle_phase": "explore",
+            "analysis_funnel": {
+                "discovered_candidates": 0,
+                "screened_only_candidates": 0,
+                "fully_analyzed_candidates": 0,
+                "analyzed_held_positions": 0,
+                "ordered_candidates": 0,
+                "intended_candidates": 0,
+                "executed_candidates": 0,
+                "skipped_candidates": 0,
+            },
+            "risk_policy": {
+                "max_order_krw": 100_000_000.0,
+                "max_daily_turnover_ratio": 10.0,
+                "max_position_ratio": 1.0,
+                "min_cash_buffer_ratio": 0.1,
+                "ticker_cooldown_seconds": 120,
+                "max_daily_orders": None,
+                "max_daily_orders_unlimited": True,
+                "single_share_buy_exception_enabled": True,
+                "sleeve_capital_krw": 5_000_000.0,
+            },
+            "order_budget": {
+                "display_currency": "KRW",
+                "cash": 749_133.5890466672,
+                "cash_krw": 749_133.5890466672,
+                "min_cash_required": 484_888.5189046667,
+                "min_cash_required_krw": 484_888.5189046667,
+                "max_buy_notional_by_cash": 264_245.0701420005,
+                "max_buy_notional_by_cash_krw": 264_245.0701420005,
+                "daily_turnover_limit": 48_488_851.89046667,
+                "remaining_turnover": 48_200_986.81046667,
+                "remaining_turnover_krw": 48_200_986.81046667,
+                "max_order": 100_000_000.0,
+                "max_order_krw": 100_000_000.0,
+                "max_buy_notional_by_sleeve": 264_245.0701420005,
+                "max_buy_notional_by_sleeve_krw": 264_245.0701420005,
+                "max_buy_notional": 264_245.0701420005,
+                "max_buy_notional_krw": 264_245.0701420005,
+                "today_intents": 1,
+                "daily_orders_cap": None,
+                "remaining_daily_orders": None,
+            },
+        },
+        [],
+        max_tool_calls=7,
+    )
+
+    payload = _decision_payload_from_prompt(prompt)
+
+    assert payload["analysis_funnel"] == {"status": "none"}
+    assert payload["tool_budget"] == {"max_tool_calls": 7, "final_json_before_exhaustion": True}
+    assert payload["risk_policy"] == {
+        "max_position_ratio": 1.0,
+        "min_cash_buffer_ratio": 0.1,
+        "ticker_cooldown_seconds": 120,
+        "single_share_buy_exception_enabled": True,
+    }
+    assert payload["order_budget"] == {
+        "cash_krw": 749_134,
+        "min_cash_required_krw": 484_889,
+        "max_buy_notional_krw": 264_245,
+        "buy_caps_krw": {
+            "cash": 264_245,
+            "sleeve": 264_245,
+            "turnover": 48_200_987,
+            "order": 100_000_000,
+        },
+        "today_intents": 1,
+        "daily_orders": "unlimited",
+    }
+    assert "cash" not in payload["order_budget"]
+    assert "max_buy_notional" not in payload["order_budget"]
+    assert "remaining_turnover" not in payload["order_budget"]
+    assert "max_daily_orders_unlimited" not in payload["risk_policy"]
+    assert "sleeve_capital_krw" not in payload["risk_policy"]
+
+
+def test_execution_payload_keeps_raw_portfolio_and_market_context() -> None:
+    prompt = PromptPack.render_decision_prompt(
+        {
+            "cycle_phase": "execution",
+            "positions_brief": ["AAPL compact line"],
+            "portfolio": {"positions": {"AAPL": {"quantity": 2}}},
+            "market_context": [{"ticker": "AAPL", "close_price_native": 80.0}],
+            "order_budget": {"max_buy_notional_krw": 30_000},
+        },
+        [],
+        max_tool_calls=5,
+    )
+
+    payload = _decision_payload_from_prompt(prompt)
+
+    assert payload["portfolio"] == {"positions": {"AAPL": {"quantity": 2}}}
+    assert payload["market_context"] == [{"ticker": "AAPL", "close_price_native": 80.0}]
+    assert "positions_brief" not in payload
 
 
 def test_legacy_agent_prompt_pack_import_stays_compatible() -> None:
@@ -61,6 +246,75 @@ def test_prompt_pack_renders_resume_and_board_prompts() -> None:
     assert '"max_tool_calls": 5' in resume
     assert board.startswith("cycle_phase: board")
     assert "주문 없음" in board
+
+
+def test_resume_prompt_uses_compact_budget_policy_funnel_and_tool_budget() -> None:
+    resume = PromptPack.render_resume_prompt(
+        {
+            "board_context": "",
+            "order_budget": {
+                "display_currency": "KRW",
+                "cash": 749_133.5890466672,
+                "cash_krw": 749_133.5890466672,
+                "min_cash_required": 484_888.5189046667,
+                "min_cash_required_krw": 484_888.5189046667,
+                "max_buy_notional_by_cash": 264_245.0701420005,
+                "max_buy_notional_by_cash_krw": 264_245.0701420005,
+                "remaining_turnover": 48_200_986.81046667,
+                "remaining_turnover_krw": 48_200_986.81046667,
+                "max_order": 100_000_000.0,
+                "max_order_krw": 100_000_000.0,
+                "max_buy_notional_by_sleeve": 264_245.0701420005,
+                "max_buy_notional_by_sleeve_krw": 264_245.0701420005,
+                "max_buy_notional": 264_245.0701420005,
+                "max_buy_notional_krw": 264_245.0701420005,
+                "today_intents": 1,
+                "daily_orders_cap": None,
+                "remaining_daily_orders": None,
+            },
+            "risk_policy": {
+                "max_order_krw": 100_000_000.0,
+                "max_daily_turnover_ratio": 10.0,
+                "max_position_ratio": 1.0,
+                "min_cash_buffer_ratio": 0.1,
+                "ticker_cooldown_seconds": 120,
+                "max_daily_orders": None,
+                "max_daily_orders_unlimited": True,
+                "single_share_buy_exception_enabled": True,
+                "sleeve_capital_krw": 5_000_000.0,
+            },
+            "candidate_cases": [],
+            "decision_frame": "",
+        },
+        analysis_funnel={"discovered_nonheld": 0, "pending_nonheld": 0},
+        max_tool_events=5,
+    )
+
+    payload = _json_suffix_from_text(resume)
+
+    assert payload["analysis_funnel"] == {"status": "none"}
+    assert payload["tool_budget"] == {"max_tool_calls": 5, "final_json_before_exhaustion": True}
+    assert payload["risk_policy"] == {
+        "max_position_ratio": 1.0,
+        "min_cash_buffer_ratio": 0.1,
+        "ticker_cooldown_seconds": 120,
+        "single_share_buy_exception_enabled": True,
+    }
+    assert payload["order_budget"] == {
+        "cash_krw": 749_134,
+        "min_cash_required_krw": 484_889,
+        "max_buy_notional_krw": 264_245,
+        "buy_caps_krw": {
+            "cash": 264_245,
+            "sleeve": 264_245,
+            "turnover": 48_200_987,
+            "order": 100_000_000,
+        },
+        "today_intents": 1,
+        "daily_orders": "unlimited",
+    }
+    assert "candidate_cases" not in payload
+    assert "decision_frame" not in payload
 
 
 def test_execution_prompt_describes_ontology_friendly_order_rationale() -> None:

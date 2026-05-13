@@ -20,11 +20,47 @@ _MEMORY_SELECT_COLUMNS = (
 )
 
 
+def _json_or_none(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, (dict, list)):
+        return value
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return json.loads(text)
+    except Exception:
+        return None
+
+
 class LocalMemoryStore:
     """DuckDB-backed memory, board, and graph store."""
 
     def __init__(self, session: DuckDBSession) -> None:
         self.session = session
+
+    def _has_column(self, table: str, column: str) -> bool:
+        rows = self.session.fetch_rows(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = 'main'
+              AND table_name = $table
+              AND column_name = $column
+            """,
+            {"table": table, "column": column},
+        )
+        return bool(rows)
+
+    def _ensure_research_detail_json_column(self) -> bool:
+        if self._has_column("research_briefings", "detail_json"):
+            return True
+        try:
+            self.session.execute("ALTER TABLE research_briefings ADD COLUMN detail_json JSON")
+            return True
+        except Exception:
+            return self._has_column("research_briefings", "detail_json")
 
     def recent_memory_events(
         self,
@@ -306,6 +342,7 @@ class LocalMemoryStore:
         if not rows:
             return
         tenant = self.session.resolve_tenant_id(tenant_id)
+        has_detail_json = self._ensure_research_detail_json_column()
         payload: list[dict[str, Any]] = []
         for row in rows:
             briefing_id = str(row.get("briefing_id") or "").strip()
@@ -326,6 +363,12 @@ class LocalMemoryStore:
                     "trading_mode": str(row.get("trading_mode") or "").strip().lower() or "paper",
                 }
             )
+            if has_detail_json:
+                payload[-1]["detail_json"] = json.dumps(
+                    _json_or_none(row.get("detail_json")) or {},
+                    ensure_ascii=False,
+                    default=str,
+                )
         self.session.insert_dicts("research_briefings", payload)
 
     def get_research_briefings(
@@ -357,9 +400,10 @@ class LocalMemoryStore:
         if filters:
             conditions.append(f"({' OR '.join(filters)})")
 
-        return self.session.fetch_rows(
+        detail_expr = "detail_json" if self._has_column("research_briefings", "detail_json") else "NULL AS detail_json"
+        rows = self.session.fetch_rows(
             f"""
-            SELECT briefing_id, created_at, ticker, category, headline, summary, sources
+            SELECT briefing_id, created_at, ticker, category, headline, summary, {detail_expr}, sources
             FROM research_briefings
             WHERE {' AND '.join(conditions)}
             ORDER BY created_at DESC
@@ -367,6 +411,9 @@ class LocalMemoryStore:
             """,
             params,
         )
+        for row in rows:
+            row["detail_json"] = _json_or_none(row.get("detail_json"))
+        return rows
 
     # ------------------------------------------------------------------
     # Memory write/update

@@ -100,6 +100,7 @@ class VectorStore:
         primary_strategy_tag: str = "",
         primary_sector: str = "",
         context_tags: dict[str, Any] | None = None,
+        payload: dict[str, Any] | None = None,
         graph_node_id: str = "",
         causal_chain_id: str = "",
     ) -> None:
@@ -143,6 +144,8 @@ class VectorStore:
             doc_data["primary_sector"] = str(primary_sector).strip().lower()
         if context_tags:
             doc_data["context_tags"] = dict(context_tags)
+        if payload:
+            doc_data["payload"] = dict(payload)
         if graph_node_id:
             doc_data["graph_node_id"] = str(graph_node_id).strip()
         if causal_chain_id:
@@ -190,6 +193,9 @@ class VectorStore:
         context_tags = data.get("context_tags")
         if isinstance(context_tags, dict):
             row["context_tags"] = dict(context_tags)
+        payload = data.get("payload")
+        if isinstance(payload, dict):
+            row["payload"] = dict(payload)
         graph_node_id = data.get("graph_node_id")
         if graph_node_id:
             row["graph_node_id"] = str(graph_node_id)

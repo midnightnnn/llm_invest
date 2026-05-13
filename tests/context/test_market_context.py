@@ -110,6 +110,55 @@ def test_context_builder_normalizes_market_features_from_raw_daily_closes() -> N
     assert repo.close_sources == ["open_trading_nasdaq", "open_trading_us"]
 
 
+def test_context_builder_builds_positions_brief_from_positions_and_market_features() -> None:
+    class RepoWithPositionFeature(FakeRepo):
+        def latest_market_features(self, tickers, limit, sources=None):
+            _ = (limit, sources)
+            self.calls.append(list(tickers))
+            if tickers == ["AAPL"]:
+                return [
+                    {
+                        "ticker": "AAPL",
+                        "as_of_ts": "2026-05-12T19:00:00+00:00",
+                        "close_price_native": 80.0,
+                        "quote_currency": "USD",
+                        "ret_5d": 0.1234,
+                        "ret_20d": -0.0567,
+                        "volatility_20d": 0.0189,
+                        "sentiment_score": 0.0123,
+                    }
+                ]
+            return []
+
+    repo = RepoWithPositionFeature()
+    settings = _settings()
+    settings.default_universe = []
+    builder = ContextBuilder(repo=repo, memory=FakeMemory(), board=FakeBoard(), settings=settings)
+    snapshot = AccountSnapshot(
+        cash_krw=60_000,
+        total_equity_krw=300_000,
+        positions={
+            "AAPL": Position(
+                ticker="AAPL",
+                quantity=2,
+                avg_price_krw=100_000,
+                market_price_krw=120_000,
+                avg_price_native=70.0,
+                market_price_native=80.0,
+                quote_currency="USD",
+                fx_rate=1500.0,
+            )
+        },
+    )
+
+    context = builder.build(agent_id="gpt", snapshot=snapshot)
+
+    assert context["positions_brief"] == [
+        "AAPL qty=2 weight=80.0% avg=$70.00 price=$80.00 value=240,000 KRW "
+        "uPnL=+20.0% r5=+12.3% r20=-5.7% vol20=1.9% sentiment=+0.0123 asof=2026-05-12"
+    ]
+
+
 def test_context_builder_loads_ticker_names_for_current_positions() -> None:
     repo = FakeRepo()
     repo.ticker_name_rows = {"025860": "남해화학"}
