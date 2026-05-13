@@ -7,6 +7,7 @@ from typing import Any
 
 from arena.config import Settings
 from arena.data.bq import BigQueryRepository
+from arena.prompts.loader import load_prompt_text
 
 from .macro_tools import MacroTools
 from .quant_tools import QuantTools
@@ -16,10 +17,13 @@ from .sentiment_tools import SentimentTools
 logger = logging.getLogger(__name__)
 
 
+def _model_description(tool_id: str) -> str:
+    return load_prompt_text("tools", "default_registry", f"{tool_id}.txt")
+
+
 def _tool(
     *,
     tool_id: str,
-    description: str,
     category: str,
     tier: str,
     label_ko: str,
@@ -31,7 +35,7 @@ def _tool(
     return ToolEntry(
         tool_id=tool_id,
         name=tool_id,
-        description=description,
+        description=_model_description(tool_id),
         category=category,
         callable=callable,
         tier=tier,
@@ -52,7 +56,6 @@ def _base_entries(
     return [
         _tool(
             tool_id="search_past_experiences",
-            description="Search your own past trades, lessons, and manual notes.",
             category="context",
             tier="core",
             label_ko="과거 경험 검색",
@@ -61,7 +64,6 @@ def _base_entries(
         ),
         _tool(
             tool_id="search_peer_lessons",
-            description="Search compacted lessons from other models for peer takeaways.",
             category="context",
             tier="core",
             label_ko="피어 교훈 검색",
@@ -70,7 +72,6 @@ def _base_entries(
         ),
         _tool(
             tool_id="get_research_briefing",
-            description="Fetches a global market, geopolitics, sector, and single-name research briefing.",
             category="context",
             tier="core",
             label_ko="리서치 브리핑",
@@ -79,7 +80,6 @@ def _base_entries(
         ),
         _tool(
             tool_id="scratch_run_python",
-            description="Temporary Python scratch workspace.",
             category="analysis",
             tier="core",
             label_ko="파이썬 낙서장",
@@ -88,12 +88,6 @@ def _base_entries(
         ),
         _tool(
             tool_id="portfolio_diagnosis",
-            description=(
-                "Diagnoses current holdings: concentration (HHI), per-ticker risk contribution, portfolio MDD, "
-                "weighted momentum/volatility, benchmark excess return, and current-holding joint-policy ranker scores. "
-                "Pure diagnosis — no allocation advice. "
-                "Use optimize_portfolio afterwards if you need rebalancing weights."
-            ),
             category="quant",
             tier="core",
             label_ko="포트폴리오 진단",
@@ -102,10 +96,6 @@ def _base_entries(
         ),
         _tool(
             tool_id="trade_performance",
-            description=(
-                "Analyses your closed round-trip trades (win rate, avg return, holding period, behavioral patterns) "
-                "and current unrealised P&L. Use to review your own track record before making new decisions."
-            ),
             category="context",
             tier="optional",
             label_ko="매매 성과 분석",
@@ -114,20 +104,6 @@ def _base_entries(
         ),
         _tool(
             tool_id="recommend_opportunities",
-            description=(
-                "Finds fresh buy and replacement ideas across the runtime universe. "
-                "Uses the latest regularized joint-policy ranker scores from shared prep, combining "
-                "momentum, pullback, mean reversion, low volatility, sentiment, forecasts, "
-                "RSI/MA/Bollinger technicals, and EP/BP/SP/ROE/growth/debt fundamentals. "
-                "Returns global top_n recommendations plus aggressive/balanced/defensive/"
-                "value/tactical profile context, with action, model confidence, risk notes, "
-                "and per-signal joint-policy contributions explaining why each ticker surfaced. "
-                "Useful when looking for new positions, portfolio rotation candidates, "
-                "or replacements for weaker holdings. Freshness is market-calendar aware: "
-                "weekend/holiday previous-session data is allowed with freshness metadata, "
-                "current-session prep gaps return status='degraded', and truly stale data "
-                "returns status='unusable' instead of silently falling back."
-            ),
             category="quant",
             tier="optional",
             callable=qt.recommend_opportunities,
@@ -137,11 +113,6 @@ def _base_entries(
         ),
         _tool(
             tool_id="screen_market",
-            description=(
-                "Low-level diagnostic candidate generator used by recommend_opportunities. "
-                "Surfaces raw screen-only rows across discovery buckets. "
-                "Use when inspecting raw bucket screens; it is screen-only and does not provide joint-policy confidence or per-signal ranker contributions."
-            ),
             category="quant",
             tier="optional",
             callable=qt.screen_market,
@@ -152,18 +123,6 @@ def _base_entries(
         ),
         _tool(
             tool_id="optimize_portfolio",
-            description=(
-                "Answers one question: how much of each ticker to hold. "
-                "Computes target weights for a basket (current holdings + new candidates) and emits portfolio-weight "
-                "rebalance suggestions. Final execution orders must still use explicit BUY/SELL quantity. Supports "
-                "forecast-enhanced, max-Sharpe, and HRP optimization modes. "
-                "Gracefully degrades: tickers with insufficient history are excluded (reported in data_quality.excluded); "
-                "forecast strategy falls back to HRP when coverage<50%; a single usable ticker returns weight=1.0. "
-                "Optional constraints — max_weight (per-name cap, e.g. 0.35), min_weight (drop floor, e.g. 0.02), "
-                "cash_buffer (0.0-0.5 reserve). regime_scale (0.3-1.0) scales weights down for risk-off. "
-                "Returns: weights, rebalance_orders, backtest_mdd, data_quality (status/excluded), status "
-                "(ok/degraded/unusable), decision_summary (headline_code + turnover + confidence), evidence_gaps."
-            ),
             category="quant",
             tier="optional",
             callable=qt.optimize_portfolio,
@@ -173,10 +132,6 @@ def _base_entries(
         ),
         _tool(
             tool_id="forecast_returns",
-            description=(
-                "Runs seven time-series models and summarizes each ticker with model-implied direction probability, vote counts, "
-                "model_direction label, and compact model details. If tickers are omitted, it defaults to the self-discovered candidate basket plus current holdings."
-            ),
             category="quant",
             tier="optional",
             callable=qt.forecast_returns,
@@ -186,11 +141,6 @@ def _base_entries(
         ),
         _tool(
             tool_id="technical_signals",
-            description=(
-                "Returns RSI, MACD, Bollinger Bands, moving-average trend, volume analysis (volume ratio, OBV trend, "
-                "price-volume confirmation), KOSPI investor flow signals (foreign/institutional net buy), "
-                "and KOSPI short-selling ratio."
-            ),
             category="quant",
             tier="optional",
             callable=qt.technical_signals,
@@ -200,7 +150,6 @@ def _base_entries(
         ),
         _tool(
             tool_id="sector_summary",
-            description="Summarizes sector rotation so you can see which groups are leading, lagging, and attracting capital.",
             category="quant",
             tier="optional",
             callable=qt.sector_summary,
@@ -210,10 +159,6 @@ def _base_entries(
         ),
         _tool(
             tool_id="get_fundamentals",
-            description=(
-                "Fetches valuation metrics for a basket. US stocks get PER/PBR/EPS/BPS, while KOSPI stocks get "
-                "EPS/BPS/ROE/debt ratio/growth metrics plus analyst consensus (target price, opinion, upside %)."
-            ),
             category="quant",
             tier="optional",
             callable=qt.get_fundamentals,
@@ -223,10 +168,6 @@ def _base_entries(
         ),
         _tool(
             tool_id="index_snapshot",
-            description=(
-                "Fetches latest quotes and returns for market indices, commodities, and bond yields. "
-                "Automatically adapts to the agent's target market when indices=None."
-            ),
             category="macro",
             tier="optional",
             callable=qt.index_snapshot,
@@ -236,11 +177,6 @@ def _base_entries(
         ),
         _tool(
             tool_id="fear_greed_index",
-            description=(
-                "Composite market regime indicator (0=extreme fear/risk-off, 100=extreme greed/risk-on). "
-                "Combines volatility index (VKOSPI/VIX), market breadth, momentum trend, and institutional flow. "
-                "Returns regime_label (risk_on/neutral/risk_off) with sub-component scores."
-            ),
             category="macro",
             tier="optional",
             callable=st.fear_greed_index,
@@ -250,10 +186,6 @@ def _base_entries(
         ),
         _tool(
             tool_id="earnings_calendar",
-            description=(
-                "Fetches upcoming earnings/dividend events. US: Nasdaq earnings calendar. "
-                "KOSPI: KIS dividend schedule + consensus earnings estimates."
-            ),
             category="macro",
             tier="optional",
             callable=st.earnings_calendar,
@@ -263,7 +195,6 @@ def _base_entries(
         ),
         _tool(
             tool_id="fetch_reddit_sentiment",
-            description="Fetches recent Reddit posts from finance subreddits for retail sentiment.",
             category="sentiment",
             tier="optional",
             callable=st.fetch_reddit_sentiment,
@@ -274,7 +205,6 @@ def _base_entries(
         ),
         _tool(
             tool_id="fetch_sec_filings",
-            description="Fetches recent SEC filings (10-K, 10-Q, 8-K, etc.) from EDGAR.",
             category="sentiment",
             tier="optional",
             callable=st.fetch_sec_filings,
@@ -284,10 +214,6 @@ def _base_entries(
         ),
         _tool(
             tool_id="macro_snapshot",
-            description=(
-                "Fetches macro indicators adapted to the agent market. US: Fed rate, CPI, unemployment, Treasury yields. "
-                "KOSPI: BOK base rate, KR CPI, unemployment, government bond yields, USD/KRW."
-            ),
             category="macro",
             tier="optional",
             callable=mt.macro_snapshot,

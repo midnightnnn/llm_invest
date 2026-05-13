@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 
 from arena.config import Settings
+from arena.prompts.prompt_pack import PromptPack
+from arena.tools import default_registry as default_registry_module
 from arena.tools.default_registry import build_default_registry
 from arena.tools.quant_tools import QuantTools
 from arena.tools.sentiment_tools import SentimentTools
@@ -123,6 +125,40 @@ def test_default_registry_can_enable_reddit_sentiment() -> None:
     ids = {e.tool_id for e in reg.list_entries()}
 
     assert "fetch_reddit_sentiment" in ids
+
+
+def test_default_registry_loads_model_descriptions_from_prompt_files(monkeypatch) -> None:
+    seen: list[tuple[str, ...]] = []
+
+    def fake_load_prompt_text(*parts: str) -> str:
+        seen.append(parts)
+        return f"loaded::{parts[-1]}"
+
+    monkeypatch.setattr(default_registry_module, "load_prompt_text", fake_load_prompt_text, raising=False)
+
+    reg = default_registry_module.build_default_registry(repo=_FakeRepo(), settings=_settings())
+    entries = {entry.tool_id: entry for entry in reg.list_entries(include_disabled=True)}
+
+    assert entries["scratch_run_python"].description == "loaded::scratch_run_python.txt"
+    assert entries["recommend_opportunities"].description == "loaded::recommend_opportunities.txt"
+    assert ("tools", "default_registry", "optimize_portfolio.txt") in seen
+
+
+def test_default_registry_prompt_descriptions_reach_llm_tool_catalog(monkeypatch) -> None:
+    def fake_load_prompt_text(*parts: str) -> str:
+        return f"llm-visible::{parts[-1]}"
+
+    monkeypatch.setattr(default_registry_module, "load_prompt_text", fake_load_prompt_text, raising=False)
+
+    registry = default_registry_module.build_default_registry(repo=_FakeRepo(), settings=_settings())
+    payload = PromptPack.tool_catalog_payload(
+        registry,
+        disabled_tool_ids=set(),
+    )
+    rows = {str(row["tool_id"]): row for row in payload}
+
+    assert rows["optimize_portfolio"]["description"] == "llm-visible::optimize_portfolio.txt"
+    assert rows["recommend_opportunities"]["description"] == "llm-visible::recommend_opportunities.txt"
 
 
 def test_default_registry_applies_tools_config_overlay() -> None:

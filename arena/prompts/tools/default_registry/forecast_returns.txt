@@ -1,0 +1,1 @@
+Runs seven time-series models and summarizes each ticker with model-implied direction probability, vote counts, model_direction label, and compact model details. If tickers are omitted, it defaults to the self-discovered candidate basket plus current holdings.

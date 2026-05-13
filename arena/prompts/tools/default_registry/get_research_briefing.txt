@@ -1,0 +1,1 @@
+Fetches a global market, geopolitics, sector, and single-name research briefing.

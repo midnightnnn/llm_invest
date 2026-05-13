@@ -1,0 +1,1 @@
+Fetches macro indicators adapted to the agent market. US: Fed rate, CPI, unemployment, Treasury yields. KOSPI: BOK base rate, KR CPI, unemployment, government bond yields, USD/KRW.

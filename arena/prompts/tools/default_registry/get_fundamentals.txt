@@ -1,0 +1,1 @@
+Fetches valuation metrics for a basket. US stocks get PER/PBR/EPS/BPS, while KOSPI stocks get EPS/BPS/ROE/debt ratio/growth metrics plus analyst consensus (target price, opinion, upside %).
