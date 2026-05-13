@@ -10,6 +10,8 @@ from fastapi.responses import HTMLResponse, JSONResponse
 @dataclass(frozen=True)
 class ViewerRouteDeps:
     repo: Any
+    credential_store: Any | None
+    credential_store_error: str
     executor: Any
     auth_enabled: bool
     kst: Any

@@ -14,7 +14,6 @@ DEFAULT_CHEAP_CHAT_MODEL_BY_PROVIDER: dict[str, str] = {
     "gpt": "gpt-5.4-mini",
     "gemini": "gemini-3-flash-preview",
     "claude": "claude-haiku-4-5-20251001",
-    "deepseek": "deepseek-chat",
 }
 
 

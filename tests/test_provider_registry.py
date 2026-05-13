@@ -78,7 +78,8 @@ def test_get_provider_spec_exposes_capabilities() -> None:
     assert claude.supports_compaction is True
     assert deepseek is not None
     assert deepseek.transport == "openai_compatible"
-    assert deepseek.supports_adk is True
+    assert deepseek.supports_adk is False
+    assert deepseek.supports_compaction is True
 
 
 def test_provider_base_url_uses_secret_override_then_default() -> None:

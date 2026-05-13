@@ -475,6 +475,10 @@ def test_prompt_pack_renders_investment_chat_utility_instruction() -> None:
     assert "configuration-change drafts" in prompt
     assert 'capital_allocation_mode="add_krw"' in prompt
     assert 'capital_allocation_mode="fixed_krw"' in prompt
+    assert "routed investment chat" in prompt
+    assert "appropriate specialist agent" in prompt
+    assert "portfolio/risk diagnosis" not in prompt
+    assert "ticker discussion" not in prompt
     assert "Do not transfer deterministic configuration changes" in prompt
     assert "Do not give investment advice" in prompt
     assert "investment_chat_advisor" in prompt

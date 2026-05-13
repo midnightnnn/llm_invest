@@ -95,14 +95,143 @@
       <p class="mt-2 hidden text-xs text-ink-500" data-config-draft-status></p>
     </div>
   </aside>
+  <aside
+    class="fixed inset-0 z-50 hidden bg-ink-950/45 px-4 py-5 sm:px-6"
+    data-credential-draft-panel
+    role="dialog"
+    aria-modal="true"
+  >
+    <div class="flex min-h-full items-center justify-center">
+      <div class="w-full max-w-lg rounded-lg border border-emerald-200 bg-white p-4 shadow-2xl sm:p-5 max-h-[calc(100dvh-2.5rem)] overflow-y-auto">
+        <div class="flex items-start justify-between gap-3">
+          <div class="min-w-0">
+            <p class="text-xs font-semibold uppercase tracking-wide text-emerald-700">Credential Approval</p>
+            <h3 class="mt-1 truncate text-sm font-bold text-ink-900" data-credential-draft-title></h3>
+          </div>
+          <button type="button" class="rounded-md px-2 py-1 text-xs text-ink-500 hover:bg-ink-50" data-credential-draft-close>닫기</button>
+        </div>
+        <p class="mt-3 rounded-md bg-emerald-50 px-3 py-2 text-xs leading-relaxed text-emerald-900" data-credential-draft-summary></p>
+        <div class="mt-3 flex flex-col gap-2 rounded-md border border-ink-200 bg-ink-50 px-3 py-2 text-xs leading-relaxed text-ink-600 sm:flex-row sm:items-center sm:justify-between">
+          <span data-credential-help-text>발급 페이지에서 key를 만든 뒤 이 창에만 입력하세요.</span>
+          <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer" class="font-semibold text-emerald-700 hover:text-emerald-900" data-credential-help-link>API key 발급</a>
+        </div>
+        <form class="mt-3 space-y-3" data-credential-draft-form>
+          <input type="hidden" name="tenant_id" value="{{ tenant }}"/>
+          <label class="block text-xs font-semibold text-ink-600" data-credential-key-field>
+            API key
+            <input name="api_key" type="password" class="mt-1 h-10 w-full rounded-md border border-ink-200 bg-white px-2 text-sm text-ink-900" autocomplete="off" data-credential-api-key/>
+          </label>
+          <div class="hidden space-y-3" data-credential-kis-fields>
+            <label class="block text-xs font-semibold text-ink-600">
+              투자 환경
+              <select name="kis_env" class="mt-1 h-10 w-full rounded-md border border-ink-200 bg-white px-2 text-sm text-ink-900" data-credential-kis-env>
+                <option value="demo">모의투자</option>
+                <option value="real">실전투자</option>
+              </select>
+            </label>
+            <label class="block text-xs font-semibold text-ink-600">
+              계좌번호
+              <input name="kis_account_no" inputmode="numeric" placeholder="12345678-01" class="mt-1 h-10 w-full rounded-md border border-ink-200 bg-white px-2 text-sm text-ink-900" autocomplete="off" data-credential-kis-account-no/>
+            </label>
+            <div class="space-y-3" data-credential-kis-paper-fields>
+              <label class="block text-xs font-semibold text-ink-600">
+                모의투자 APP KEY
+                <input name="kis_paper_app_key" type="password" class="mt-1 h-10 w-full rounded-md border border-ink-200 bg-white px-2 text-sm text-ink-900" autocomplete="off" data-credential-kis-paper-app-key/>
+              </label>
+              <label class="block text-xs font-semibold text-ink-600">
+                모의투자 APP SECRET
+                <input name="kis_paper_app_secret" type="password" class="mt-1 h-10 w-full rounded-md border border-ink-200 bg-white px-2 text-sm text-ink-900" autocomplete="off" data-credential-kis-paper-app-secret/>
+              </label>
+            </div>
+            <div class="hidden space-y-3" data-credential-kis-real-fields>
+              <label class="block text-xs font-semibold text-ink-600">
+                실전투자 APP KEY
+                <input name="kis_app_key" type="password" class="mt-1 h-10 w-full rounded-md border border-ink-200 bg-white px-2 text-sm text-ink-900" autocomplete="off" data-credential-kis-app-key/>
+              </label>
+              <label class="block text-xs font-semibold text-ink-600">
+                실전투자 APP SECRET
+                <input name="kis_app_secret" type="password" class="mt-1 h-10 w-full rounded-md border border-ink-200 bg-white px-2 text-sm text-ink-900" autocomplete="off" data-credential-kis-app-secret/>
+              </label>
+            </div>
+          </div>
+          <label class="hidden items-start gap-2 rounded-md bg-red-50 px-3 py-2 text-xs leading-relaxed text-red-800" data-credential-confirm-field>
+            <input name="confirmed" value="true" type="checkbox" class="mt-0.5 h-4 w-4 rounded border-red-300" data-credential-confirm/>
+            <span data-credential-confirm-copy>이 provider의 저장된 LLM API key를 삭제합니다.</span>
+          </label>
+          <button
+            type="submit"
+            class="h-10 w-full rounded-md bg-emerald-700 px-3 text-sm font-semibold text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:bg-ink-300"
+            data-credential-draft-apply
+          >승인</button>
+        </form>
+        <p class="mt-2 hidden text-xs text-ink-500" data-credential-draft-status></p>
+      </div>
+    </div>
+  </aside>
   {% else %}
   <div class="flex flex-1 items-center justify-center px-6">
-    <div class="max-w-md rounded-lg border border-amber-200 bg-amber-50 p-5 text-sm leading-relaxed text-amber-900">
-      등록된 LLM API key가 없거나 챗봇 모델이 설정되지 않았습니다. 환경설정 → 에이전트 탭에서 모델을 지정해주세요.
+    <div class="w-full max-w-md rounded-lg border border-ink-200 bg-white p-5 text-sm leading-relaxed text-ink-800 shadow-sm" data-llm-key-panel>
+      <h2 class="text-base font-bold text-ink-950">LLM API key 연결</h2>
+      <p class="mt-2 text-sm text-ink-600">투자챗봇을 시작하려면 먼저 사용할 LLM provider의 API key를 저장해야 합니다.</p>
+      <p class="mt-3 rounded-md bg-ink-50 px-3 py-2 text-xs leading-relaxed text-ink-600">
+        <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer" class="font-semibold text-ink-900 hover:text-emerald-700" data-llm-key-help-link>API key 발급 페이지</a>에서 key를 만든 뒤 이 화면에만 입력하세요.
+      </p>
+      {% if not llm_key_store_available %}
+      <p class="mt-3 rounded-md bg-red-50 px-3 py-2 text-xs text-red-700">Credential store unavailable: {{ llm_key_store_error }}</p>
+      {% endif %}
+      <form method="post" action="/investment-chat/model-key" class="mt-4 space-y-3">
+        <input type="hidden" name="tenant_id" value="{{ tenant }}"/>
+        <label class="block text-xs font-semibold text-ink-600">
+          Provider
+          <select name="provider" class="mt-1 h-10 w-full rounded-md border border-ink-200 bg-white px-2 text-sm text-ink-900" data-llm-key-provider>
+            {% for item in llm_key_provider_options %}
+            <option value="{{ item.value }}" {% if item.selected %}selected{% endif %}>{{ item.label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label class="block text-xs font-semibold text-ink-600">
+          Model
+          <input name="model" value="{{ llm_key_model }}" class="mt-1 h-10 w-full rounded-md border border-ink-200 bg-white px-2 font-mono text-xs text-ink-900" data-llm-key-model/>
+        </label>
+        <label class="block text-xs font-semibold text-ink-600">
+          API key
+          <input name="api_key" type="password" class="mt-1 h-10 w-full rounded-md border border-ink-200 bg-white px-2 text-sm text-ink-900" autocomplete="off"/>
+        </label>
+        <button type="submit" class="h-10 w-full rounded-md bg-ink-900 px-3 text-sm font-semibold text-white hover:bg-ink-800 disabled:cursor-not-allowed disabled:bg-ink-300" {% if not llm_key_store_available %}disabled{% endif %}>저장하고 투자챗봇 시작</button>
+      </form>
     </div>
   </div>
   {% endif %}
 </section>
+<script type="application/json" id="investment-chat-key-model-map">{{ llm_key_model_presets | tojson }}</script>
+<script type="application/json" id="investment-chat-key-help-map">{{ llm_key_help_urls | tojson }}</script>
+<script type="application/json" id="investment-chat-kis-help-url">{{ kis_key_help_url | tojson }}</script>
+<script>
+  (function() {
+    var raw = document.getElementById('investment-chat-key-model-map');
+    var helpRaw = document.getElementById('investment-chat-key-help-map');
+    var presets = {};
+    var helpUrls = {};
+    try { presets = JSON.parse(raw && raw.textContent || '{}') || {}; } catch (_err) { presets = {}; }
+    try { helpUrls = JSON.parse(helpRaw && helpRaw.textContent || '{}') || {}; } catch (_err) { helpUrls = {}; }
+    document.querySelectorAll('[data-llm-key-provider]').forEach(function(provider) {
+      var form = provider.closest('form');
+      var model = form && form.querySelector('[data-llm-key-model]');
+      var helpLink = form && form.parentNode && form.parentNode.querySelector('[data-llm-key-help-link]');
+      function syncHelpLink() {
+        if (!helpLink) return;
+        helpLink.href = helpUrls[provider.value] || 'https://platform.openai.com/api-keys';
+      }
+      if (!model) return;
+      provider.addEventListener('change', function() {
+        var preset = presets[provider.value] || '';
+        if (preset) model.value = preset;
+        syncHelpLink();
+      });
+      syncHelpLink();
+    });
+  })();
+</script>
 {% if iframe_src %}
 <script>
   (function() {
@@ -642,6 +771,214 @@
 
     pollConfigDrafts();
     window.setInterval(pollConfigDrafts, 2500);
+  })();
+</script>
+<script>
+  (function() {
+    var tenant = {{ tenant | tojson }};
+    var panel = document.querySelector('[data-credential-draft-panel]');
+    if (!panel) return;
+    var title = panel.querySelector('[data-credential-draft-title]');
+    var summary = panel.querySelector('[data-credential-draft-summary]');
+    var form = panel.querySelector('[data-credential-draft-form]');
+    var keyField = panel.querySelector('[data-credential-key-field]');
+    var apiKey = panel.querySelector('[data-credential-api-key]');
+    var kisFields = panel.querySelector('[data-credential-kis-fields]');
+    var kisEnv = panel.querySelector('[data-credential-kis-env]');
+    var kisAccountNo = panel.querySelector('[data-credential-kis-account-no]');
+    var kisPaperFields = panel.querySelector('[data-credential-kis-paper-fields]');
+    var kisRealFields = panel.querySelector('[data-credential-kis-real-fields]');
+    var kisSecretInputs = Array.prototype.slice.call(panel.querySelectorAll('[data-credential-kis-paper-app-key], [data-credential-kis-paper-app-secret], [data-credential-kis-app-key], [data-credential-kis-app-secret]'));
+    var confirmField = panel.querySelector('[data-credential-confirm-field]');
+    var confirm = panel.querySelector('[data-credential-confirm]');
+    var confirmCopy = panel.querySelector('[data-credential-confirm-copy]');
+    var apply = panel.querySelector('[data-credential-draft-apply]');
+    var status = panel.querySelector('[data-credential-draft-status]');
+    var helpText = panel.querySelector('[data-credential-help-text]');
+    var helpLink = panel.querySelector('[data-credential-help-link]');
+    var close = panel.querySelector('[data-credential-draft-close]');
+    var activeToken = '';
+    var activeAction = '';
+    var activeKind = 'model_key';
+    var dismissed = {};
+    var credentialDraftPageLoadedAt = Date.now() - 5000;
+    var helpMap = {};
+    var kisHelpUrl = 'https://apiportal.koreainvestment.com';
+    try {
+      helpMap = JSON.parse(document.getElementById('investment-chat-key-help-map').textContent || '{}') || {};
+    } catch (_err) {
+      helpMap = {};
+    }
+    try {
+      kisHelpUrl = JSON.parse(document.getElementById('investment-chat-kis-help-url').textContent || '"https://apiportal.koreainvestment.com"') || kisHelpUrl;
+    } catch (_err) {}
+
+    function setCredentialStatus(text) {
+      if (!status) return;
+      status.textContent = text || '';
+      status.classList.toggle('hidden', !text);
+    }
+
+    function deliverCredentialResultToChat(text, attempt) {
+      var message = String(text || '').trim();
+      if (!message) return false;
+      var tries = Number(attempt || 0);
+      var frame = document.querySelector('[data-adk-chat-frame]');
+      var doc = null;
+      try {
+        doc = frame && (frame.contentDocument || (frame.contentWindow && frame.contentWindow.document));
+      } catch (_err) {
+        return false;
+      }
+      var textarea = doc && doc.querySelector('textarea.chat-input-box');
+      var sendButton = doc && doc.querySelector('button.send-message-btn');
+      if (!textarea || !sendButton) {
+        if (tries < 80) {
+          window.setTimeout(function() { deliverCredentialResultToChat(message, tries + 1); }, 500);
+        }
+        return false;
+      }
+      var EventCtor = (doc.defaultView && doc.defaultView.Event) || Event;
+      textarea.focus();
+      textarea.value = message;
+      textarea.dispatchEvent(new EventCtor('input', {bubbles: true}));
+      textarea.dispatchEvent(new EventCtor('change', {bubbles: true}));
+      sendButton.click();
+      return true;
+    }
+
+    function setBlockVisible(el, visible) {
+      if (!el) return;
+      el.classList.toggle('hidden', !visible);
+    }
+
+    function setConfirmVisible(visible) {
+      if (!confirmField) return;
+      confirmField.classList.toggle('hidden', !visible);
+      confirmField.classList.toggle('flex', visible);
+    }
+
+    function syncKisEnvFields() {
+      var env = kisEnv && kisEnv.value === 'real' ? 'real' : 'demo';
+      var showSecrets = activeKind === 'kis_account' && activeAction !== 'delete';
+      setBlockVisible(kisPaperFields, showSecrets && env !== 'real');
+      setBlockVisible(kisRealFields, showSecrets && env === 'real');
+    }
+
+    if (kisEnv) {
+      kisEnv.addEventListener('change', syncKisEnvFields);
+    }
+
+    function renderCredentialDraft(draft) {
+      if (!draft || !draft.approval_token) return;
+      if (activeToken === draft.approval_token && !panel.classList.contains('hidden')) return;
+      activeToken = draft.approval_token;
+      activeAction = String(draft.action || '').toLowerCase();
+      activeKind = String(draft.credential_kind || (draft.provider ? 'model_key' : 'kis_account')).toLowerCase();
+      var isKis = activeKind === 'kis_account';
+      var label = isKis ? 'KIS' : (draft.provider_label || draft.provider || 'provider');
+      title.textContent = activeAction === 'delete' ? (label + ' key 삭제') : (label + ' key 저장');
+      summary.textContent = draft.summary || 'Credential request';
+      if (helpText) {
+        helpText.textContent = isKis
+          ? 'KIS Developers에서 API 신청 후 계좌번호와 APP KEY / SECRET을 이 창에만 입력하세요.'
+          : '발급 페이지에서 API key를 만든 뒤 이 창에만 입력하세요.';
+      }
+      if (helpLink) {
+        helpLink.href = isKis ? kisHelpUrl : (helpMap[draft.provider] || 'https://platform.openai.com/api-keys');
+        helpLink.textContent = isKis ? 'KIS Developers 열기' : 'API key 발급';
+      }
+      setBlockVisible(keyField, !isKis && activeAction !== 'delete');
+      setBlockVisible(kisFields, isKis);
+      setConfirmVisible(activeAction === 'delete');
+      if (confirmCopy) {
+        confirmCopy.textContent = isKis
+          ? '입력한 KIS 계좌의 저장된 API key를 삭제합니다.'
+          : '이 provider의 저장된 LLM API key를 삭제합니다.';
+      }
+      if (kisEnv) kisEnv.value = draft.env === 'real' ? 'real' : 'demo';
+      if (apiKey) apiKey.value = '';
+      if (kisAccountNo) kisAccountNo.value = '';
+      kisSecretInputs.forEach(function(input) { input.value = ''; });
+      if (confirm) confirm.checked = false;
+      syncKisEnvFields();
+      if (apply) apply.textContent = activeAction === 'delete' ? '삭제 승인' : (isKis ? '저장' : '저장 후 재시작');
+      setCredentialStatus('');
+      panel.classList.remove('hidden');
+    }
+
+    function pollCredentialDrafts() {
+      fetch('/investment-chat/credential-drafts?tenant_id=' + encodeURIComponent(tenant), {credentials: 'same-origin'})
+        .then(function(resp) { return resp.ok ? resp.json() : null; })
+        .then(function(payload) {
+          var drafts = payload && payload.drafts || [];
+          var draft = drafts.find(function(item) {
+            if (!item || !item.approval_token || dismissed[item.approval_token] || String(item.status || '') !== 'draft') return false;
+            var createdAt = Date.parse(item.created_at || '');
+            if (isFinite(createdAt) && createdAt < credentialDraftPageLoadedAt) return false;
+            return true;
+          });
+          if (draft) renderCredentialDraft(draft);
+        })
+        .catch(function() {});
+    }
+
+    if (close) {
+      close.addEventListener('click', function() {
+        if (activeToken) dismissed[activeToken] = true;
+        panel.classList.add('hidden');
+      });
+    }
+    if (form) {
+      form.addEventListener('submit', function(event) {
+        event.preventDefault();
+        if (!activeToken || !apply) return;
+        apply.disabled = true;
+        setCredentialStatus(activeAction === 'delete' ? '삭제 중...' : '저장 중...');
+        var data = new FormData(form);
+        if (activeKind === 'kis_account') {
+          data.delete('api_key');
+        }
+        if (activeAction === 'delete') {
+          if (!confirm || !confirm.checked) {
+            apply.disabled = false;
+            setCredentialStatus('삭제 확인 체크가 필요합니다.');
+            return;
+          }
+          data.set('confirmed', 'true');
+          data.delete('api_key');
+        }
+        fetch('/investment-chat/credential-drafts/' + encodeURIComponent(activeToken) + '/apply', {
+          method: 'POST',
+          credentials: 'same-origin',
+          body: data
+        })
+          .then(function(resp) { return resp.json().then(function(body) { return {ok: resp.ok, body: body}; }); })
+          .then(function(result) {
+            var body = result.body || {};
+            if (body.status === 'applied' || body.status === 'deleted') {
+              setCredentialStatus(body.status === 'deleted' ? '삭제 완료' : '저장 완료');
+              deliverCredentialResultToChat(body.chat_delivery_text);
+              dismissed[activeToken] = true;
+              window.setTimeout(function() {
+                panel.classList.add('hidden');
+                if (body.reload_url) window.location.href = body.reload_url;
+              }, 1200);
+            } else {
+              apply.disabled = false;
+              deliverCredentialResultToChat(body.chat_delivery_text);
+              setCredentialStatus('처리 실패: ' + (body.error || body.message || body.status || 'unknown'));
+            }
+          })
+          .catch(function() {
+            apply.disabled = false;
+            setCredentialStatus('처리 실패');
+          });
+      });
+    }
+
+    pollCredentialDrafts();
+    window.setInterval(pollCredentialDrafts, 2500);
   })();
 </script>
 {% endif %}

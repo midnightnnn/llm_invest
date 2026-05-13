@@ -4,6 +4,7 @@ from typing import Any, Callable
 
 from arena.agents.investment_chat.account_tools import build_account_tool_entries
 from arena.agents.investment_chat.config_tools import build_config_tool_entries
+from arena.agents.investment_chat.credential_tools import build_credential_tool_entries
 from arena.agents.investment_chat.history_tools import build_history_tool_entries
 from arena.agents.investment_chat.order_tools import build_order_tool_entries
 from arena.config import Settings
@@ -32,6 +33,13 @@ def build_chat_tool_entries(
                 settings=settings,
                 tenant_id=tenant_id,
                 invalidate_tenant_cache=invalidate_tenant_cache,
+            )
+        )
+        entries.extend(
+            build_credential_tool_entries(
+                repo=repo,
+                settings=settings,
+                tenant_id=tenant_id,
             )
         )
     return entries

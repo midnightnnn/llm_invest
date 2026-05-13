@@ -337,6 +337,43 @@ class CredentialStore:
             notes=str(prev_cred.get("notes") or ""),
         )
 
+    def remove_model_key(self, *, tenant_id: str, updated_by: str, provider: str) -> None:
+        """Remove one provider's LLM API key from the model secret."""
+        tenant = self._safe_token(tenant_id)
+        now = utc_now()
+        model_secret_id = self._secret_id(tenant, "models")
+        prev_model = self._latest_secret_json(secret_id=model_secret_id)
+        model_payload = build_model_secret_payload(
+            previous_payload=prev_model,
+            provider_deletes=[provider],
+            updated_at=now.isoformat(),
+        )
+        self._upsert_secret_json(secret_id=model_secret_id, payload=model_payload)
+        model_flags = runtime_credential_flags(parse_model_secret_providers(model_payload))
+
+        kis_secret_id = self._secret_id(tenant, "kis")
+        prev_cred: dict[str, Any] = {}
+        latest_fn = getattr(self.repo, "latest_runtime_credentials", None)
+        if callable(latest_fn):
+            try:
+                prev_cred = latest_fn(tenant_id=tenant) or {}
+            except Exception:
+                prev_cred = {}
+
+        self.repo.upsert_runtime_credentials(
+            tenant_id=tenant,
+            updated_at=now,
+            updated_by=updated_by,
+            kis_secret_name=kis_secret_id,
+            model_secret_name=model_secret_id,
+            kis_account_no_masked=str(prev_cred.get("kis_account_no_masked") or ""),
+            kis_env=str(prev_cred.get("kis_env") or ""),
+            has_openai=model_flags["has_openai"],
+            has_gemini=model_flags["has_gemini"],
+            has_anthropic=model_flags["has_anthropic"],
+            notes=str(prev_cred.get("notes") or ""),
+        )
+
     def save_runtime_credentials(
         self,
         *,

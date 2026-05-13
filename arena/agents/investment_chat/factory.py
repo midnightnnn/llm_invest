@@ -49,6 +49,9 @@ UTILITY_TOOL_IDS = frozenset(
         "propose_chat_agent_config_change",
         "propose_tenant_config_change",
         "get_config_change_status",
+        "propose_model_key_change",
+        "propose_kis_account_change",
+        "get_model_key_change_status",
     }
 )
 

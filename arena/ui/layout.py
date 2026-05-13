@@ -32,6 +32,7 @@ def tailwind_layout(
     main_class: str = "flex-1 min-w-0 w-full px-4 py-8 sm:px-6 lg:px-10 box-border",
     chat_session_app_name: str = "",
     chat_session_user_id: str = "",
+    show_logout: bool | None = None,
 ) -> str:
     if showcase:
         _t = html.escape(tenant or "")
@@ -65,6 +66,7 @@ def tailwind_layout(
         for href, label, key in nav_items
     ]
     auth_enabled = str(os.getenv("ARENA_UI_AUTH_ENABLED", "false")).strip().lower() in {"1", "true", "yes", "on"}
+    logout_visible = auth_enabled if show_logout is None else bool(show_logout)
     safe_max_width = str(max_width_class or "max-w-7xl")
     safe_main_class = str(main_class or "flex-1 min-w-0 w-full px-4 py-8 sm:px-6 lg:px-10 box-border")
 
@@ -96,6 +98,7 @@ def tailwind_layout(
         main_class=safe_main_class,
         nav_links=nav_links,
         auth_enabled=auth_enabled,
+        show_logout=logout_visible,
         showcase=showcase,
         hide_page_header=hide_page_header,
         chat_session_app_name=str(chat_session_app_name or ""),

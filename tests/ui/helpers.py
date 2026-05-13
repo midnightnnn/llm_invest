@@ -42,6 +42,15 @@ class _DummyRepo:
     def latest_runtime_credentials(self, *, tenant_id: str) -> dict[str, str]:
         return dict(self.runtime_credentials.get(str(tenant_id or "").strip().lower(), {}))
 
+    def upsert_runtime_credentials(self, **kwargs) -> None:
+        tenant = str(kwargs.get("tenant_id") or "").strip().lower()
+        if not tenant:
+            return None
+        current = dict(self.runtime_credentials.get(tenant, {}))
+        current.update(kwargs)
+        self.runtime_credentials[tenant] = current
+        return None
+
     def recent_runtime_credentials(self, *, limit: int = 20) -> list[dict[str, str]]:
         _ = limit
         return []

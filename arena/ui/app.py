@@ -388,6 +388,8 @@ def _build_app(*, repo: BigQueryRepository, settings: Settings) -> FastAPI:
     def _tailwind_layout(*args, tenant: str = "local", user: dict[str, Any] | None = None, **kwargs) -> str:
         kwargs.update(_header_status_kwargs(tenant))
         kwargs.setdefault("tenant", tenant)
+        user_email = str((user or {}).get("email") or "").strip().lower()
+        kwargs.setdefault("show_logout", auth_enabled or bool(user_email and user_email != "local@localhost"))
         if (_showcase_tenant and str(tenant).strip().lower() == _showcase_tenant) or (user and _is_operator(user)):
             kwargs.setdefault("extra_nav_items", [("/ops", "Ops", "ops")])
         return _tailwind_layout_raw(*args, **kwargs)
@@ -460,6 +462,8 @@ def _build_app(*, repo: BigQueryRepository, settings: Settings) -> FastAPI:
 
     viewer_route_deps = ViewerRouteDeps(
         repo=repo,
+        credential_store=credential_store,
+        credential_store_error=credential_store_error,
         executor=_executor,
         auth_enabled=auth_enabled,
         kst=_KST,

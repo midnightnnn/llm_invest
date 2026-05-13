@@ -174,7 +174,7 @@ def test_admin_agent_save_one_saves_provider_scoped_api_key(monkeypatch) -> None
     }
 
 
-def test_admin_agent_save_one_accepts_registry_backed_adk_provider(monkeypatch) -> None:
+def test_admin_agent_save_one_rejects_deepseek_until_adk_implemented(monkeypatch) -> None:
     client, repo = _client_with_repo(monkeypatch)
 
     response = client.post(
@@ -190,10 +190,9 @@ def test_admin_agent_save_one_accepts_registry_backed_adk_provider(monkeypatch) 
         },
     )
 
-    assert response.status_code == 200
-    assert response.json()["ok"] is True
-    saved = json.loads(repo.get_config("local", "agents_config") or "[]")
-    assert any(str(entry.get("provider")) == "deepseek" for entry in saved if isinstance(entry, dict))
+    assert response.status_code == 400
+    assert response.json()["ok"] is False
+    assert "provider" in response.json()["message"].lower()
 
 
 def test_admin_agent_save_one_partial_update_preserves_existing_fields(monkeypatch) -> None:

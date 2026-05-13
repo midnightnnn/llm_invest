@@ -20,6 +20,39 @@ def test_layout_shows_auth_controls_when_enabled(monkeypatch) -> None:
     html = _tailwind_layout("X", "<div>body</div>", active="board")
     assert '/auth/logout' in html
     assert 'sidebar-link' in html
+    assert 'data-sidebar-logout' in html
+    assert 'aria-label="로그아웃"' in html
+    assert "sidebar-footer-label" in html
+    assert 'class="arena-sidebar fixed left-0 top-0 z-50 flex h-screen md:min-h-screen flex-col border-r border-ink-200/30 bg-white/80 backdrop-blur-xl md:sticky md:flex overflow-hidden"' in html
+    assert 'nav class="mt-4 flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto px-3"' in html
+    assert 'sidebar-footer sticky bottom-0 shrink-0' in html
+    collapsed_rule = html.split("body.sidebar-collapsed .sidebar-footer {", 1)[1].split("}", 1)[0]
+    assert "pointer-events: auto" in collapsed_rule
+    assert "visibility: visible" in collapsed_rule
+
+
+def test_layout_hides_logout_when_auth_disabled_by_default(monkeypatch) -> None:
+    monkeypatch.setenv("ARENA_UI_AUTH_ENABLED", "false")
+    html = _tailwind_layout("X", "<div>body</div>", active="board")
+
+    assert '/auth/logout' not in html
+    assert 'data-sidebar-logout' not in html
+
+
+def test_auth_logout_clears_session_and_starts_google_login(monkeypatch) -> None:
+    monkeypatch.setenv("ARENA_UI_AUTH_ENABLED", "true")
+    monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_ID", "client-id")
+    monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_SECRET", "client-secret")
+    repo = _DummyRepo()
+    app = _build_app(repo=repo, settings=load_settings())
+    client = DirectRouteClient(app)
+    client.session["user"] = {"email": "old@example.com", "name": "Old User", "sub": "old-sub"}
+
+    response = client.get("/auth/logout")
+
+    assert response.status_code == 302
+    assert response.headers.get("location") == "/auth/google/login"
+    assert client.session == {}
 
 
 def test_auth_google_callback_auto_provisions_new_user(monkeypatch) -> None:

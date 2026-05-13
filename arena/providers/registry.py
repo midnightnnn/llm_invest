@@ -77,7 +77,7 @@ _BUILTIN_PROVIDERS: tuple[ProviderSpec, ...] = (
         litellm_provider="deepseek",
         default_model="deepseek-chat",
         default_base_url="https://api.deepseek.com/v1",
-        supports_adk=True,
+        supports_adk=False,
         supports_direct_text=True,
         supports_compaction=True,
     ),

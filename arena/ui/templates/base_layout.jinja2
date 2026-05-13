@@ -221,6 +221,26 @@
       box-shadow: 0 2px 8px rgba(15,23,42,0.12);
     }
     .sidebar-link.active:hover { background: #1e293b; }
+    .sidebar-logout-link {
+      gap: 8px;
+      color: #be123c;
+      font-weight: 700;
+    }
+    .sidebar-logout-link:hover {
+      background: #fff1f2;
+      color: #9f1239;
+    }
+    .sidebar-footer-icon {
+      width: 16px;
+      height: 16px;
+      flex: 0 0 auto;
+    }
+    .sidebar-footer-label {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      transition: opacity 0.12s ease, width 0.16s ease;
+    }
     .sidebar-link-row {
       display: flex;
       align-items: center;
@@ -337,11 +357,26 @@
         overflow: hidden;
       }
       body.sidebar-collapsed .sidebar-status,
-      body.sidebar-collapsed #arena-sidebar nav,
-      body.sidebar-collapsed .sidebar-footer {
+      body.sidebar-collapsed #arena-sidebar nav {
         opacity: 0;
         visibility: hidden;
         pointer-events: none;
+      }
+      body.sidebar-collapsed .sidebar-footer {
+        opacity: 1;
+        visibility: visible;
+        pointer-events: auto;
+        padding-left: 8px;
+        padding-right: 8px;
+      }
+      body.sidebar-collapsed .sidebar-logout-link {
+        justify-content: center;
+        padding-left: 9px;
+        padding-right: 9px;
+      }
+      body.sidebar-collapsed .sidebar-footer-label {
+        width: 0;
+        opacity: 0;
       }
       body.sidebar-collapsed .sidebar-collapse-toggle svg { transform: rotate(180deg); }
     }
@@ -407,7 +442,7 @@
   <div id="sidebar-backdrop" class="sidebar-backdrop md:hidden"></div>
   <div class="arena-main-shell flex min-h-screen">
     {# ── Left sidebar ── #}
-    <aside id="arena-sidebar" class="arena-sidebar fixed left-0 top-0 z-50 flex h-screen md:min-h-screen flex-col border-r border-ink-200/30 bg-white/80 backdrop-blur-xl md:sticky md:flex overflow-y-auto">
+    <aside id="arena-sidebar" class="arena-sidebar fixed left-0 top-0 z-50 flex h-screen md:min-h-screen flex-col border-r border-ink-200/30 bg-white/80 backdrop-blur-xl md:sticky md:flex overflow-hidden">
       <div class="sidebar-header px-5 pb-2 pt-6">
         <div class="sidebar-header-row flex items-center justify-between gap-3">
           <h1 class="sidebar-brand font-display text-lg font-bold tracking-tight text-ink-900">LLM INVEST</h1>
@@ -424,7 +459,7 @@
         </div>
       </div>
 
-      <nav class="mt-4 flex flex-1 flex-col gap-1 px-3">
+      <nav class="mt-4 flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto px-3">
         {% for item in nav_links %}
         {% if item.key == 'investment_chat' and chat_session_app_name %}
         <div class="sidebar-link-row">
@@ -460,11 +495,17 @@
         {% endfor %}
       </nav>
 
-      <div class="sidebar-footer border-t border-ink-200/30 px-3 py-3">
+      <div class="sidebar-footer sticky bottom-0 shrink-0 border-t border-ink-200/30 bg-white/90 px-3 py-3 backdrop-blur">
         {% if showcase %}
         <a href="/auth/google/login" class="sidebar-link bg-brand-500 text-white hover:bg-brand-700 justify-center font-semibold text-xs">내 아레나 만들기</a>
-        {% elif auth_enabled %}
-        <a href="/auth/logout" class="sidebar-link text-ink-400 hover:text-rose-600">Logout</a>
+        {% elif auth_enabled or show_logout %}
+        <a href="/auth/logout" class="sidebar-link sidebar-logout-link" aria-label="로그아웃" title="로그아웃" data-sidebar-logout>
+          <svg class="sidebar-footer-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6A2.25 2.25 0 005.25 5.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15"/>
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 12h8.25m0 0l-3-3m3 3l-3 3"/>
+          </svg>
+          <span class="sidebar-footer-label">로그아웃</span>
+        </a>
         {% endif %}
       </div>
     </aside>

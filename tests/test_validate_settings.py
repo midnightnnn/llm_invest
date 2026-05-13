@@ -62,14 +62,17 @@ def test_research_generation_status_reports_shared_live_tenant(monkeypatch) -> N
     assert status["research_source_tenant"] == "midnightnnn"
 
 
-def test_validate_settings_allows_single_deepseek_trader_without_research() -> None:
+def test_validate_settings_rejects_deepseek_trader_until_adk_implemented() -> None:
     settings = load_settings()
     settings.agent_ids = ["deepseek"]
     settings.agent_configs = {}
     settings.provider_secrets = {"deepseek": {"api_key": "tenant-deepseek", "model": "deepseek-chat"}}
     settings.research_enabled = False
 
-    validate_settings(settings, require_llm=True)
+    with pytest.raises(SettingsError) as exc_info:
+        validate_settings(settings, require_llm=True)
+
+    assert "No agents have usable credentials" in str(exc_info.value)
 
 
 def test_validate_settings_requires_api_key_for_registry_backed_adk_provider() -> None:

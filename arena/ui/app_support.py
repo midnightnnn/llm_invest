@@ -63,7 +63,6 @@ _PROVIDER_API_KEY_HELP_HTML = {
     "gpt": 'API 키 발급:<br><a href="https://platform.openai.com/api-keys" target="_blank">platform.openai.com/api-keys</a>',
     "gemini": 'API 키 발급:<br><a href="https://aistudio.google.com/apikey" target="_blank">aistudio.google.com/apikey</a>',
     "claude": 'API 키 발급:<br><a href="https://console.anthropic.com/settings/keys" target="_blank">console.anthropic.com/settings/keys</a>',
-    "deepseek": 'API 키 발급:<br><a href="https://platform.deepseek.com/api_keys" target="_blank">platform.deepseek.com/api_keys</a>',
 }
 
 

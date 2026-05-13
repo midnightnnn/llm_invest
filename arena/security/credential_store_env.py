@@ -136,6 +136,19 @@ class EnvCredentialStore:
         now = utc_now()
         kis_secret_id = self._secret_id(tenant, "kis")
         model_secret_id = self._secret_id(tenant, "models")
+        previous_payload = self._latest_secret_json(secret_id=kis_secret_id)
+        previous_raw = previous_payload.get("ACCOUNTS") or previous_payload.get("accounts")
+        if isinstance(previous_raw, list):
+            previous_accounts = [dict(item) for item in previous_raw if isinstance(item, dict)]
+        elif previous_payload.get("cano"):
+            previous_accounts = [previous_payload]
+        else:
+            previous_accounts = []
+        previous_by_account = {
+            (str(item.get("cano") or ""), str(item.get("prdt_cd") or "01")): item
+            for item in previous_accounts
+            if str(item.get("cano") or "").strip()
+        }
         cleaned = []
         for account in accounts:
             item = {str(k): str(v or "").strip() for k, v in dict(account).items()}
@@ -144,7 +157,19 @@ class EnvCredentialStore:
                 item["cano"] = digits[:8]
                 item["prdt_cd"] = digits[8:10] or item.get("prdt_cd") or "01"
             if item.get("cano"):
-                cleaned.append(item)
+                key = (str(item.get("cano") or ""), str(item.get("prdt_cd") or "01"))
+                previous = previous_by_account.get(key) or {}
+                cleaned.append(
+                    {
+                        "env": str(item.get("env") or previous.get("env") or "real").strip().lower() or "real",
+                        "cano": str(item.get("cano") or ""),
+                        "prdt_cd": str(item.get("prdt_cd") or "01").strip() or "01",
+                        "app_key": str(item.get("app_key") or "").strip() or str(previous.get("app_key") or "").strip(),
+                        "app_secret": str(item.get("app_secret") or "").strip() or str(previous.get("app_secret") or "").strip(),
+                        "paper_app_key": str(item.get("paper_app_key") or "").strip() or str(previous.get("paper_app_key") or "").strip(),
+                        "paper_app_secret": str(item.get("paper_app_secret") or "").strip() or str(previous.get("paper_app_secret") or "").strip(),
+                    }
+                )
         self._upsert_secret_json(secret_id=kis_secret_id, payload={"ACCOUNTS": cleaned, "updated_at": now.isoformat()})
         model_flags = runtime_credential_flags(parse_model_secret_providers(self._latest_secret_json(secret_id=model_secret_id)))
         upsert = getattr(self.repo, "upsert_runtime_credentials", None)
@@ -193,6 +218,33 @@ class EnvCredentialStore:
         payload = build_model_secret_payload(
             previous_payload=previous_payload,
             provider_updates=provider_updates,
+            updated_at=now.isoformat(),
+        )
+        self._upsert_secret_json(secret_id=model_secret_id, payload=payload)
+        flags = runtime_credential_flags(parse_model_secret_providers(payload))
+        upsert = getattr(self.repo, "upsert_runtime_credentials", None)
+        if callable(upsert):
+            upsert(
+                tenant_id=tenant,
+                updated_at=now,
+                updated_by=updated_by,
+                kis_secret_name=kis_secret_id,
+                model_secret_name=model_secret_id,
+                has_openai=flags["has_openai"],
+                has_gemini=flags["has_gemini"],
+                has_anthropic=flags["has_anthropic"],
+                notes="local model credentials",
+            )
+
+    def remove_model_key(self, *, tenant_id: str, updated_by: str, provider: str) -> None:
+        tenant = str(tenant_id or "").strip().lower() or "local"
+        now = utc_now()
+        model_secret_id = self._secret_id(tenant, "models")
+        kis_secret_id = self._secret_id(tenant, "kis")
+        previous_payload = self._latest_secret_json(secret_id=model_secret_id)
+        payload = build_model_secret_payload(
+            previous_payload=previous_payload,
+            provider_deletes=[provider],
             updated_at=now.isoformat(),
         )
         self._upsert_secret_json(secret_id=model_secret_id, payload=payload)

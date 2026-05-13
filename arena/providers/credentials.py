@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 from arena.providers.registry import canonical_provider, list_provider_specs
@@ -58,6 +58,7 @@ def build_model_secret_payload(
     *,
     previous_payload: Mapping[str, Any] | None = None,
     provider_updates: Mapping[str, Mapping[str, Any]] | None = None,
+    provider_deletes: Iterable[str] | None = None,
     updated_at: str | None = None,
 ) -> dict[str, Any]:
     """Builds the canonical Secret Manager payload for model credentials."""
@@ -71,6 +72,11 @@ def build_model_secret_payload(
         current = dict(merged.get(provider) or {})
         current.update(entry)
         merged[provider] = current
+
+    for raw_provider in provider_deletes or ():
+        provider = normalize_provider_token(str(raw_provider or ""))
+        if provider:
+            merged.pop(provider, None)
 
     payload: dict[str, Any] = {
         "providers": merged,

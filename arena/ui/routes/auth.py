@@ -149,6 +149,8 @@ def register_auth_routes(app: FastAPI, *, deps: AuthRouteDeps) -> None:
         if user:
             deps.repo.append_runtime_audit_log(action="auth_logout", status="ok", user_email=str(user.get("email") or ""))
         request.session.clear()
+        if deps.auth_enabled:
+            return RedirectResponse(url="/auth/google/login", status_code=302)
         return RedirectResponse(url="/settings", status_code=302)
 
     @app.get("/auth/pending", response_class=HTMLResponse)

@@ -110,7 +110,7 @@ def test_resolve_model_claude_direct_uses_instance_scoped_api_key() -> None:
     ]
 
 
-def test_resolve_model_deepseek_uses_provider_payload_api_key_and_base_url() -> None:
+def test_resolve_model_deepseek_is_disabled_for_adk_until_implemented() -> None:
     settings = load_settings()
     settings.provider_secrets = {
         "deepseek": {
@@ -120,8 +120,5 @@ def test_resolve_model_deepseek_uses_provider_payload_api_key_and_base_url() -> 
         }
     }
 
-    model = _resolve_model("deepseek", settings)
-
-    assert model.model == "deepseek/deepseek-chat"
-    assert model._additional_args["api_key"] == "tenant-deepseek"
-    assert model._additional_args["base_url"] == "https://custom.deepseek/v1"
+    with pytest.raises(ValueError, match="Unsupported ADK provider: deepseek"):
+        _resolve_model("deepseek", settings)

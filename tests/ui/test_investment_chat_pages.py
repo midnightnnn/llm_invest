@@ -91,6 +91,14 @@ def test_ui_registers_investment_chat_page_and_adk_mount(monkeypatch) -> None:
     assert "data-config-draft-panel" in response.text
     assert "/investment-chat/config-drafts" in response.text
     assert "data-config-draft-apply" in response.text
+    assert "data-credential-draft-panel" in response.text
+    credential_panel_class = response.text.split("data-credential-draft-panel", 1)[0].rsplit('class="', 1)[1].split('"', 1)[0]
+    assert "fixed inset-0" in credential_panel_class
+    assert "bottom-4 right-4" not in credential_panel_class
+    assert "https://platform.openai.com/api-keys" in response.text
+    assert "https://apiportal.koreainvestment.com" in response.text
+    assert "data-credential-kis-account-no" in response.text
+    assert "data-credential-help-link" in response.text
     assert "isAdkChatBusy" in response.text
     assert "mat-progress-bar" in response.text
     assert "textarea.chat-input-box" in response.text
@@ -168,7 +176,7 @@ def test_investment_chat_model_select_renders_all_provider_presets(monkeypatch) 
     assert client.session["investment_chat_model"] == "claude-sonnet-4-6"
 
 
-def test_investment_chat_provider_options_come_from_adk_provider_registry(monkeypatch) -> None:
+def test_investment_chat_ignores_deepseek_provider_until_implemented(monkeypatch) -> None:
     import arena.ui.app as ui_app
 
     monkeypatch.setenv("ARENA_UI_AUTH_ENABLED", "false")
@@ -186,16 +194,11 @@ def test_investment_chat_provider_options_come_from_adk_provider_registry(monkey
         params={"tenant_id": "local", "provider": "deepseek", "model": "deepseek-reasoner"},
     )
 
-    # Selector form is gone; the route still recognizes provider tokens registered
-    # in the ADK provider registry and resolves them into the iframe URL + session.
     assert response.status_code == 200
-    assert "data-chat-selector-form" not in response.text
-    assert (
-        "/investment-chat/adk/dev-ui/?tenant_id=local&amp;provider=deepseek&amp;model=deepseek-reasoner"
-        in response.text
-    )
-    assert client.session["investment_chat_provider"] == "deepseek"
-    assert client.session["investment_chat_model"] == "deepseek-reasoner"
+    assert "provider=deepseek" not in response.text
+    assert "deepseek-reasoner" not in response.text
+    assert client.session["investment_chat_provider"] != "deepseek"
+    assert client.session["investment_chat_model"] != "deepseek-reasoner"
 
 
 def test_investment_chat_page_uses_stored_provider_with_tenant_agent_model(monkeypatch) -> None:
@@ -400,7 +403,7 @@ def test_investment_chat_provider_options_are_limited_to_tenant_model_keys(monke
     assert response.status_code == 200
     assert "data-chat-selector-form" not in response.text
     assert "/investment-chat/adk/dev-ui/?tenant_id=czxnms&amp;provider=claude" in response.text
-    assert "gemini-3-flash-preview" not in response.text
+    assert "/investment-chat/adk/dev-ui/?tenant_id=czxnms&amp;provider=gemini" not in response.text
     assert client.session["investment_chat_provider"] == "claude"
     assert client.session["investment_chat_model"].startswith("claude-")
 
@@ -428,7 +431,89 @@ def test_investment_chat_provider_options_show_no_iframe_when_no_tenant_model_ke
     response = client.get("/investment-chat", params={"tenant_id": "czxnms"})
 
     assert response.status_code == 200
-    # Empty-state message now points to /settings (provider/model selector moved there).
-    assert "등록된 LLM API key가 없거나 챗봇 모델이 설정되지 않았습니다" in response.text
-    assert "환경설정" in response.text
+    assert "LLM API key 연결" in response.text
+    assert 'action="/investment-chat/model-key"' in response.text
+    assert 'name="api_key"' in response.text
+    assert "OpenAI" in response.text
+    assert "Google Gemini" in response.text
+    assert "Anthropic Claude" in response.text
+    assert "DeepSeek" not in response.text
     assert "<iframe" not in response.text
+
+
+def test_investment_chat_model_key_post_saves_key_and_redirects(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    import arena.ui.app as ui_app
+
+    monkeypatch.setenv("ARENA_UI_AUTH_ENABLED", "false")
+    monkeypatch.setenv("ARENA_LOCAL_CREDENTIALS_FILE", str(tmp_path / "credentials.json"))
+    monkeypatch.setattr(
+        ui_app,
+        "build_investment_chat_adk_app",
+        lambda **kwargs: FastAPI(title="stub-adk"),
+    )
+    repo = _DummyRepo()
+    repo.runtime_credentials["czxnms"] = {
+        "tenant_id": "czxnms",
+        "model_secret_name": "local-czxnms-models",
+        "has_openai": False,
+        "has_gemini": False,
+        "has_anthropic": False,
+    }
+    app = _build_app(repo=repo, settings=load_settings())
+    client = DirectRouteClient(app)
+
+    response = client.post(
+        "/investment-chat/model-key",
+        data={
+            "tenant_id": "czxnms",
+            "provider": "gpt",
+            "model": "gpt-5.5",
+            "api_key": "sk-test-chat-key",
+        },
+    )
+
+    assert response.status_code == 303
+    location = response.headers.get("location", "")
+    assert location == "/investment-chat?tenant_id=czxnms&provider=gpt&model=gpt-5.5"
+    assert repo.runtime_credentials["czxnms"]["has_openai"] is True
+    saved_config = json.loads(repo.get_config("czxnms", "investment_chat_config") or "{}")
+    assert saved_config["provider"] == "gpt"
+    assert saved_config["model"] == "gpt-5.5"
+
+
+def test_investment_chat_with_existing_key_hides_persistent_key_form(monkeypatch) -> None:
+    import arena.ui.app as ui_app
+
+    monkeypatch.setenv("ARENA_UI_AUTH_ENABLED", "false")
+    monkeypatch.setattr(
+        ui_app,
+        "build_investment_chat_adk_app",
+        lambda **kwargs: FastAPI(title="stub-adk"),
+    )
+    repo = _DummyRepo()
+    repo.runtime_credentials["czxnms"] = {
+        "tenant_id": "czxnms",
+        "model_secret_name": "local-czxnms-models",
+        "has_openai": True,
+        "has_gemini": False,
+        "has_anthropic": False,
+    }
+    app = _build_app(repo=repo, settings=load_settings())
+    client = DirectRouteClient(app)
+
+    response = client.get("/investment-chat", params={"tenant_id": "czxnms"})
+
+    assert response.status_code == 200
+    assert "<iframe" in response.text
+    assert "LLM API key 변경" not in response.text
+    assert 'data-llm-key-panel' not in response.text
+    assert 'action="/investment-chat/model-key"' not in response.text
+    assert "Credential Approval" in response.text
+    assert "data-credential-draft-panel" in response.text
+    assert "/investment-chat/credential-drafts" in response.text
+    assert "credentialDraftPageLoadedAt" in response.text
+    assert "createdAt < credentialDraftPageLoadedAt" in response.text
+    assert "DeepSeek" not in response.text

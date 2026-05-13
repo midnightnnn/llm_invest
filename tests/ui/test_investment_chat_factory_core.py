@@ -241,6 +241,7 @@ def test_build_investment_chat_agent_injects_tool_memory_for_request_tenant(monk
     assert captured["agent_id"] == "investment_chat"
     assert memories == [
         {
+            "event_id": "mem-chat-1",
             "summary": "AAPL 급등 후 추격매수보다 분할 접근이 나았다.",
             "importance_score": 0.82,
         }
