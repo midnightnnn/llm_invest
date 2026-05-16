@@ -20,6 +20,12 @@ def test_kospi_scheduler_defaults_align_with_runtime_schedule_guard() -> None:
     assert "ARENA_LLM_TIMEOUT_SECONDS=1500" in script
     assert "ARENA_LLM_TIMEOUT_TRADING_SECONDS=3000" in script
     assert 'AGENT_TASK_TIMEOUT="${AGENT_TASK_TIMEOUT:-7200s}"' in script
+    assert "ARENA_SLEEVE_CAPITAL_KRW=2000000" in script
+    assert "ARENA_FORCE_SLEEVE_REINIT=false" in script
+    assert "ARENA_SLEEVE_BOOTSTRAP_FROM_ACCOUNT=false" in script
+    assert "ARENA_AUTONOMY_WORKING_SET_ENABLED=true" in script
+    assert "ARENA_AUTONOMY_TOOL_DEFAULT_CANDIDATES_ENABLED=true" in script
+    assert "ARENA_AUTONOMY_OPPORTUNITY_CONTEXT_ENABLED=true" in script
 
 
 def test_split_deploy_manages_slow_and_fast_prep_jobs() -> None:
@@ -39,3 +45,14 @@ def test_split_deploy_manages_slow_and_fast_prep_jobs() -> None:
     assert '"${PREP_RUN_ARGS},--market,kospi,--stage,fast,--dispatch-job,${AGENT_KR_JOB}"' in script
     assert '"${SCHEDULER_JOB_NAME}-slow-us"' in script
     assert '"${SCHEDULER_JOB_NAME}-slow-kospi"' in script
+
+
+def test_job_deploy_replaces_env_vars_instead_of_accumulating_legacy_values() -> None:
+    script = (
+        Path(__file__).resolve().parents[1]
+        / "scripts"
+        / "deploy_cloud_run_job.sh"
+    ).read_text(encoding="utf-8")
+
+    assert "--set-env-vars" in script
+    assert "--update-env-vars" not in script

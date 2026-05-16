@@ -373,6 +373,9 @@ class PromptPack:
         graph_context = str(context.get("graph_context") or "").strip()
         if graph_context:
             payload["graph_context"] = graph_context
+        runtime_clock = context.get("_runtime_clock")
+        if isinstance(runtime_clock, dict) and runtime_clock:
+            payload["_runtime_clock"] = runtime_clock
         return payload
 
     @staticmethod

@@ -60,6 +60,21 @@ def test_execution_prompt_schema_requests_structured_thesis_fields() -> None:
     assert "rationale은 사람이 읽는 주문 판단 요약문" in prompt
 
 
+def test_decision_payload_includes_runtime_clock_when_present() -> None:
+    context = {
+        "cycle_phase": "execution",
+        "_runtime_clock": {"now_kst": "2026-05-15T15:25:14+09:00"},
+    }
+
+    payload = PromptPack.decision_payload(context, max_tool_calls=10)
+
+    assert payload["_runtime_clock"] == {
+        "now_kst": "2026-05-15T15:25:14+09:00",
+    }
+    assert "supervisor" not in str(payload).lower()
+    assert "deadline" not in str(payload).lower()
+
+
 def test_prompt_pack_uses_phase_specific_active_thesis_projection() -> None:
     context = {
         "active_thesis_context": "Active Thesis:\n- full projection",

@@ -33,11 +33,13 @@ class _InstrumentedLiteLLMClient(LiteLLMClient):
         provider: str = "",
         metadata_getter: Callable[[], dict[str, Any]] | None = None,
         delegate: LiteLLMClient | None = None,
+        model_call_timeout_seconds_getter: Callable[[str], float | int | None] | None = None,
     ) -> None:
         self._agent_id = str(agent_id or "").strip()
         self._provider = str(provider or "").strip()
         self._metadata_getter = metadata_getter
         self._delegate = delegate
+        self._model_call_timeout_seconds_getter = model_call_timeout_seconds_getter
 
     def _metadata(self) -> dict[str, Any]:
         if not callable(self._metadata_getter):
@@ -48,12 +50,28 @@ class _InstrumentedLiteLLMClient(LiteLLMClient):
             return {}
         return data if isinstance(data, dict) else {}
 
+    def _watchdog_timeout_seconds(self, model: Any) -> float | None:
+        if not callable(self._model_call_timeout_seconds_getter):
+            return None
+        try:
+            raw_timeout = self._model_call_timeout_seconds_getter(str(model or "").strip())
+        except Exception:
+            return None
+        if raw_timeout is None:
+            return None
+        try:
+            timeout = float(raw_timeout)
+        except (TypeError, ValueError):
+            return None
+        return timeout if timeout > 0 else None
+
     async def acompletion(self, model, messages, tools, **kwargs):
         started = time.perf_counter()
         metadata = self._metadata()
         message_count = len(messages) if isinstance(messages, list) else None
         tool_count = len(tools) if isinstance(tools, list) else None
-        timeout = kwargs.get("timeout")
+        watchdog_timeout = self._watchdog_timeout_seconds(model)
+        timeout = watchdog_timeout if watchdog_timeout is not None else kwargs.get("timeout")
         base_fields = {
             **metadata,
             "agent_id": metadata.get("agent_id") or self._agent_id,
@@ -72,20 +90,25 @@ class _InstrumentedLiteLLMClient(LiteLLMClient):
             extra=event_extra("adk_model_acompletion_start", **base_fields),
         )
         try:
-            if self._delegate is not None:
-                response = await self._delegate.acompletion(
+            call_coro = (
+                self._delegate.acompletion(
                     model=model,
                     messages=messages,
                     tools=tools,
                     **kwargs,
                 )
+                if self._delegate is not None
+                else super().acompletion(
+                    model=model,
+                    messages=messages,
+                    tools=tools,
+                    **kwargs,
+                )
+            )
+            if watchdog_timeout is not None:
+                response = await asyncio.wait_for(call_coro, timeout=watchdog_timeout)
             else:
-                response = await super().acompletion(
-                    model=model,
-                    messages=messages,
-                    tools=tools,
-                    **kwargs,
-                )
+                response = await call_coro
         except asyncio.CancelledError as exc:
             elapsed_ms = int((time.perf_counter() - started) * 1000)
             logger.warning(
@@ -97,6 +120,23 @@ class _InstrumentedLiteLLMClient(LiteLLMClient):
                 str(exc),
                 extra=failure_extra(
                     "adk_model_acompletion_cancelled",
+                    exc,
+                    **base_fields,
+                    elapsed_ms=elapsed_ms,
+                ),
+            )
+            raise
+        except asyncio.TimeoutError as exc:
+            elapsed_ms = int((time.perf_counter() - started) * 1000)
+            logger.warning(
+                "[yellow]ADK model acompletion timeout[/yellow] agent=%s provider=%s model=%s elapsed=%dms timeout=%s",
+                base_fields.get("agent_id") or "-",
+                base_fields.get("provider") or "-",
+                base_fields.get("model") or "-",
+                elapsed_ms,
+                base_fields.get("timeout_seconds"),
+                extra=failure_extra(
+                    "adk_model_acompletion_timeout",
                     exc,
                     **base_fields,
                     elapsed_ms=elapsed_ms,
@@ -264,6 +304,7 @@ def _resolve_model(
     model_override: str = "",
     llm_params: dict[str, Any] | None = None,
     model_call_metadata_getter: Callable[[], dict[str, Any]] | None = None,
+    model_call_timeout_seconds_getter: Callable[[str], float | int | None] | None = None,
 ) -> Any:
     """Builds ADK model objects per provider configuration.
 
@@ -303,6 +344,7 @@ def _resolve_model(
                 agent_id=spec.provider_id,
                 provider=spec.provider_id,
                 metadata_getter=model_call_metadata_getter,
+                model_call_timeout_seconds_getter=model_call_timeout_seconds_getter,
             ),
         }
         kwargs.update(_anthropic_runtime_kwargs(model_id, llm_params))
@@ -339,6 +381,7 @@ def _resolve_model(
                 agent_id=spec.provider_id,
                 provider=spec.provider_id,
                 metadata_getter=model_call_metadata_getter,
+                model_call_timeout_seconds_getter=model_call_timeout_seconds_getter,
             ),
         }
         api_key = provider_api_key_from_settings(settings, spec.provider_id)

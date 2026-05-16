@@ -11,6 +11,7 @@ def test_ui_deploy_script_runs_schema_ensure_before_deploy() -> None:
 
     assert "UI_ENSURE_SCHEMA_BEFORE_DEPLOY" in script
     assert "init-bq" in script
+    assert "ARENA_MODE=gcp" in script
     assert "Ensure BigQuery schema" in script
     assert script.index("Ensure BigQuery schema") < script.index("Deploy Cloud Run Service")
 
@@ -22,6 +23,8 @@ def test_ui_deploy_script_disables_runtime_schema_ensure_and_uses_configurable_m
     assert 'UI_ENSURE_SCHEMA_ON_STARTUP="${ARENA_UI_ENSURE_SCHEMA_ON_STARTUP:-false}"' in script
     assert 'UI_MEMORY="${CLOUD_RUN_UI_MEMORY:-1Gi}"' in script
     assert '--memory "${UI_MEMORY}"' in script
+    assert "--set-env-vars" in script
+    assert "--update-env-vars" not in script
 
 
 def test_ui_deploy_script_defaults_chat_sessions_to_firestore_without_min_instance() -> None:

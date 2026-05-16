@@ -29,6 +29,7 @@ from arena.agents.adk_models import (
     _normalize_gemini_model,
     _resolve_model,
 )
+from arena.agents.cycle_supervisor import AgentCycleSupervisor
 from arena.agents.adk_order_support import (
     build_order_intents,
     format_execution_summary,
@@ -83,6 +84,7 @@ from arena.agents.adk_runner_state import (
     unresolved_candidates,
     update_candidate_ledger,
 )
+from arena.agents.runtime_clock import with_runtime_clock
 from arena.agents.adk_tool_compaction import _compact_tool_result_for_prompt
 from arena.agents.adk_tool_config import (
     _load_disabled_tool_ids,
@@ -333,6 +335,7 @@ class _ADKDecisionRunner:
         self._prompt_snapshots: list[dict[str, Any]] = []
         self._llm_call_ids_by_phase: dict[str, str] = {}
         self._latest_llm_call_id: str = ""
+        self._cycle_supervisor = AgentCycleSupervisor(cycle_id="")
         tool_resolution = resolve_adk_tools(
             repo=self.repo,
             tenant_id=self.tenant_id,
@@ -358,6 +361,7 @@ class _ADKDecisionRunner:
             max_tool_events=self._max_tool_events,
             adk_tools=tool_resolution.adk_tools,
             model_call_metadata_getter=self._model_call_metadata,
+            model_call_timeout_seconds_getter=self._model_call_timeout_seconds,
             before_model_callback=self._before_model_callback,
             after_model_callback=self._after_model_callback,
             on_model_error_callback=self._on_model_error_callback,
@@ -390,6 +394,17 @@ class _ADKDecisionRunner:
             "cycle_id": str(context.get("cycle_id") or "").strip(),
             "llm_call_id": self._latest_llm_call_id,
         }
+
+    def _model_call_timeout_seconds(self, model: str) -> int:
+        return self._cycle_supervisor.model_call_timeout_seconds(
+            provider=self.provider,
+            model=model,
+        )
+
+    def _sync_cycle_supervisor(self, cycle_id: str) -> None:
+        normalized = str(cycle_id or "").strip()
+        if normalized and self._cycle_supervisor.cycle_id != normalized:
+            self._cycle_supervisor = AgentCycleSupervisor(cycle_id=normalized)
 
     @staticmethod
     def _llm_request_shape(llm_request: Any) -> dict[str, Any]:
@@ -1218,6 +1233,8 @@ class _ADKDecisionRunner:
         ADK session (explore → execution continuity) so that the model retains
         all prior tool-call history in its conversation context.
         """
+        context = with_runtime_clock(context)
+        self._sync_cycle_supervisor(str(context.get("cycle_id") or ""))
         phase = str(context.get("cycle_phase") or "execution").strip().lower() or "execution"
         phase_start_idx = len(self._tool_events)
         if not resume_session_id:

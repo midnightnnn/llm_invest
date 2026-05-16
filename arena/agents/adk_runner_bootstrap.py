@@ -24,6 +24,7 @@ from arena.agents.adk_tool_compaction import _compact_tool_result_for_prompt
 from arena.agents.adk_tool_config import _load_mcp_toolsets, _resolve_disabled_tool_ids
 from arena.config import AgentConfig, Settings
 from arena.data.bq import BigQueryRepository
+from arena.agents.runtime_clock import attach_runtime_clock
 from arena.memory.policy import memory_react_injection_enabled
 from arena.memory.query_builders import build_memory_query_spec
 from arena.tools.registry import ToolEntry, ToolRegistry
@@ -150,6 +151,7 @@ def build_tool_wrapper(
                 pass
 
         compact_res = _compact_tool_result_for_prompt(name, res, args=args_preview)
+        model_res = attach_runtime_clock(compact_res)
 
         if not err:
             logger.info(
@@ -161,7 +163,7 @@ def build_tool_wrapper(
             )
 
         replace_last_tool_event_result(tool_events, compact_res)
-        return compact_res
+        return model_res
 
     return apply_tool_schema_metadata(wrapper, entry=entry, sig=sig)
 
@@ -231,6 +233,7 @@ def build_agent(
     max_tool_events: int,
     adk_tools: list[Any],
     model_call_metadata_getter: Callable[[], dict[str, Any]] | None = None,
+    model_call_timeout_seconds_getter: Callable[[str], float | int | None] | None = None,
     before_model_callback: Callable[..., Any] | None = None,
     after_model_callback: Callable[..., Any] | None = None,
     on_model_error_callback: Callable[..., Any] | None = None,
@@ -243,6 +246,7 @@ def build_agent(
         model_override=model_override,
         llm_params=llm_params,
         model_call_metadata_getter=model_call_metadata_getter,
+        model_call_timeout_seconds_getter=model_call_timeout_seconds_getter,
     )
     generate_cfg = _build_generate_content_config(
         provider=provider,

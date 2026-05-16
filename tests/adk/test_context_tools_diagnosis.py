@@ -191,6 +191,7 @@ def test_portfolio_diagnosis_aligns_benchmark_period_with_current_sleeve_return(
     repo = _RepoForPortfolioDiagnosisExact()
     tool.repo = repo
     tool.settings = load_settings()
+    tool.settings.trading_mode = "live"
     tool.settings.kis_target_market = "nasdaq"
     tool._context = {
         "portfolio": {

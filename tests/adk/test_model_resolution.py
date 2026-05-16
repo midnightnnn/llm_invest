@@ -114,6 +114,22 @@ def test_resolve_model_claude_direct_uses_instance_scoped_api_key() -> None:
     ]
 
 
+def test_resolve_model_wires_model_call_timeout_getter() -> None:
+    settings = load_settings()
+    settings.anthropic_api_key = "tenant-anthropic"
+    settings.anthropic_use_vertexai = False
+    settings.anthropic_model = "claude-sonnet-4-6"
+
+    model = _resolve_model(
+        "claude",
+        settings,
+        model_call_timeout_seconds_getter=lambda model_id: 7 if "claude" in model_id else None,
+    )
+
+    client = model.llm_client
+    assert client._watchdog_timeout_seconds("anthropic/claude-sonnet-4-6") == 7.0
+
+
 def test_instrumented_litellm_client_logs_completion_boundaries(caplog: pytest.LogCaptureFixture) -> None:
     class _Delegate:
         async def acompletion(self, *, model, messages, tools, **kwargs):
@@ -185,6 +201,38 @@ def test_instrumented_litellm_client_logs_completion_errors(caplog: pytest.LogCa
     assert len(error_records) == 1
     assert error_records[0].llm_call_id == "llm-err"
     assert error_records[0].err_type == "RuntimeError"
+
+
+def test_instrumented_litellm_client_times_out_slow_delegate(caplog: pytest.LogCaptureFixture) -> None:
+    class _Delegate:
+        async def acompletion(self, *, model, messages, tools, **kwargs):
+            _ = model, messages, tools, kwargs
+            await asyncio.sleep(10)
+
+    client = _InstrumentedLiteLLMClient(
+        agent_id="claude",
+        provider="claude",
+        metadata_getter=lambda: {"llm_call_id": "llm-timeout", "phase": "explore"},
+        delegate=_Delegate(),
+        model_call_timeout_seconds_getter=lambda model: 0.01,
+    )
+
+    with caplog.at_level(logging.INFO, logger="arena.agents.adk_models"):
+        with pytest.raises(asyncio.TimeoutError):
+            asyncio.run(
+                client.acompletion(
+                    model="anthropic/claude-opus-4-7",
+                    messages=[],
+                    tools=None,
+                )
+            )
+
+    timeout_records = [
+        record for record in caplog.records if getattr(record, "event", "") == "adk_model_acompletion_timeout"
+    ]
+    assert len(timeout_records) == 1
+    assert timeout_records[0].llm_call_id == "llm-timeout"
+    assert timeout_records[0].timeout_seconds == 0.01
 
 
 def test_instrumented_litellm_client_logs_completion_cancellation(caplog: pytest.LogCaptureFixture) -> None:
