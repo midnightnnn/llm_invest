@@ -274,3 +274,122 @@ def test_context_builder_includes_active_thesis_context_for_holdings() -> None:
     assert "AAPL" in context["active_thesis_context"]
     assert "AI demand and margin recovery" in context["active_thesis_context"]
     assert context["active_theses"][0]["event_type"] == "thesis_update"
+
+
+def test_context_builder_preserves_full_active_thesis_summary() -> None:
+    repo = FakeRepo()
+    long_thesis = (
+        "AAPL thesis starts with durable services growth, installed base monetization, "
+        "and buyback support. "
+        + ("The position remains justified by cash generation and AI platform optionality. " * 8)
+        + "ACTIVE_THESIS_TAIL"
+    )
+    repo.active_thesis_rows["AAPL"] = {
+        "event_id": "mem_thesis_long",
+        "event_type": "thesis_update",
+        "summary": "AAPL thesis update action=add status=FILLED thesis=summary fallback",
+        "payload_json": json.dumps(
+            {
+                "thesis_id": "thesis:gpt:AAPL:paper:2026-03-29:intent_open",
+                "ticker": "AAPL",
+                "state": "active",
+                "thesis_summary": long_thesis,
+                "strategy_refs": ["services_growth", "buyback", "ai_platform"],
+            }
+        ),
+    }
+    builder = ContextBuilder(repo=repo, memory=FakeMemory(), board=FakeBoard(), settings=_settings())
+    snapshot = AccountSnapshot(
+        cash_krw=1_000_000,
+        total_equity_krw=1_200_000,
+        positions={
+            "AAPL": Position(
+                ticker="AAPL",
+                quantity=2,
+                avg_price_krw=100_000,
+                market_price_krw=105_000,
+            )
+        },
+    )
+
+    context = builder.build(agent_id="gpt", snapshot=snapshot)
+
+    active_thesis_context = context["active_thesis_context"]
+    assert "ACTIVE_THESIS_TAIL" in active_thesis_context
+    assert "..." not in active_thesis_context
+    assert "refs=services_growth,buyback,ai_platform" in active_thesis_context
+
+
+def test_context_builder_renders_structured_active_thesis_fields() -> None:
+    repo = FakeRepo()
+    repo.active_thesis_rows["AAPL"] = {
+        "event_id": "mem_thesis_structured",
+        "event_type": "thesis_update",
+        "summary": "AAPL thesis update action=add status=FILLED thesis=legacy long rationale blob",
+        "payload_json": json.dumps(
+            {
+                "thesis_id": "thesis:gpt:AAPL:paper:2026-03-29:intent_open",
+                "ticker": "AAPL",
+                "state": "active",
+                "thesis_summary": "legacy long rationale blob should not be prompt primary",
+                "thesis_core": "AI 수요와 마진 회복이 EPS 개선을 견인한다.",
+                "supporting_factors": [
+                    {"label": "AI 서버 수요 증가", "type": "catalyst", "evidence": "AI 서버 수요 증가가 매출 성장 기대를 높인다."},
+                    {"label": "마진 회복", "type": "metric", "evidence": "마진 회복이 EPS 개선을 견인한다."},
+                ],
+                "risk_factors": [
+                    {"label": "밸류에이션 부담", "type": "risk", "evidence": "밸류에이션 부담이 단기 조정 리스크다."}
+                ],
+                "invalidation_conditions": [
+                    {"label": "가이던스 하향", "type": "event", "evidence": "가이던스 하향은 마진 회복 thesis를 훼손한다."}
+                ],
+                "expected_outcome": "중기 EPS 개선",
+                "sizing_reason": "현금 버퍼와 기존 비중을 감안해 2주만 추가한다.",
+                "time_horizon_days": 60,
+                "strategy_refs": ["momentum", "earnings_growth"],
+            }
+        ),
+    }
+    builder = ContextBuilder(repo=repo, memory=FakeMemory(), board=FakeBoard(), settings=_settings())
+    snapshot = AccountSnapshot(
+        cash_krw=1_000_000,
+        total_equity_krw=1_200_000,
+        positions={
+            "AAPL": Position(
+                ticker="AAPL",
+                quantity=2,
+                avg_price_krw=100_000,
+                market_price_krw=105_000,
+            )
+        },
+    )
+
+    context = builder.build(agent_id="gpt", snapshot=snapshot)
+
+    active_thesis_context = context["active_thesis_context"]
+    assert "core=AI 수요와 마진 회복이 EPS 개선을 견인한다." in active_thesis_context
+    assert "support=AI 서버 수요 증가; 마진 회복" in active_thesis_context
+    assert "risk=밸류에이션 부담" in active_thesis_context
+    assert "invalidate=가이던스 하향" in active_thesis_context
+    assert "outcome=중기 EPS 개선" in active_thesis_context
+    assert "sizing=현금 버퍼와 기존 비중을 감안해 2주만 추가한다." in active_thesis_context
+    assert "horizon=60d" in active_thesis_context
+    assert "legacy long rationale blob should not be prompt primary" not in active_thesis_context
+
+    explore_context = context["active_thesis_context_explore"]
+    assert "core=AI 수요와 마진 회복이 EPS 개선을 견인한다." in explore_context
+    assert "support=AI 서버 수요 증가; 마진 회복" in explore_context
+    assert "risk=밸류에이션 부담" in explore_context
+    assert "horizon=60d" in explore_context
+    assert "sizing=" not in explore_context
+    assert "invalidate=" not in explore_context
+    assert "outcome=" not in explore_context
+
+    execution_context = context["active_thesis_context_execution"]
+    assert "core=AI 수요와 마진 회복이 EPS 개선을 견인한다." in execution_context
+    assert "risk=밸류에이션 부담" in execution_context
+    assert "invalidate=가이던스 하향" in execution_context
+    assert "sizing=현금 버퍼와 기존 비중을 감안해 2주만 추가한다." in execution_context
+    assert "horizon=60d" in execution_context
+    assert "support=" not in execution_context
+    assert "outcome=" not in execution_context

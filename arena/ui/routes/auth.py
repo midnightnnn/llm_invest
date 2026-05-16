@@ -123,7 +123,7 @@ def register_auth_routes(app: FastAPI, *, deps: AuthRouteDeps) -> None:
                 )
                 return RedirectResponse(url="/settings?ok=0&msg=tenant%20provisioning%20failed", status_code=302)
             if bool(getattr(access_result, "created_tenant", False)) and next_path in {"", "/"}:
-                next_path = f"/settings?tenant_id={viewer_tenants[0]}"
+                next_path = f"/investment-chat?{urlencode({'tenant_id': viewer_tenants[0]})}"
             deps.repo.append_runtime_audit_log(
                 action="auth_google_login",
                 status="ok",

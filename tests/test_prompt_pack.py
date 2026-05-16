@@ -41,6 +41,51 @@ def test_prompt_pack_renders_explore_prompt_from_single_entrypoint() -> None:
     assert '"max_tool_calls": 7' in prompt
 
 
+def test_execution_prompt_schema_requests_structured_thesis_fields() -> None:
+    prompt = PromptPack.render_decision_prompt(
+        {
+            "cycle_phase": "execution",
+            "portfolio": {"cash_krw": 1000},
+            "market_context": [],
+        },
+        [],
+        max_tool_calls=7,
+    )
+
+    assert '"thesis_core"' in prompt
+    assert '"supporting_factors"' in prompt
+    assert '"risk_factors"' in prompt
+    assert '"invalidation_conditions"' in prompt
+    assert "catalyst|event|indicator|metric|macro_factor|regime|strategy_tag|thesis|scenario" in prompt
+    assert "rationale은 사람이 읽는 주문 판단 요약문" in prompt
+
+
+def test_prompt_pack_uses_phase_specific_active_thesis_projection() -> None:
+    context = {
+        "active_thesis_context": "Active Thesis:\n- full projection",
+        "active_thesis_context_explore": "Active Thesis:\n- explore projection",
+        "active_thesis_context_execution": "Active Thesis:\n- execution projection",
+        "portfolio": {"cash_krw": 1000},
+        "market_context": [],
+    }
+
+    explore_prompt = PromptPack.render_decision_prompt(
+        {**context, "cycle_phase": "explore"},
+        [],
+        max_tool_calls=7,
+    )
+    execution_prompt = PromptPack.render_decision_prompt(
+        {**context, "cycle_phase": "execution"},
+        [],
+        max_tool_calls=7,
+    )
+
+    explore_payload = _decision_payload_from_prompt(explore_prompt)
+    execution_payload = _decision_payload_from_prompt(execution_prompt)
+    assert explore_payload["active_thesis_context"] == "Active Thesis:\n- explore projection"
+    assert execution_payload["active_thesis_context"] == "Active Thesis:\n- execution projection"
+
+
 def test_explore_payload_uses_positions_brief_and_omits_raw_position_duplicates() -> None:
     prompt = PromptPack.render_decision_prompt(
         {
@@ -328,9 +373,9 @@ def test_execution_prompt_describes_ontology_friendly_order_rationale() -> None:
         max_tool_calls=5,
     )
 
-    assert "ontology-friendly investment memo" in prompt
-    assert "explicit ticker names" in prompt
-    assert "catalyst/risk/thesis/outcome" in prompt
+    assert "rationale은 사람이 읽는 주문 판단 요약문" in prompt
+    assert "thesis_core, supporting_factors, risk_factors" in prompt
+    assert "source-grounded relation triple" in prompt
     assert "memory/thesis summary" not in prompt
     assert "generic placeholders" not in prompt
     assert "2-4" not in prompt

@@ -324,6 +324,13 @@ class MemoryStore:
                     previous_payload,
                     rationale=intent.rationale,
                     strategy_refs=intent.strategy_refs,
+                    thesis_core=getattr(intent, "thesis_core", ""),
+                    supporting_factors=getattr(intent, "supporting_factors", []),
+                    risk_factors=getattr(intent, "risk_factors", []),
+                    invalidation_conditions=getattr(intent, "invalidation_conditions", []),
+                    expected_outcome=getattr(intent, "expected_outcome", ""),
+                    sizing_reason=getattr(intent, "sizing_reason", ""),
+                    time_horizon_days=getattr(intent, "time_horizon_days", None),
                 ):
                     return
                 event_type = "thesis_update"
@@ -353,6 +360,13 @@ class MemoryStore:
                     previous_payload,
                     rationale=intent.rationale,
                     strategy_refs=intent.strategy_refs,
+                    thesis_core=getattr(intent, "thesis_core", ""),
+                    supporting_factors=getattr(intent, "supporting_factors", []),
+                    risk_factors=getattr(intent, "risk_factors", []),
+                    invalidation_conditions=getattr(intent, "invalidation_conditions", []),
+                    expected_outcome=getattr(intent, "expected_outcome", ""),
+                    sizing_reason=getattr(intent, "sizing_reason", ""),
+                    time_horizon_days=getattr(intent, "time_horizon_days", None),
                 ):
                     return
                 event_type = "thesis_update"

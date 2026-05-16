@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from arena.memory.graph import board_post_node_id, memory_event_node_id, research_briefing_node_id
+from arena.memory.relation_ontology import canonical_entity_type, predicate_allows
 from arena.models import BoardPost, MemoryEvent
 
 RELATION_EXTRACTION_VERSION = "deterministic_v1"
@@ -29,6 +30,30 @@ ALLOWED_RELATION_PREDICATES = frozenset(
 _SLUG_RE = re.compile(r"[^\w.:-]+", re.UNICODE)
 _TICKER_RE = re.compile(r"^[A-Z0-9][A-Z0-9._-]{0,14}$")
 _SOURCE_NODE_PREFIXES = ("mem:", "post:", "brief:", "intent:", "exec:")
+_TICKER_STOPWORDS = frozenset(
+    {
+        "BUY",
+        "SELL",
+        "HOLD",
+        "FILLED",
+        "SIMULATED",
+        "SUBMITTED",
+        "REJECTED",
+        "ERROR",
+        "RSI",
+        "ROE",
+        "BPS",
+        "EPS",
+        "NAV",
+        "KRW",
+        "USD",
+        "MACD",
+        "SMA",
+        "KOSPI",
+        "KOSDAQ",
+        "ETF",
+    }
+)
 
 
 def _text(value: Any) -> str:
@@ -287,9 +312,38 @@ def _extract_structured_tickers(*values: Any) -> list[str]:
     for value in values:
         for token in _list_tokens(value):
             clean = _upper(token)
-            if _TICKER_RE.match(clean) and clean not in tickers:
+            if _TICKER_RE.match(clean) and clean not in _TICKER_STOPWORDS and clean not in tickers:
                 tickers.append(clean)
     return tickers
+
+
+def _structured_factor_items(
+    value: Any,
+    *,
+    predicate: str,
+    default_type: str,
+    limit: int = 5,
+) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        return []
+    out: list[dict[str, str]] = []
+    for item in value:
+        if isinstance(item, dict):
+            label = _trim(item.get("label") or item.get("name") or item.get("text"), max_len=180)
+            entity_type = canonical_entity_type(_text(item.get("type") or item.get("entity_type") or default_type))
+            evidence = _trim(item.get("evidence") or item.get("evidence_text") or "", max_len=360)
+        else:
+            label = _trim(item, max_len=180)
+            entity_type = canonical_entity_type(default_type)
+            evidence = ""
+        if not label or not predicate_allows(predicate, entity_type, "thesis"):
+            continue
+        row = {"label": label, "type": entity_type, "evidence": evidence or label}
+        if row not in out:
+            out.append(row)
+        if len(out) >= limit:
+            break
+    return out
 
 
 def build_memory_event_relation_triples(value: MemoryEvent | dict[str, Any]) -> list[dict[str, Any]]:
@@ -369,6 +423,38 @@ def build_memory_event_relation_triples(value: MemoryEvent | dict[str, Any]) -> 
         )
         if row:
             triples.append(row)
+
+    thesis_label = _trim(payload.get("thesis_core") or payload.get("thesis_summary"), max_len=180)
+    thesis_node_id = _entity_node_id("thesis", thesis_label)
+    if thesis_label and thesis_node_id:
+        for field, predicate, default_type in [
+            ("supporting_factors", "supports", "catalyst"),
+            ("risk_factors", "risk_to", "risk"),
+            ("invalidation_conditions", "invalidates", "risk"),
+        ]:
+            for item in _structured_factor_items(payload.get(field), predicate=predicate, default_type=default_type):
+                subject_node_id = _entity_node_id(item["type"], item["label"])
+                row = _make_relation_triple(
+                    source_table="agent_memory_events",
+                    source_id=event_id,
+                    source_node_id=source_node_id,
+                    source_label=summary or subject_label,
+                    source_created_at=created_at,
+                    agent_id=agent_id,
+                    trading_mode=trading_mode,
+                    cycle_id=cycle_id,
+                    subject_node_id=subject_node_id,
+                    subject_label=item["label"],
+                    subject_type=item["type"],
+                    predicate=predicate,
+                    object_node_id=thesis_node_id,
+                    object_label=thesis_label,
+                    object_type="thesis",
+                    evidence_text=item.get("evidence") or item["label"],
+                    detail_json={"source": "memory_event", "field": field},
+                )
+                if row:
+                    triples.append(row)
 
     return _dedupe_triples(triples)
 

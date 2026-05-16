@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 
+from fastapi import FastAPI
+
 from arena.config import load_settings
 from arena.models import AccountSnapshot
 from arena.ui.server import _build_app
@@ -91,6 +93,52 @@ def test_auth_google_callback_auto_provisions_new_user(monkeypatch) -> None:
     assert repo.has_runtime_user_tenant(user_email="pending@example.com", tenant_id="pending") is True
     assert repo.get_config("pending", "distribution_mode") == "simulated_only"
     assert repo.get_config("pending", "real_trading_approved") == "false"
+
+
+def test_auth_google_callback_new_user_without_next_path_enters_chat_key_onboarding(monkeypatch) -> None:
+    class _TokenResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, str]:
+            return {"id_token": "fake-id-token"}
+
+    monkeypatch.setenv("ARENA_UI_SETTINGS_ENABLED", "true")
+    monkeypatch.setenv("ARENA_UI_AUTH_ENABLED", "true")
+    monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_ID", "client-id")
+    monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_SECRET", "client-secret")
+    monkeypatch.setattr("arena.ui.app.requests.post", lambda *args, **kwargs: _TokenResponse())
+    monkeypatch.setattr(
+        "arena.ui.app.google_id_token.verify_oauth2_token",
+        lambda raw, req, client_id: {
+            "email": "pending@example.com",
+            "name": "Pending User",
+            "sub": "sub-123",
+        },
+    )
+    monkeypatch.setattr(
+        "arena.ui.app.build_investment_chat_adk_app",
+        lambda **kwargs: FastAPI(title="stub-adk"),
+    )
+
+    repo = _DummyRepo()
+    app = _build_app(repo=repo, settings=load_settings())
+    client = DirectRouteClient(app)
+    client.session["oauth_state"] = "state-123"
+
+    response = client.get("/auth/google/callback", params={"code": "oauth-code", "state": "state-123"})
+
+    assert response.status_code == 302
+    assert response.headers.get("location") == "/investment-chat?tenant_id=pending"
+    assert repo.runtime_credentials["pending"]["has_openai"] is False
+    assert repo.runtime_credentials["pending"]["has_gemini"] is False
+    assert repo.runtime_credentials["pending"]["has_anthropic"] is False
+
+    chat_page = client.get(response.headers["location"])
+    assert chat_page.status_code == 200
+    assert "LLM API key 연결" in chat_page.text
+    assert 'action="/investment-chat/model-key"' in chat_page.text
+    assert "<iframe" not in chat_page.text
 
 
 def test_auth_google_callback_redirects_rejected_user_to_pending(monkeypatch) -> None:

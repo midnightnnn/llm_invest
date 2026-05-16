@@ -119,6 +119,45 @@ def test_relation_extraction_pending_sources_returns_source_text(repo):
     assert "text" not in rows[0]
 
 
+def test_relation_extraction_pending_sources_includes_memory_payload_json(repo):
+    t = _now()
+    repo.execute(
+        """
+        INSERT INTO agent_memory_events
+          (tenant_id, event_id, created_at, agent_id, event_type, summary, trading_mode, payload_json, graph_node_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            "tenant-a",
+            "rel-source-payload",
+            t,
+            "gpt",
+            "thesis_update",
+            "AAPL thesis update.",
+            "paper",
+            '{"thesis_summary":"AI demand and margin recovery","supporting_factors":[{"label":"AI demand","type":"catalyst","evidence":"AI demand supports AAPL thesis."}]}',
+            "mem:rel-source-payload",
+        ],
+    )
+
+    rows = repo.relation_extraction_pending_sources(
+        limit=10,
+        source_table="agent_memory_events",
+        event_types=["thesis_update"],
+        trading_mode="paper",
+        extractor_version="semantic_relation_extractor_v1",
+        prompt_version="semantic_relation_prompt_v2",
+        ontology_version="semantic_relation_ontology_v1",
+        tenant_id="tenant-a",
+    )
+
+    assert len(rows) == 1
+    assert "AAPL thesis update." in rows[0]["source_text"]
+    assert '"supporting_factors"' in rows[0]["source_text"]
+    assert rows[0]["source_label"] == "AAPL thesis update."
+    assert rows[0]["source_node_id"] == "mem:rel-source-payload"
+
+
 def test_compaction_reflections_for_cycle_returns_existing_reflections(repo):
     t = _now()
     repo.execute(

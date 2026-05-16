@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import asyncio
+import logging
+
 import pytest
 
 from arena.agents.adk_agents import _has_credentials, _resolve_disabled_tool_ids, _resolve_model
+from arena.agents.adk_models import _InstrumentedLiteLLMClient
 from arena.config import AgentConfig, load_settings
 
 
@@ -108,6 +112,109 @@ def test_resolve_model_claude_direct_uses_instance_scoped_api_key() -> None:
     assert model._additional_args["cache_control_injection_points"] == [
         {"location": "message", "role": "system"},
     ]
+
+
+def test_instrumented_litellm_client_logs_completion_boundaries(caplog: pytest.LogCaptureFixture) -> None:
+    class _Delegate:
+        async def acompletion(self, *, model, messages, tools, **kwargs):
+            _ = model, messages, tools, kwargs
+            return {"ok": True}
+
+    client = _InstrumentedLiteLLMClient(
+        agent_id="claude",
+        provider="claude",
+        metadata_getter=lambda: {
+            "tenant_id": "tenant-a",
+            "cycle_id": "cycle-a",
+            "phase": "explore",
+            "llm_call_id": "llm-a",
+        },
+        delegate=_Delegate(),
+    )
+
+    with caplog.at_level(logging.INFO, logger="arena.agents.adk_models"):
+        result = asyncio.run(
+            client.acompletion(
+                model="anthropic/claude-opus-4-7",
+                messages=[{"role": "user", "content": "hello"}],
+                tools=[],
+                timeout=30,
+            )
+        )
+
+    assert result == {"ok": True}
+    records = [record for record in caplog.records if getattr(record, "event", "").startswith("adk_model_acompletion_")]
+    assert [record.event for record in records] == [
+        "adk_model_acompletion_start",
+        "adk_model_acompletion_end",
+    ]
+    assert records[0].llm_call_id == "llm-a"
+    assert records[0].phase == "explore"
+    assert records[0].message_count == 1
+    assert records[0].tool_count == 0
+    assert records[0].timeout_seconds == 30
+    assert records[1].elapsed_ms >= 0
+
+
+def test_instrumented_litellm_client_logs_completion_errors(caplog: pytest.LogCaptureFixture) -> None:
+    class _Delegate:
+        async def acompletion(self, *, model, messages, tools, **kwargs):
+            _ = model, messages, tools, kwargs
+            raise RuntimeError("provider stalled")
+
+    client = _InstrumentedLiteLLMClient(
+        agent_id="claude",
+        provider="claude",
+        metadata_getter=lambda: {"llm_call_id": "llm-err", "phase": "explore"},
+        delegate=_Delegate(),
+    )
+
+    with caplog.at_level(logging.INFO, logger="arena.agents.adk_models"):
+        with pytest.raises(RuntimeError, match="provider stalled"):
+            asyncio.run(
+                client.acompletion(
+                    model="anthropic/claude-opus-4-7",
+                    messages=[],
+                    tools=None,
+                )
+            )
+
+    error_records = [
+        record for record in caplog.records if getattr(record, "event", "") == "adk_model_acompletion_error"
+    ]
+    assert len(error_records) == 1
+    assert error_records[0].llm_call_id == "llm-err"
+    assert error_records[0].err_type == "RuntimeError"
+
+
+def test_instrumented_litellm_client_logs_completion_cancellation(caplog: pytest.LogCaptureFixture) -> None:
+    class _Delegate:
+        async def acompletion(self, *, model, messages, tools, **kwargs):
+            _ = model, messages, tools, kwargs
+            raise asyncio.CancelledError()
+
+    client = _InstrumentedLiteLLMClient(
+        agent_id="claude",
+        provider="claude",
+        metadata_getter=lambda: {"llm_call_id": "llm-cancel", "phase": "explore"},
+        delegate=_Delegate(),
+    )
+
+    with caplog.at_level(logging.INFO, logger="arena.agents.adk_models"):
+        with pytest.raises(asyncio.CancelledError):
+            asyncio.run(
+                client.acompletion(
+                    model="anthropic/claude-opus-4-7",
+                    messages=[],
+                    tools=None,
+                )
+            )
+
+    cancel_records = [
+        record for record in caplog.records if getattr(record, "event", "") == "adk_model_acompletion_cancelled"
+    ]
+    assert len(cancel_records) == 1
+    assert cancel_records[0].llm_call_id == "llm-cancel"
 
 
 def test_resolve_model_deepseek_is_disabled_for_adk_until_implemented() -> None:

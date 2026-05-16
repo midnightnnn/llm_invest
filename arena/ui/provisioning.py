@@ -125,6 +125,34 @@ class UIProvisioner:
     def _seed_default_tenant_config(self, tenant_id: str, updated_by: str) -> None:
         self._set_config_if_missing(tenant_id, "distribution_mode", "simulated_only", updated_by)
         self._set_config_if_missing(tenant_id, "real_trading_approved", "false", updated_by)
+        self._seed_empty_runtime_credentials(tenant_id, updated_by)
+
+    def _seed_empty_runtime_credentials(self, tenant_id: str, updated_by: str) -> None:
+        tenant = str(tenant_id or "").strip().lower()
+        if not tenant:
+            return
+        loader = getattr(self.repo, "latest_runtime_credentials", None)
+        if callable(loader):
+            try:
+                if loader(tenant_id=tenant):
+                    return
+            except Exception:
+                logger.warning("[yellow]Runtime credential metadata check failed[/yellow] tenant=%s", tenant)
+                return
+        upsert = getattr(self.repo, "upsert_runtime_credentials", None)
+        if not callable(upsert):
+            return
+        try:
+            upsert(
+                tenant_id=tenant,
+                updated_by=updated_by,
+                has_openai=False,
+                has_gemini=False,
+                has_anthropic=False,
+                notes="auto-provisioned tenant without model credentials",
+            )
+        except Exception:
+            logger.warning("[yellow]Runtime credential metadata seed failed[/yellow] tenant=%s", tenant)
 
     def ensure_user_access(self, user: dict[str, Any] | None) -> ProvisionedUserAccess:
         if not isinstance(user, dict):

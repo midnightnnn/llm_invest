@@ -105,6 +105,87 @@ def test_build_order_intents_preserves_full_rationale_text() -> None:
     assert intents[0].rationale.endswith("TAIL_MARKER")
 
 
+def test_build_order_intents_preserves_structured_thesis_fields() -> None:
+    settings = load_settings()
+    settings.trading_mode = "paper"
+    settings.kis_target_market = "nasdaq"
+    settings.max_order_krw = 2_000_000.0
+    settings.max_position_ratio = 1.0
+
+    intents, _ = build_order_intents(
+        repo=_RepoForAdkGenerate(),
+        settings=settings,
+        agent_id="gpt",
+        sleeve_capital_krw=2_000_000.0,
+        cycle_id="cycle_order_structured_thesis",
+        context={
+            "portfolio": {
+                "cash_krw": 2_000_000.0,
+                "total_equity_krw": 2_000_000.0,
+                "positions": {},
+            },
+            "order_budget": {"max_buy_notional_krw": 2_000_000.0},
+        },
+        orders=[
+            {
+                "ticker": "AAPL",
+                "side": "BUY",
+                "quantity": 7,
+                "rationale": "AAPL 7주 매수. AI 수요 thesis가 유지되고 현금 버퍼 내 증액이다.",
+                "thesis_core": "AI 수요와 마진 회복이 EPS 개선을 견인한다.",
+                "supporting_factors": [
+                    {
+                        "label": "AI 서버 수요 증가",
+                        "type": "catalyst",
+                        "evidence": "AI 서버 수요 증가가 매출 성장 기대를 높인다.",
+                    }
+                ],
+                "risk_factors": [
+                    {
+                        "label": "밸류에이션 부담",
+                        "type": "risk",
+                        "evidence": "밸류에이션 부담이 단기 조정 리스크다.",
+                    }
+                ],
+                "invalidation_conditions": [
+                    {
+                        "label": "가이던스 하향",
+                        "type": "event",
+                        "evidence": "가이던스 하향은 마진 회복 thesis를 훼손한다.",
+                    }
+                ],
+                "expected_outcome": "중기 EPS 개선",
+                "sizing_reason": "현금 버퍼와 기존 비중을 감안해 7주만 추가한다.",
+                "time_horizon_days": 60,
+                "thesis_confidence": 0.74,
+                "strategy_refs": ["momentum", "earnings_growth"],
+            }
+        ],
+        row_map={
+            "AAPL": {
+                "ticker": "AAPL",
+                "exchange_code": "",
+                "instrument_id": "",
+                "close_price_krw": 130000.0,
+                "close_price_native": 100.0,
+                "quote_currency": "USD",
+                "fx_rate_used": 1300.0,
+            }
+        },
+    )
+
+    assert len(intents) == 1
+    intent = intents[0]
+    assert intent.thesis_core == "AI 수요와 마진 회복이 EPS 개선을 견인한다."
+    assert intent.supporting_factors[0]["type"] == "catalyst"
+    assert intent.risk_factors[0]["label"] == "밸류에이션 부담"
+    assert intent.invalidation_conditions[0]["type"] == "event"
+    assert intent.expected_outcome == "중기 EPS 개선"
+    assert intent.sizing_reason == "현금 버퍼와 기존 비중을 감안해 7주만 추가한다."
+    assert intent.time_horizon_days == 60
+    assert intent.thesis_confidence == 0.74
+
+
 def test_build_order_intents_buy_uses_explicit_quantity_without_weight_math() -> None:
     settings = load_settings()
     settings.trading_mode = "paper"

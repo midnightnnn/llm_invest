@@ -107,6 +107,144 @@ def test_market_sync_nasdaq_uses_price_detail_fx_when_daily_fx_empty() -> None:
     assert aapl_rows[-1]["fx_rate_used"] == pytest.approx(1451.25)
 
 
+def test_market_sync_nasdaq_uses_ecos_daily_fx_without_calling_kis_fx(monkeypatch) -> None:
+    class EmptyKisFxLongHistoryClient(FakeClient):
+        def __init__(self):
+            super().__init__()
+            self.kis_daily_fx_calls = 0
+
+        def get_usd_krw_daily_chart(self, *, symbol, start_date="", end_date="", market_div_code="X", period="D", max_pages=8):
+            _ = (symbol, start_date, end_date, market_div_code, period, max_pages)
+            self.kis_daily_fx_calls += 1
+            return []
+
+        def get_overseas_daily_price(self, ticker, excd, bymd, gubn, modp):
+            self.overseas_daily_requests.append(
+                {
+                    "ticker": ticker,
+                    "excd": excd,
+                    "bymd": bymd,
+                    "gubn": gubn,
+                    "modp": modp,
+                }
+            )
+            return [
+                {"xymd": f"202601{idx:02d}", "clos": str(90 + idx)}
+                for idx in range(1, 26)
+            ]
+
+    class FakeResponse:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self._payload
+
+    class FakeSession:
+        def get(self, url, params=None, timeout=None):
+            _ = (params, timeout)
+            assert "ecos.bok.or.kr/api/StatisticSearch" in url
+            return FakeResponse(
+                {
+                    "StatisticSearch": {
+                        "row": [
+                            {"TIME": f"202601{idx:02d}", "DATA_VALUE": str(1300 + idx)}
+                            for idx in range(1, 26)
+                        ]
+                    }
+                }
+            )
+
+    import arena.open_trading.sync as sync_module
+
+    monkeypatch.setattr(sync_module.requests, "Session", lambda: FakeSession())
+    repo = FakeRepo()
+    settings = _settings("nasdaq", ["AAPL"])
+    settings.usd_krw_fx_symbol = "USDKRW"
+    settings.ecos_api_key = "ecos-key"
+    client = EmptyKisFxLongHistoryClient()
+    service = MarketDataSyncService(settings=settings, repo=repo, client=client)
+
+    result = service.sync_market_features()
+
+    assert client.kis_daily_fx_calls == 0
+    assert result.inserted_rows == 225
+    aapl_rows = [r for r in repo.rows if r["ticker"] == "AAPL"]
+    assert len(aapl_rows) == 25
+    assert aapl_rows[-1]["fx_rate_used"] == pytest.approx(1325.0)
+    assert aapl_rows[-1]["ret_20d"] is not None
+    assert aapl_rows[-1]["volatility_20d"] is not None
+
+
+def test_market_sync_nasdaq_falls_back_to_fred_daily_fx_when_ecos_empty(monkeypatch) -> None:
+    class EmptyKisFxLongHistoryClient(FakeClient):
+        def get_usd_krw_daily_chart(self, *, symbol, start_date="", end_date="", market_div_code="X", period="D", max_pages=8):
+            _ = (symbol, start_date, end_date, market_div_code, period, max_pages)
+            return []
+
+        def get_overseas_daily_price(self, ticker, excd, bymd, gubn, modp):
+            self.overseas_daily_requests.append(
+                {
+                    "ticker": ticker,
+                    "excd": excd,
+                    "bymd": bymd,
+                    "gubn": gubn,
+                    "modp": modp,
+                }
+            )
+            return [
+                {"xymd": f"202601{idx:02d}", "clos": str(90 + idx)}
+                for idx in range(1, 26)
+            ]
+
+    class FakeResponse:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self._payload
+
+    class FakeSession:
+        def get(self, url, params=None, timeout=None):
+            if "ecos.bok.or.kr" in url:
+                return FakeResponse({"StatisticSearch": {"row": []}})
+            assert "api.stlouisfed.org/fred/series/observations" in url
+            assert (params or {}).get("series_id") == "DEXKOUS"
+            return FakeResponse(
+                {
+                    "observations": [
+                        {"date": f"2026-01-{idx:02d}", "value": str(1400 + idx)}
+                        for idx in range(1, 26)
+                    ]
+                }
+            )
+
+    import arena.open_trading.sync as sync_module
+
+    monkeypatch.setattr(sync_module.requests, "Session", lambda: FakeSession())
+    repo = FakeRepo()
+    settings = _settings("nasdaq", ["AAPL"])
+    settings.usd_krw_fx_symbol = "USDKRW"
+    settings.ecos_api_key = "ecos-key"
+    settings.fred_api_key = "fred-key"
+    service = MarketDataSyncService(settings=settings, repo=repo, client=EmptyKisFxLongHistoryClient())
+
+    result = service.sync_market_features()
+
+    assert result.inserted_rows == 225
+    aapl_rows = [r for r in repo.rows if r["ticker"] == "AAPL"]
+    assert len(aapl_rows) == 25
+    assert aapl_rows[-1]["fx_rate_used"] == pytest.approx(1425.0)
+    assert aapl_rows[-1]["ret_20d"] is not None
+    assert aapl_rows[-1]["volatility_20d"] is not None
+
+
 def test_market_sync_kospi_builds_rows() -> None:
     repo = FakeRepo()
     settings = _settings("kospi", ["005930"])

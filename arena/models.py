@@ -46,6 +46,14 @@ class OrderIntent(BaseModel):
     fx_rate: float = 0.0
     rationale: str
     strategy_refs: list[str] = Field(default_factory=list)
+    thesis_core: str = ""
+    supporting_factors: list[dict[str, Any]] = Field(default_factory=list)
+    risk_factors: list[dict[str, Any]] = Field(default_factory=list)
+    invalidation_conditions: list[dict[str, Any]] = Field(default_factory=list)
+    expected_outcome: str = ""
+    sizing_reason: str = ""
+    time_horizon_days: int | None = None
+    thesis_confidence: float | None = None
     created_at: datetime = Field(default_factory=utc_now)
     intent_id: str = Field(default_factory=lambda: f"intent_{uuid4().hex[:12]}")
     cycle_id: str = ""

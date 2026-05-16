@@ -357,6 +357,10 @@ class _ADKDecisionRunner:
             agent_config=self._agent_config,
             max_tool_events=self._max_tool_events,
             adk_tools=tool_resolution.adk_tools,
+            model_call_metadata_getter=self._model_call_metadata,
+            before_model_callback=self._before_model_callback,
+            after_model_callback=self._after_model_callback,
+            on_model_error_callback=self._on_model_error_callback,
         )
         self._system_prompt_snapshot = str(getattr(self._agent, "instruction", "") or "")
 
@@ -375,6 +379,108 @@ class _ADKDecisionRunner:
             identity=identity,
             run_on_loop=self._run_on_loop,
         )
+
+    def _model_call_metadata(self) -> dict[str, Any]:
+        context = self._current_context if isinstance(self._current_context, dict) else {}
+        return {
+            "tenant_id": self.tenant_id,
+            "agent_id": self.agent_id,
+            "provider": self.provider,
+            "phase": self._current_phase,
+            "cycle_id": str(context.get("cycle_id") or "").strip(),
+            "llm_call_id": self._latest_llm_call_id,
+        }
+
+    @staticmethod
+    def _llm_request_shape(llm_request: Any) -> dict[str, Any]:
+        contents = getattr(llm_request, "contents", None)
+        config = getattr(llm_request, "config", None)
+        tools = getattr(config, "tools", None) if config is not None else None
+        return {
+            "message_count": len(contents) if isinstance(contents, list) else None,
+            "tool_count": len(tools) if isinstance(tools, list) else None,
+        }
+
+    @staticmethod
+    def _llm_response_shape(llm_response: Any) -> dict[str, Any]:
+        content = getattr(llm_response, "content", None)
+        parts = getattr(content, "parts", None) if content is not None else None
+        usage = getattr(llm_response, "usage_metadata", None)
+        return {
+            "part_count": len(parts) if isinstance(parts, list) else None,
+            "finish_reason": str(getattr(llm_response, "finish_reason", "") or ""),
+            "error_code": str(getattr(llm_response, "error_code", "") or ""),
+            "prompt_tokens": int(getattr(usage, "prompt_token_count", 0) or 0) if usage else None,
+            "completion_tokens": int(getattr(usage, "candidates_token_count", 0) or 0) if usage else None,
+        }
+
+    def _before_model_callback(
+        self,
+        callback_context: Any = None,
+        llm_request: Any = None,
+        **kwargs: Any,
+    ) -> None:
+        _ = callback_context
+        if llm_request is None:
+            llm_request = kwargs.get("llm_request", kwargs.get("request"))
+        fields = {**self._model_call_metadata(), **self._llm_request_shape(llm_request)}
+        logger.info(
+            "[blue]ADK before model[/blue] agent=%s provider=%s phase=%s llm_call_id=%s",
+            self.agent_id,
+            self.provider,
+            fields.get("phase") or "-",
+            fields.get("llm_call_id") or "-",
+            extra=event_extra("adk_before_model", **fields),
+        )
+        return None
+
+    def _after_model_callback(
+        self,
+        callback_context: Any = None,
+        llm_response: Any = None,
+        **kwargs: Any,
+    ) -> None:
+        _ = callback_context
+        if llm_response is None:
+            llm_response = kwargs.get("llm_response", kwargs.get("response"))
+        fields = {**self._model_call_metadata(), **self._llm_response_shape(llm_response)}
+        logger.info(
+            "[blue]ADK after model[/blue] agent=%s provider=%s phase=%s llm_call_id=%s finish=%s error=%s",
+            self.agent_id,
+            self.provider,
+            fields.get("phase") or "-",
+            fields.get("llm_call_id") or "-",
+            fields.get("finish_reason") or "-",
+            fields.get("error_code") or "-",
+            extra=event_extra("adk_after_model", **fields),
+        )
+        return None
+
+    def _on_model_error_callback(
+        self,
+        callback_context: Any = None,
+        llm_request: Any = None,
+        exc: Exception | None = None,
+        **kwargs: Any,
+    ) -> None:
+        _ = callback_context
+        if llm_request is None:
+            llm_request = kwargs.get("llm_request", kwargs.get("request"))
+        if exc is None:
+            exc = kwargs.get("exc", kwargs.get("exception", kwargs.get("error")))
+        if not isinstance(exc, Exception):
+            exc = RuntimeError(str(exc or "unknown ADK model error"))
+        fields = {**self._model_call_metadata(), **self._llm_request_shape(llm_request)}
+        logger.warning(
+            "[yellow]ADK model error[/yellow] agent=%s provider=%s phase=%s llm_call_id=%s err=%s",
+            self.agent_id,
+            self.provider,
+            fields.get("phase") or "-",
+            fields.get("llm_call_id") or "-",
+            str(exc),
+            extra=failure_extra("adk_model_error", exc, **fields),
+        )
+        return None
 
     def _available_tools_payload(self) -> list[dict[str, Any]]:
         """Returns the built-in tool catalog visible to the model for prompt inspection."""

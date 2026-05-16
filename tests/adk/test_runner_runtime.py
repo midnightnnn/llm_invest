@@ -92,6 +92,41 @@ class _AsyncRunnerBudgetThenFinal:
             )
 
 
+def _callback_decision_runner() -> _ADKDecisionRunner:
+    decision_runner = _ADKDecisionRunner.__new__(_ADKDecisionRunner)
+    decision_runner.tenant_id = "local"
+    decision_runner.agent_id = "gpt"
+    decision_runner.provider = "gpt"
+    decision_runner._current_phase = "explore"
+    decision_runner._current_context = {"cycle_id": "cycle_1"}
+    decision_runner._latest_llm_call_id = "call_1"
+    return decision_runner
+
+
+def test_model_callbacks_accept_adk_keyword_arguments() -> None:
+    decision_runner = _callback_decision_runner()
+    request = SimpleNamespace(contents=[], config=SimpleNamespace(tools=[]))
+    response = SimpleNamespace(content=SimpleNamespace(parts=[]), usage_metadata=None)
+
+    decision_runner._before_model_callback(callback_context=object(), llm_request=request)
+    decision_runner._after_model_callback(callback_context=object(), llm_response=response)
+    decision_runner._on_model_error_callback(
+        callback_context=object(),
+        llm_request=request,
+        exception=RuntimeError("boom"),
+    )
+
+
+def test_model_callbacks_accept_legacy_positional_arguments() -> None:
+    decision_runner = _callback_decision_runner()
+    request = SimpleNamespace(contents=[], config=SimpleNamespace(tools=[]))
+    response = SimpleNamespace(content=SimpleNamespace(parts=[]), usage_metadata=None)
+
+    decision_runner._before_model_callback(object(), request)
+    decision_runner._after_model_callback(object(), response)
+    decision_runner._on_model_error_callback(object(), request, RuntimeError("boom"))
+
+
 def test_collect_response_text_records_mcp_calls_and_token_usage() -> None:
     tool_events: list[dict] = []
 

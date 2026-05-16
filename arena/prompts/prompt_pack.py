@@ -284,6 +284,10 @@ class PromptPack:
         max_tool_calls: int,
     ) -> dict[str, Any]:
         phase = str(context.get("cycle_phase", "execution") or "").strip().lower() or "execution"
+        active_thesis_context = (
+            context.get(f"active_thesis_context_{phase}")
+            or context.get("active_thesis_context", "")
+        )
         analysis_funnel = context.get("analysis_funnel_prompt")
         if not isinstance(analysis_funnel, dict):
             analysis_funnel = model_facing_funnel_metrics(context.get("analysis_funnel", {}))
@@ -309,7 +313,7 @@ class PromptPack:
                 "decision_frame",
                 "investment_style_context",
             ):
-                value = context.get(key)
+                value = active_thesis_context if key == "active_thesis_context" else context.get(key)
                 if value:
                     payload[key] = value
             risk_policy = PromptPack._compact_explore_risk_policy(context.get("risk_policy", {}))
@@ -348,7 +352,7 @@ class PromptPack:
             payload = {
                 "cycle_phase": phase,
                 "performance_context": context.get("performance_context", ""),
-                "active_thesis_context": context.get("active_thesis_context", ""),
+                "active_thesis_context": active_thesis_context,
                 "memory_context": context.get("memory_context", ""),
                 "board_context": context.get("board_context", ""),
                 "market_context": context.get("market_context", context.get("market_features", [])),

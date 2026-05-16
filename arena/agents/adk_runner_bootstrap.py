@@ -230,6 +230,10 @@ def build_agent(
     agent_config: AgentConfig | None,
     max_tool_events: int,
     adk_tools: list[Any],
+    model_call_metadata_getter: Callable[[], dict[str, Any]] | None = None,
+    before_model_callback: Callable[..., Any] | None = None,
+    after_model_callback: Callable[..., Any] | None = None,
+    on_model_error_callback: Callable[..., Any] | None = None,
 ) -> Agent:
     model_override = (agent_config.model if agent_config else "") or ""
     llm_params = (agent_config.llm_params if agent_config else None) or {}
@@ -238,6 +242,7 @@ def build_agent(
         settings,
         model_override=model_override,
         llm_params=llm_params,
+        model_call_metadata_getter=model_call_metadata_getter,
     )
     generate_cfg = _build_generate_content_config(
         provider=provider,
@@ -256,6 +261,9 @@ def build_agent(
         ),
         tools=adk_tools,
         generate_content_config=generate_cfg,
+        before_model_callback=before_model_callback,
+        after_model_callback=after_model_callback,
+        on_model_error_callback=on_model_error_callback,
     )
 
 

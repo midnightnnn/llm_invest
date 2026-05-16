@@ -10,6 +10,7 @@ from statistics import stdev
 from typing import Any
 
 import pandas as pd
+import requests
 
 from arena.asset_benchmarks import ASSET_BENCHMARK_SOURCE, KOSPI_ASSET_BENCHMARKS, US_ASSET_BENCHMARKS
 from arena.config import Settings
@@ -28,6 +29,13 @@ from .exchange_codes import (
 )
 
 logger = logging.getLogger(__name__)
+
+_ECOS_STATISTIC_SEARCH_BASE = "https://ecos.bok.or.kr/api/StatisticSearch"
+_ECOS_USD_KRW_STAT_CODE = "731Y001"
+_ECOS_USD_KRW_ITEM_CODE = "0000001"
+_FRED_OBSERVATIONS_BASE = "https://api.stlouisfed.org/fred/series/observations"
+_FRED_USD_KRW_SERIES_ID = "DEXKOUS"
+_FX_FORWARD_FILL_MAX_DAYS = 7
 
 _US_TARGET_TO_QUOTE_EXCHANGE: dict[str, str] = {
     "nasdaq": "NAS",
@@ -104,6 +112,32 @@ def _coerce_feature_date(value: object) -> date | None:
         return date.fromisoformat(text[:10])
     except ValueError:
         return None
+
+
+def _fill_fx_for_target_dates(
+    observations: dict[date, float],
+    target_dates: list[date],
+    *,
+    max_forward_fill_days: int = _FX_FORWARD_FILL_MAX_DAYS,
+) -> dict[date, float]:
+    """Maps sparse FX observations onto target dates using bounded forward fill."""
+    clean_obs = sorted((d, float(v)) for d, v in observations.items() if float(v or 0.0) > 0)
+    if not clean_obs or not target_dates:
+        return {}
+
+    out: dict[date, float] = {}
+    idx = 0
+    last_date: date | None = None
+    last_value = 0.0
+    for target in sorted(set(target_dates)):
+        while idx < len(clean_obs) and clean_obs[idx][0] <= target:
+            last_date, last_value = clean_obs[idx]
+            idx += 1
+        if last_date is None or last_value <= 0:
+            continue
+        if (target - last_date).days <= int(max_forward_fill_days):
+            out[target] = float(last_value)
+    return out
 
 
 def _has_fresh_daily_feature_metrics(
@@ -839,6 +873,170 @@ class MarketDataSyncService:
 
         return rows
 
+    def _fetch_ecos_usd_krw_daily_fx(
+        self,
+        *,
+        start_date: date,
+        end_date: date,
+        target_dates: list[date],
+    ) -> dict[date, float]:
+        """Fetches USD/KRW daily FX from ECOS and aligns it to market dates."""
+        api_key = str(getattr(self.settings, "ecos_api_key", "") or "").strip()
+        if not api_key:
+            return {}
+
+        url = (
+            f"{_ECOS_STATISTIC_SEARCH_BASE}/{api_key}/json/kr/1/10000/"
+            f"{_ECOS_USD_KRW_STAT_CODE}/D/{start_date:%Y%m%d}/{end_date:%Y%m%d}/"
+            f"{_ECOS_USD_KRW_ITEM_CODE}"
+        )
+        try:
+            resp = requests.Session().get(url, timeout=max(1, int(self.settings.kis_http_timeout_seconds)))
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as exc:
+            logger.warning(
+                "[yellow]USD/KRW daily FX ECOS fetch failed[/yellow] err=%s",
+                str(exc),
+                extra=failure_extra(
+                    "usd_krw_daily_fx_ecos_fetch_failed",
+                    exc,
+                    start_date=start_date.isoformat(),
+                    end_date=end_date.isoformat(),
+                ),
+            )
+            return {}
+
+        rows = (data.get("StatisticSearch") or {}).get("row") if isinstance(data, dict) else []
+        if isinstance(rows, dict):
+            rows = [rows]
+        if not isinstance(rows, list):
+            return {}
+
+        observations: dict[date, float] = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            obs_date = _coerce_feature_date(row.get("TIME"))
+            fx_rate = _to_float(row.get("DATA_VALUE"), default=0.0)
+            if obs_date is not None and fx_rate > 0:
+                observations[obs_date] = float(fx_rate)
+
+        filled = _fill_fx_for_target_dates(observations, target_dates)
+        if filled:
+            dates = sorted(filled)
+            logger.warning(
+                "[yellow]USD/KRW daily FX loaded from ECOS[/yellow] dates=%s..%s count=%d",
+                dates[0].isoformat(),
+                dates[-1].isoformat(),
+                len(filled),
+                extra=event_extra(
+                    "usd_krw_daily_fx_ecos_primary",
+                    start_date=dates[0].isoformat(),
+                    end_date=dates[-1].isoformat(),
+                    count=len(filled),
+                ),
+            )
+        return filled
+
+    def _fetch_fred_usd_krw_daily_fx(
+        self,
+        *,
+        start_date: date,
+        end_date: date,
+        target_dates: list[date],
+    ) -> dict[date, float]:
+        """Fetches USD/KRW daily FX from FRED and aligns it to market dates."""
+        api_key = str(getattr(self.settings, "fred_api_key", "") or "").strip()
+        if not api_key:
+            return {}
+
+        params = {
+            "series_id": _FRED_USD_KRW_SERIES_ID,
+            "api_key": api_key,
+            "file_type": "json",
+            "observation_start": start_date.isoformat(),
+            "observation_end": end_date.isoformat(),
+            "sort_order": "asc",
+            "limit": "100000",
+        }
+        try:
+            resp = requests.Session().get(
+                _FRED_OBSERVATIONS_BASE,
+                params=params,
+                timeout=max(1, int(self.settings.kis_http_timeout_seconds)),
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as exc:
+            logger.warning(
+                "[yellow]USD/KRW daily FX FRED fallback failed[/yellow] err=%s",
+                str(exc),
+                extra=failure_extra(
+                    "usd_krw_daily_fx_fred_fallback_failed",
+                    exc,
+                    start_date=start_date.isoformat(),
+                    end_date=end_date.isoformat(),
+                    series_id=_FRED_USD_KRW_SERIES_ID,
+                ),
+            )
+            return {}
+
+        rows = data.get("observations") if isinstance(data, dict) else []
+        if not isinstance(rows, list):
+            return {}
+
+        observations: dict[date, float] = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            obs_date = _coerce_feature_date(row.get("date"))
+            fx_rate = _to_float(row.get("value"), default=0.0)
+            if obs_date is not None and fx_rate > 0:
+                observations[obs_date] = float(fx_rate)
+
+        filled = _fill_fx_for_target_dates(observations, target_dates)
+        if filled:
+            dates = sorted(filled)
+            logger.warning(
+                "[yellow]USD/KRW daily FX supplemented from FRED[/yellow] dates=%s..%s count=%d",
+                dates[0].isoformat(),
+                dates[-1].isoformat(),
+                len(filled),
+                extra=event_extra(
+                    "usd_krw_daily_fx_fred_fallback",
+                    start_date=dates[0].isoformat(),
+                    end_date=dates[-1].isoformat(),
+                    count=len(filled),
+                    series_id=_FRED_USD_KRW_SERIES_ID,
+                ),
+            )
+        return filled
+
+    def _external_usd_krw_daily_fx(
+        self,
+        *,
+        start_date: date,
+        end_date: date,
+        target_dates: list[date],
+    ) -> dict[date, float]:
+        """Builds a daily USD/KRW FX map from ECOS first, then FRED."""
+        out = self._fetch_ecos_usd_krw_daily_fx(
+            start_date=start_date,
+            end_date=end_date,
+            target_dates=target_dates,
+        )
+        missing_dates = [d for d in target_dates if float(out.get(d) or 0.0) <= 0]
+        if missing_dates:
+            fred = self._fetch_fred_usd_krw_daily_fx(
+                start_date=start_date,
+                end_date=end_date,
+                target_dates=missing_dates,
+            )
+            for fx_date, fx_rate in fred.items():
+                out.setdefault(fx_date, fx_rate)
+        return out
+
     def _price_detail_usd_krw_daily_fx(
         self,
         *,
@@ -938,14 +1136,34 @@ class MarketDataSyncService:
             start_date = series[0][0].date()
             end_date = series[-1][0].date()
         series_dates = [ts.date() for ts, _ in series]
-        if self._usd_krw_daily_fx and series_dates:
-            tail_dates = series_dates[-2:] if len(series_dates) >= 2 else series_dates[-1:]
-            if tail_dates and all(float(self._usd_krw_daily_fx.get(d) or 0.0) > 0 for d in tail_dates):
+        target_dates = sorted(set(series_dates))
+        if self._usd_krw_daily_fx and target_dates:
+            if all(float(self._usd_krw_daily_fx.get(d) or 0.0) > 0 for d in target_dates):
                 return self._usd_krw_daily_fx
         if self._usd_krw_daily_fx_range is not None:
             cached_start, cached_end = self._usd_krw_daily_fx_range
-            if cached_start <= start_date and cached_end >= end_date and self._usd_krw_daily_fx:
+            if (
+                cached_start <= start_date
+                and cached_end >= end_date
+                and self._usd_krw_daily_fx
+                and (not target_dates or all(float(self._usd_krw_daily_fx.get(d) or 0.0) > 0 for d in target_dates))
+            ):
                 return self._usd_krw_daily_fx
+
+        fx_map = self._external_usd_krw_daily_fx(
+            start_date=start_date,
+            end_date=end_date,
+            target_dates=target_dates,
+        )
+        if target_dates and all(float(fx_map.get(d) or 0.0) > 0 for d in target_dates):
+            fallback = self._price_detail_usd_krw_daily_fx(ticker=ticker, excd=excd, series=series)
+            for fx_date, fx_rate in fallback.items():
+                fx_map.setdefault(fx_date, fx_rate)
+            self._usd_krw_daily_fx = fx_map
+            if self._usd_krw_daily_fx:
+                dates = sorted(self._usd_krw_daily_fx)
+                self._usd_krw_daily_fx_range = (dates[0], dates[-1])
+            return self._usd_krw_daily_fx
 
         try:
             fx_rows = self.client.get_usd_krw_daily_chart(
@@ -969,9 +1187,15 @@ class MarketDataSyncService:
                     end_date=end_date.isoformat(),
                 ),
             )
+            if fx_map:
+                self._usd_krw_daily_fx.update(fx_map)
             fallback = self._price_detail_usd_krw_daily_fx(ticker=ticker, excd=excd, series=series)
             if fallback:
-                self._usd_krw_daily_fx.update(fallback)
+                for fx_date, fx_rate in fallback.items():
+                    self._usd_krw_daily_fx.setdefault(fx_date, fx_rate)
+            if self._usd_krw_daily_fx:
+                dates = sorted(self._usd_krw_daily_fx)
+                self._usd_krw_daily_fx_range = (dates[0], dates[-1])
             return self._usd_krw_daily_fx
 
         fx_series = self._extract_chart_series(
@@ -996,12 +1220,20 @@ class MarketDataSyncService:
                     end_date=end_date.isoformat(),
                 ),
             )
+            if fx_map:
+                self._usd_krw_daily_fx.update(fx_map)
             fallback = self._price_detail_usd_krw_daily_fx(ticker=ticker, excd=excd, series=series)
             if fallback:
-                self._usd_krw_daily_fx.update(fallback)
+                for fx_date, fx_rate in fallback.items():
+                    self._usd_krw_daily_fx.setdefault(fx_date, fx_rate)
+            if self._usd_krw_daily_fx:
+                dates = sorted(self._usd_krw_daily_fx)
+                self._usd_krw_daily_fx_range = (dates[0], dates[-1])
             return self._usd_krw_daily_fx
 
-        fx_map = {ts.date(): float(px) for ts, px in fx_series if float(px) > 0}
+        kis_fx_map = {ts.date(): float(px) for ts, px in fx_series if float(px) > 0}
+        for fx_date, fx_rate in kis_fx_map.items():
+            fx_map.setdefault(fx_date, fx_rate)
         fallback = self._price_detail_usd_krw_daily_fx(ticker=ticker, excd=excd, series=series)
         for fx_date, fx_rate in fallback.items():
             fx_map.setdefault(fx_date, fx_rate)

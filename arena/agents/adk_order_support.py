@@ -327,6 +327,28 @@ def _whole_share_quantity(value: Any) -> float:
     return float(int(math.floor(raw_qty)))
 
 
+def _list_of_dicts(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [dict(item) for item in value if isinstance(item, dict)]
+
+
+def _optional_positive_int(value: Any) -> int | None:
+    try:
+        number = int(float(value))
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
+def _optional_unit_float(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return max(0.0, min(number, 1.0))
+
+
 def build_order_intents(
     *,
     repo: BigQueryRepository,
@@ -469,6 +491,14 @@ def build_order_intents(
                 fx_rate=fx_rate,
                 rationale=rationale,
                 strategy_refs=[str(ref) for ref in strategy_refs][:6],
+                thesis_core=str(order.get("thesis_core") or "").strip(),
+                supporting_factors=_list_of_dicts(order.get("supporting_factors")),
+                risk_factors=_list_of_dicts(order.get("risk_factors")),
+                invalidation_conditions=_list_of_dicts(order.get("invalidation_conditions")),
+                expected_outcome=str(order.get("expected_outcome") or "").strip(),
+                sizing_reason=str(order.get("sizing_reason") or "").strip(),
+                time_horizon_days=_optional_positive_int(order.get("time_horizon_days")),
+                thesis_confidence=_optional_unit_float(order.get("thesis_confidence")),
                 cycle_id=cycle_id,
             )
         )

@@ -37,6 +37,59 @@ def test_memory_event_relation_triples_extract_structured_passage_links() -> Non
     assert by_object["entity:sector:technology"]["object_type"] == "sector"
 
 
+def test_memory_event_relation_triples_extract_structured_thesis_edges_without_ticker_noise() -> None:
+    event = MemoryEvent(
+        agent_id="gpt",
+        event_type="thesis_update",
+        summary="AAPL thesis update action=add status=FILLED thesis=AI demand and margin recovery",
+        trading_mode="live",
+        payload={
+            "ticker": "AAPL",
+            "thesis_summary": "AI 수요와 마진 회복이 EPS 개선을 견인한다.",
+            "supporting_factors": [
+                {
+                    "label": "AI 서버 수요 증가",
+                    "type": "catalyst",
+                    "evidence": "AI 서버 수요 증가가 매출 성장 기대를 높인다.",
+                }
+            ],
+            "risk_factors": [
+                {
+                    "label": "밸류에이션 부담",
+                    "type": "risk",
+                    "evidence": "밸류에이션 부담이 단기 조정 리스크다.",
+                }
+            ],
+            "invalidation_conditions": [
+                {
+                    "label": "가이던스 하향",
+                    "type": "event",
+                    "evidence": "가이던스 하향은 마진 회복 thesis를 훼손한다.",
+                }
+            ],
+        },
+        context_tags={"tickers": ["AAPL", "RSI", "ROE", "FILLED"]},
+        created_at=datetime(2026, 3, 29, 1, 2, tzinfo=timezone.utc),
+        event_id="evt_structured_thesis",
+        graph_node_id="mem:evt_structured_thesis",
+    )
+
+    triples = build_memory_event_relation_triples(event)
+
+    thesis_node_id = semantic_entity_node_id("thesis", "AI 수요와 마진 회복이 EPS 개선을 견인한다.")
+    semantic_edges = {
+        (row["subject_type"], row["subject_label"], row["predicate"], row["object_node_id"])
+        for row in triples
+    }
+    assert ("catalyst", "AI 서버 수요 증가", "supports", thesis_node_id) in semantic_edges
+    assert ("risk", "밸류에이션 부담", "risk_to", thesis_node_id) in semantic_edges
+    assert ("event", "가이던스 하향", "invalidates", thesis_node_id) in semantic_edges
+    assert ticker_node_id("AAPL") in {row["object_node_id"] for row in triples}
+    assert ticker_node_id("RSI") not in {row["object_node_id"] for row in triples}
+    assert ticker_node_id("ROE") not in {row["object_node_id"] for row in triples}
+    assert ticker_node_id("FILLED") not in {row["object_node_id"] for row in triples}
+
+
 def test_relation_triples_project_entity_nodes_and_edges() -> None:
     event = MemoryEvent(
         agent_id="gpt",

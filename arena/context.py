@@ -181,6 +181,11 @@ class ContextBuilder:
         return text[: max_len - 3] + "..."
 
     @staticmethod
+    def _single_line_text(value: object) -> str:
+        """Normalizes multi-line stored text without truncating it."""
+        return _MEMORY_WHITESPACE_RE.sub(" ", str(value or "")).strip()
+
+    @staticmethod
     def _json_dict(value: object) -> dict[str, Any]:
         if isinstance(value, dict):
             return value
@@ -501,7 +506,80 @@ class ContextBuilder:
             return []
         return rows
 
-    def _compress_active_thesis_context(self, rows: list[dict[str, Any]]) -> str:
+    def _active_thesis_factor_labels(self, value: Any, *, limit: int = 3) -> str:
+        if not isinstance(value, list):
+            return ""
+        labels: list[str] = []
+        for item in value:
+            if isinstance(item, dict):
+                label = self._single_line_text(item.get("label") or item.get("name") or item.get("text"))
+            else:
+                label = self._single_line_text(item)
+            label = self._trim_text(label, max_len=80)
+            if label and label not in labels:
+                labels.append(label)
+            if len(labels) >= limit:
+                break
+        return "; ".join(labels)
+
+    def _structured_active_thesis_summary(
+        self,
+        payload: dict[str, Any],
+        row: dict[str, Any],
+        *,
+        projection: str = "full",
+    ) -> str:
+        has_structured = any(
+            payload.get(key)
+            for key in (
+                "thesis_core",
+                "supporting_factors",
+                "risk_factors",
+                "invalidation_conditions",
+                "expected_outcome",
+                "sizing_reason",
+                "time_horizon_days",
+            )
+        )
+        if not has_structured:
+            return self._single_line_text(payload.get("thesis_summary") or row.get("summary"))
+
+        projection = str(projection or "full").strip().lower()
+        core = self._trim_text(
+            self._single_line_text(payload.get("thesis_core") or payload.get("thesis_summary") or row.get("summary")),
+            max_len=240,
+        )
+        segments: list[str] = []
+        if core:
+            segments.append(f"core={core}")
+        if projection in {"full", "explore"}:
+            support = self._active_thesis_factor_labels(payload.get("supporting_factors"))
+            if support:
+                segments.append(f"support={support}")
+        risk = self._active_thesis_factor_labels(payload.get("risk_factors"))
+        if risk:
+            segments.append(f"risk={risk}")
+        if projection in {"full", "execution"}:
+            invalidation = self._active_thesis_factor_labels(payload.get("invalidation_conditions"))
+            if invalidation:
+                segments.append(f"invalidate={invalidation}")
+        if projection == "full":
+            outcome = self._single_line_text(payload.get("expected_outcome"))
+            if outcome:
+                segments.append(f"outcome={self._trim_text(outcome, max_len=120)}")
+        if projection in {"full", "execution"}:
+            sizing = self._single_line_text(payload.get("sizing_reason"))
+            if sizing:
+                segments.append(f"sizing={self._trim_text(sizing, max_len=160)}")
+        try:
+            horizon = int(float(payload.get("time_horizon_days")))
+        except (TypeError, ValueError):
+            horizon = 0
+        if horizon > 0:
+            segments.append(f"horizon={horizon}d")
+        return " | ".join(segments)
+
+    def _compress_active_thesis_context(self, rows: list[dict[str, Any]], *, projection: str = "full") -> str:
         if not rows:
             return ""
         lines = ["Active Thesis:"]
@@ -509,7 +587,7 @@ class ContextBuilder:
             payload = self._parse_memory_payload(row)
             ticker = str(payload.get("ticker") or row.get("ticker") or "").strip().upper()
             state = str(payload.get("state") or "").strip().lower()
-            thesis_summary = self._trim_text(payload.get("thesis_summary") or row.get("summary"), max_len=140)
+            thesis_summary = self._structured_active_thesis_summary(payload, row, projection=projection)
             strategy_refs = payload.get("strategy_refs") if isinstance(payload.get("strategy_refs"), list) else []
             refs = ",".join(str(token).strip().lower() for token in strategy_refs[:3] if str(token).strip())
             parts = [part for part in [ticker, state] if part]
@@ -2471,6 +2549,14 @@ class ContextBuilder:
         research_context, research_rows = self._build_research_context(focus_tickers=focus_tickers)
         active_thesis_rows = self._active_thesis_rows(agent_id=agent_id, focus_tickers=focus_tickers)
         active_thesis_context = self._compress_active_thesis_context(active_thesis_rows)
+        active_thesis_context_explore = self._compress_active_thesis_context(
+            active_thesis_rows,
+            projection="explore",
+        )
+        active_thesis_context_execution = self._compress_active_thesis_context(
+            active_thesis_rows,
+            projection="execution",
+        )
         logged_queries = list(memory_query)
         if opportunity_query:
             logged_queries.append(opportunity_query)
@@ -2924,6 +3010,8 @@ class ContextBuilder:
             "positions_brief": _safe_json(positions_brief),
             "performance_context": "\n".join(perf_lines).strip(),
             "active_thesis_context": active_thesis_context,
+            "active_thesis_context_explore": active_thesis_context_explore,
+            "active_thesis_context_execution": active_thesis_context_execution,
             "market_context": _safe_json(market_rows),
             "research_context": research_context,
             "relation_context": relation_context,

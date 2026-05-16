@@ -985,10 +985,15 @@ class LocalMemoryStore:
                   'agent_memory_events' AS source_table,
                   event_id AS source_id,
                   created_at AS source_created_at,
+                  COALESCE(graph_node_id, 'mem:' || event_id) AS source_node_id,
                   agent_id,
                   trading_mode,
                   cycle_id,
-                  summary AS source_text
+                  summary AS source_label,
+                  CASE
+                    WHEN payload_json IS NULL OR TRIM(payload_json) = '' THEN COALESCE(summary, '')
+                    ELSE TRIM(COALESCE(summary, '') || '\n' || payload_json)
+                  END AS source_text
                 FROM agent_memory_events
                 WHERE tenant_id = $tenant_id
                   AND trading_mode = $trading_mode
