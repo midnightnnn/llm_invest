@@ -75,7 +75,7 @@ def _base_entries(
             category="context",
             tier="core",
             label_ko="리서치 브리핑",
-            description_ko="글로벌 시장 동향, 지정학 이슈, 섹터 로테이션, 보유·관심 종목에 대한 리서치 브리핑을 요약 조회합니다. 사이클 시작 시 '오늘 시장에 무슨 일이 있는지' 빠르게 파악하는 첫 번째 도구입니다.",
+            description_ko="글로벌 시장 동향, 지정학 이슈, 섹터 로테이션, 보유·관심 종목에 대한 리서치 브리핑을 조회합니다. 필요하면 권한이 있는 Gemini+Google Search 리서치 에이전트로 누락된 요청 항목을 새로 조사할 수 있습니다.",
             sort_order=30,
         ),
         _tool(

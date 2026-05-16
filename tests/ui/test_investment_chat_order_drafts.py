@@ -118,6 +118,52 @@ def test_investment_chat_order_draft_api_lists_and_submits_pending_draft(monkeyp
     assert len(repo.execution_reports) == 1
 
 
+def test_investment_chat_order_draft_api_batch_submits_pending_drafts(monkeypatch) -> None:
+    import arena.ui.app as ui_app
+    from arena.agents.investment_chat import order_tools
+    from arena.agents.investment_chat.registry import build_chat_registry
+
+    monkeypatch.setenv("ARENA_UI_AUTH_ENABLED", "false")
+    monkeypatch.setattr(
+        ui_app,
+        "build_investment_chat_adk_app",
+        lambda **kwargs: FastAPI(title="stub-adk"),
+    )
+    monkeypatch.setattr(order_tools, "build_execution_memory", lambda repo, settings: _FakeExecutionMemory())
+    settings = load_settings()
+    settings.trading_mode = "paper"
+    repo = _ChatOrderRepo()
+    repo.recent_runtime_audit_logs = lambda limit=50: list(reversed(repo.audit_logs[-limit:]))  # type: ignore[method-assign]
+    registry = build_chat_registry(repo=repo, settings=settings, tenant_id="local", registry=None)
+    validate = registry.get("validate_order_draft").callable
+
+    first = validate(ticker="AAPL", side="BUY", quantity=1, price_krw=100_000, rationale="button batch approval AAPL")
+    second = validate(ticker="MSFT", side="BUY", quantity=1, price_krw=100_000, rationale="button batch approval MSFT")
+    tokens = [str(first["approval_token"]), str(second["approval_token"])]
+    app = _build_app(repo=repo, settings=settings)
+    client = DirectRouteClient(app)
+
+    listed = client.get("/investment-chat/order-drafts", params={"tenant_id": "local"})
+    payload = listed.json()
+
+    assert listed.status_code == 200
+    assert [item["approval_token"] for item in payload["drafts"][:2]] == list(reversed(tokens))
+
+    submitted = client.post(
+        "/investment-chat/order-drafts/batch-submit",
+        params={"tenant_id": "local"},
+        json={"approval_tokens": tokens},
+    )
+
+    assert submitted.status_code == 200
+    result = submitted.json()
+    assert result["status"] == "submitted"
+    assert result["order_count"] == 2
+    assert result["submitted_count"] == 2
+    assert len(repo.execution_reports) == 2
+    assert result["chat_delivery_text"] == "방금 주문 2건 일괄 승인 결과를 확인해서 알려줘."
+
+
 def test_investment_chat_order_draft_api_hides_adk_confirmation_drafts(monkeypatch) -> None:
     import arena.ui.app as ui_app
     from arena.agents.investment_chat import order_tools

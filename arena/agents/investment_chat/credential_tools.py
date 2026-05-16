@@ -160,6 +160,8 @@ def build_credential_tool_entries(
 
     def propose_model_key_change(
         provider: str = "",
+        model: str = "",
+        cheap_model: str = "",
         action: CredentialAction = "upsert",
         rationale: str = "",
     ) -> dict[str, Any]:
@@ -199,6 +201,12 @@ def build_credential_tool_entries(
             "rationale": str(rationale or "").strip(),
             "message": "UI에 표시되는 LLM API key 승인 패널에서 처리해야 합니다. API key 값을 채팅에 입력하지 마세요.",
         }
+        model_token = str(model or "").strip()
+        cheap_model_token = str(cheap_model or "").strip()
+        if model_token:
+            draft["model"] = model_token
+        if cheap_model_token:
+            draft["cheap_model"] = cheap_model_token
         save_credential_draft(repo, tenant_id=tenant, token=token, draft=draft)
         append_chat_audit(
             repo,
@@ -299,7 +307,8 @@ def build_credential_tool_entries(
             tool_id="propose_model_key_change",
             name="propose_model_key_change",
             description=(
-                "Creates an LLM API key add/change/delete request for the investment chat UI. "
+                "Creates an LLM API key add/change/delete request for the investment chat UI, optionally preselecting "
+                "advisor and router/utility models. "
                 "Never ask the user to paste an API key into chat; this tool opens a separate credential input panel."
             ),
             category="admin",

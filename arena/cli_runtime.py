@@ -12,7 +12,6 @@ from arena.config import (
     Settings,
     SettingsError,
     effective_research_gemini_api_key,
-    normalize_distribution_mode,
     validate_settings,
 )
 from arena.data.bq import BigQueryRepository
@@ -114,8 +113,8 @@ def _csv_env(name: str) -> list[str]:
 
 
 def _shared_research_gemini_source_tenant() -> str:
-    """Returns the tenant whose Gemini key may be shared for approved live research."""
-    return str(os.getenv("ARENA_SHARED_RESEARCH_GEMINI_SOURCE_TENANT", "") or "").strip().lower()
+    """Returns the tenant whose Gemini key may be shared for research generation."""
+    return str(os.getenv("ARENA_SHARED_RESEARCH_GEMINI_SOURCE_TENANT", "midnightnnn") or "").strip().lower()
 
 
 def _apply_shared_research_gemini(
@@ -124,7 +123,7 @@ def _apply_shared_research_gemini(
     *,
     tenant_id: str | None = None,
 ) -> str:
-    """Applies operator-managed Gemini for research to approved live/private tenants only."""
+    """Applies operator-managed Gemini for research to tenants without their own key."""
     tenant = str(tenant_id or _tenant_id() or "").strip().lower()
     source_tenant = _shared_research_gemini_source_tenant()
     if not tenant or not source_tenant or tenant == source_tenant:
@@ -135,11 +134,6 @@ def _apply_shared_research_gemini(
         return ""
     if effective_research_gemini_api_key(settings):
         return ""
-    if normalize_distribution_mode(getattr(settings, "distribution_mode", "private")) != "private":
-        return ""
-    if not bool(getattr(settings, "real_trading_approved", False)):
-        return ""
-
     row = repo.latest_runtime_credentials(tenant_id=source_tenant) or {}
     model_secret_name = str(row.get("model_secret_name") or "").strip()
     if not model_secret_name:

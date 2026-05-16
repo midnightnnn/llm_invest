@@ -108,8 +108,10 @@ def test_settings_page_has_internal_tab_links(monkeypatch) -> None:
 def test_settings_agents_tab_has_chat_provider_card(monkeypatch) -> None:
     client = _client(monkeypatch)
     body = client.get("/settings", params={"tab": "agents"}).text
-    assert "Chat Provider/Model" in body
+    assert "Chat Models" in body
     assert 'action="/settings/chat-model"' in body
+    assert "/settings/chat-model/options" in body
+    assert "settings-chat-model-map" not in body
     assert 'name="provider"' in body
     assert 'name="model"' in body
 
@@ -123,15 +125,28 @@ def test_showcase_agents_tab_has_no_chat_provider_card(monkeypatch) -> None:
 
 
 def test_chat_model_post_valid_saves_and_redirects(monkeypatch) -> None:
-    import json
-
     from arena.agents.investment_chat.config_tools import load_chat_agent_config
     from tests.ui.helpers import _client_with_repo
 
+    monkeypatch.setattr(
+        "arena.ui.routes.settings_admin.discover_saved_model_options",
+        lambda credential_store, tenant_id, provider: {
+            "provider": provider,
+            "advisor_models": ["gpt-5.5"],
+            "router_models": ["gpt-5.4-mini"],
+            "utility_models": ["gpt-5.4-mini"],
+        },
+    )
     client, repo = _client_with_repo(monkeypatch)
     resp = client.post(
         "/settings/chat-model",
-        data={"tenant_id": "local", "provider": "gpt", "model": "gpt-5.5"},
+        data={
+            "tenant_id": "local",
+            "provider": "gpt",
+            "model": "gpt-5.5",
+            "router_model": "gpt-5.4-mini",
+            "utility_model": "gpt-5.4-mini",
+        },
     )
     assert resp.status_code in (302, 303), resp.status_code
     location = resp.headers["location"]
@@ -142,6 +157,43 @@ def test_chat_model_post_valid_saves_and_redirects(monkeypatch) -> None:
     saved = load_chat_agent_config(repo, tenant_id="local")
     assert saved.get("provider") == "gpt"
     assert saved.get("model") == "gpt-5.5"
+    assert saved["model_routing"]["router_model"] == "gpt-5.4-mini"
+
+
+def test_chat_model_options_endpoint_uses_saved_api_key(monkeypatch, tmp_path) -> None:
+    import json
+
+    from tests.ui.helpers import _client_with_repo
+
+    credentials_path = tmp_path / "credentials.json"
+    credentials_path.write_text(
+        json.dumps({"local-local-models": {"providers": {"gpt": {"api_key": "sk-saved"}}}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ARENA_LOCAL_CREDENTIALS_FILE", str(credentials_path))
+    seen: dict[str, str] = {}
+
+    def _discover(provider: str, api_key: str):
+        seen["provider"] = provider
+        seen["api_key"] = api_key
+        return {
+            "provider": provider,
+            "advisor_models": ["gpt-5.5"],
+            "router_models": ["gpt-5.4-mini"],
+            "utility_models": ["gpt-5.4-mini"],
+        }
+
+    monkeypatch.setattr("arena.ui.routes.settings_admin.discover_model_options_with_api_key", _discover)
+    client, _repo = _client_with_repo(monkeypatch)
+
+    resp = client.post(
+        "/settings/chat-model/options",
+        data={"tenant_id": "local", "provider": "gpt"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["advisor_models"] == ["gpt-5.5"]
+    assert seen == {"provider": "gpt", "api_key": "sk-saved"}
 
 
 def test_chat_model_post_invalid_provider_rejects(monkeypatch) -> None:
@@ -162,16 +214,16 @@ def test_investment_chat_page_has_no_selector_form(monkeypatch) -> None:
     assert "data-chat-selector-form" not in body
     assert "data-chat-provider" not in body
     assert "data-chat-model" not in body
-    # iframe still present.
-    assert "data-adk-chat-frame" in body
-    # Approval toast panels still present.
-    assert "data-order-draft-panel" in body
-    assert "data-config-draft-panel" in body
-    assert "initializeAdkSidePanelClosed" in body
-    assert "adk-side-panel-visible" in body
+    # Without investment_chat_config and saved model key, the setup panel is shown.
+    assert "LLM API key 연결" in body
+    assert "data-adk-chat-frame" not in body
+    assert "data-order-draft-panel" not in body
+    assert "data-config-draft-panel" not in body
+    assert "initializeAdkSidePanelClosed" not in body
+    assert "adk-side-panel-visible" not in body
     assert "installAdkNoShiftStyles" not in body
     assert "arena-adk-no-shift-styles" not in body
-    assert "removeStaleAdkDrawerStabilizer" in body
+    assert "removeStaleAdkDrawerStabilizer" not in body
     assert "transition-duration: 0ms" not in body
     assert 'body[data-active="investment_chat"] .arena-sidebar' in body
 
@@ -182,9 +234,9 @@ def test_showcase_investment_chat_page_renders(monkeypatch) -> None:
     resp = client.get("/showcase/midnightnnn/investment-chat")
     assert resp.status_code == 200, resp.status_code
     body = resp.text
-    # Iframe points to the read-only ADK mount.
-    assert "/investment-chat/adk-readonly" in body
-    assert "data-adk-chat-frame" in body
+    # Without investment_chat_config, showcase renders the configured empty state.
+    assert "챗봇 모델이 설정되지 않아" in body
+    assert "data-adk-chat-frame" not in body
     # No approval toast panels.
     assert "data-order-draft-panel" not in body
     assert "data-config-draft-panel" not in body

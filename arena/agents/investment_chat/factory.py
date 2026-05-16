@@ -23,9 +23,10 @@ from arena.agents.investment_chat.context import normalize_tenant
 from arena.agents.investment_chat.registry import build_chat_registry
 from arena.agents.investment_chat.selection import (
     chat_model_routing_config,
-    cheap_chat_model_for_provider,
     normalize_chat_model_selection,
+    router_chat_model_for_provider,
     tenant_default_chat_selection,
+    utility_chat_model_for_provider,
 )
 from arena.agents.investment_chat.utils import repo_tenant_scope
 from arena.config import Settings
@@ -46,6 +47,7 @@ UTILITY_TOOL_IDS = frozenset(
         "get_trade_history",
         "get_order_approval_status",
         "propose_agent_config_change",
+        "list_chat_model_options",
         "propose_chat_agent_config_change",
         "propose_tenant_config_change",
         "get_config_change_status",
@@ -172,9 +174,8 @@ def build_investment_chat_agent(
     model_id = normalize_chat_model_selection(provider_token, model_id)
     llm_params = chat_config.get("llm_params") if isinstance(chat_config.get("llm_params"), dict) else {}
     routing_config = chat_model_routing_config(chat_config)
-    cheap_model_id = cheap_chat_model_for_provider(provider_token, chat_config=chat_config)
-    if not cheap_model_id:
-        cheap_model_id = model_id
+    router_model_id = router_chat_model_for_provider(provider_token, advisor_model=model_id, chat_config=chat_config)
+    utility_model_id = utility_chat_model_for_provider(provider_token, advisor_model=model_id, chat_config=chat_config)
     router_llm_params = _mapping_value(routing_config.get("router_llm_params"))
     utility_llm_params = _mapping_value(routing_config.get("utility_llm_params")) or router_llm_params
     max_tool_events = resolve_max_tool_events(settings)
@@ -196,14 +197,14 @@ def build_investment_chat_agent(
     router_model = _resolve_model(
         provider_token,
         settings,
-        model_override=cheap_model_id,
+        model_override=router_model_id,
         llm_params=router_llm_params,
     )
     advisor_model = _resolve_model(provider_token, settings, model_override=model_id, llm_params=llm_params)
     utility_model = _resolve_model(
         provider_token,
         settings,
-        model_override=cheap_model_id,
+        model_override=utility_model_id,
         llm_params=utility_llm_params,
     )
     advisor_agent = Agent(
@@ -229,7 +230,7 @@ def build_investment_chat_agent(
         name=UTILITY_AGENT_NAME,
         description="Arena 투자챗봇 조회/설정 유틸리티 에이전트",
         model=utility_model,
-        instruction=_utility_instruction(tenant=tenant, provider=provider_token, model_id=cheap_model_id),
+        instruction=_utility_instruction(tenant=tenant, provider=provider_token, model_id=utility_model_id),
         tools=utility_tools,
         generate_content_config=_build_generate_content_config(
             provider=provider_token,
@@ -247,7 +248,8 @@ def build_investment_chat_agent(
             tenant_id=tenant,
             provider=provider_token,
             advisor_model_id=model_id,
-            cheap_model_id=cheap_model_id,
+            router_model_id=router_model_id,
+            utility_model_id=utility_model_id,
             advisor_agent_name=ADVISOR_AGENT_NAME,
             utility_agent_name=UTILITY_AGENT_NAME,
         ),

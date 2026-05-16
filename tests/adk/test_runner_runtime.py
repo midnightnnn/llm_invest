@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from types import SimpleNamespace
 
 import pytest
 
 from arena.agents.adk_agents import _ADKDecisionRunner, _is_retryable_adk_error
+from arena.agents.cycle_supervisor import AgentCycleSupervisor
 from arena.agents.adk_runner_runtime import AdkToolBudgetExceeded, collect_response_text
 
 
@@ -125,6 +127,84 @@ def test_model_callbacks_accept_legacy_positional_arguments() -> None:
     decision_runner._before_model_callback(object(), request)
     decision_runner._after_model_callback(object(), response)
     decision_runner._on_model_error_callback(object(), request, RuntimeError("boom"))
+
+
+def test_model_timeout_policy_logs_supervisor_decision(caplog: pytest.LogCaptureFixture) -> None:
+    decision_runner = _callback_decision_runner()
+    decision_runner._cycle_supervisor = AgentCycleSupervisor(cycle_id="cycle_1")
+
+    with caplog.at_level(logging.INFO, logger="arena.agents.adk_agents"):
+        timeout = decision_runner._model_call_timeout_seconds("anthropic/claude-opus-4-7")
+
+    assert timeout == 300
+    records = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", "") == "agent_cycle_supervisor_model_timeout_policy"
+    ]
+    assert len(records) == 1
+    assert records[0].cycle_id == "cycle_1"
+    assert records[0].agent_id == "gpt"
+    assert records[0].provider == "gpt"
+    assert records[0].phase == "explore"
+    assert records[0].llm_call_id == "call_1"
+    assert records[0].model == "anthropic/claude-opus-4-7"
+    assert records[0].timeout_seconds == 300
+
+
+def test_model_callbacks_log_supervisor_operation_for_native_models(caplog: pytest.LogCaptureFixture) -> None:
+    decision_runner = _callback_decision_runner()
+    decision_runner.provider = "gemini"
+    decision_runner._cycle_supervisor = AgentCycleSupervisor(cycle_id="cycle_1")
+    decision_runner._supervisor_model_operations_by_llm_call_id = {}
+    request = SimpleNamespace(contents=[], config=SimpleNamespace(tools=[]))
+    response = SimpleNamespace(content=SimpleNamespace(parts=[]), usage_metadata=None)
+
+    with caplog.at_level(logging.INFO, logger="arena.agents.cycle_supervisor"):
+        decision_runner._before_model_callback(callback_context=object(), llm_request=request)
+        decision_runner._after_model_callback(callback_context=object(), llm_response=response)
+
+    records = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", "").startswith("agent_cycle_supervisor_operation_")
+    ]
+    assert [record.event for record in records] == [
+        "agent_cycle_supervisor_operation_start",
+        "agent_cycle_supervisor_operation_finish",
+    ]
+    assert records[0].cycle_id == "cycle_1"
+    assert records[0].agent_id == "gpt"
+    assert records[0].provider == "gemini"
+    assert records[0].phase == "explore"
+    assert records[0].llm_call_id == "call_1"
+    assert records[1].status == "success"
+    assert records[1].llm_call_id == "call_1"
+
+
+def test_model_error_callback_finishes_supervisor_operation_as_error(caplog: pytest.LogCaptureFixture) -> None:
+    decision_runner = _callback_decision_runner()
+    decision_runner.provider = "gemini"
+    decision_runner._cycle_supervisor = AgentCycleSupervisor(cycle_id="cycle_1")
+    decision_runner._supervisor_model_operations_by_llm_call_id = {}
+    request = SimpleNamespace(contents=[], config=SimpleNamespace(tools=[]))
+
+    with caplog.at_level(logging.INFO, logger="arena.agents.cycle_supervisor"):
+        decision_runner._before_model_callback(callback_context=object(), llm_request=request)
+        decision_runner._on_model_error_callback(
+            callback_context=object(),
+            llm_request=request,
+            exception=RuntimeError("boom"),
+        )
+
+    finish_records = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", "") == "agent_cycle_supervisor_operation_finish"
+    ]
+    assert len(finish_records) == 1
+    assert finish_records[0].status == "error"
+    assert finish_records[0].llm_call_id == "call_1"
 
 
 def test_collect_response_text_records_mcp_calls_and_token_usage() -> None:

@@ -10,13 +10,6 @@ _CHAT_MODEL_ALIASES: dict[tuple[str, str], str] = {
     ("gemini", "gemini-3.1-flash-preview"): "gemini-3-flash-preview",
 }
 
-DEFAULT_CHEAP_CHAT_MODEL_BY_PROVIDER: dict[str, str] = {
-    "gpt": "gpt-5.4-mini",
-    "gemini": "gemini-3-flash-preview",
-    "claude": "claude-haiku-4-5-20251001",
-}
-
-
 def normalize_chat_model_selection(provider: str | None, model: str | None) -> str:
     """Normalizes chat model tokens that providers have renamed or removed."""
     provider_token = canonical_provider(provider) or str(provider or "").strip().lower()
@@ -39,7 +32,7 @@ def cheap_chat_model_for_provider(
     *,
     chat_config: Mapping[str, Any] | None = None,
 ) -> str:
-    """Returns the low-cost router/utility model for the same provider as the advisor."""
+    """Returns the legacy shared router/utility model override, when configured."""
     provider_token = canonical_provider(provider) or str(provider or "").strip().lower()
     if not provider_token:
         return ""
@@ -50,9 +43,41 @@ def cheap_chat_model_for_provider(
         configured = str(configured_by_provider.get(provider_token) or "").strip()
     if not configured:
         configured = str(routing.get("cheap_model") or "").strip()
-    if not configured:
-        configured = DEFAULT_CHEAP_CHAT_MODEL_BY_PROVIDER.get(provider_token, "")
     return normalize_chat_model_selection(provider_token, configured)
+
+
+def router_chat_model_for_provider(
+    provider: str | None,
+    *,
+    advisor_model: str,
+    chat_config: Mapping[str, Any] | None = None,
+) -> str:
+    """Returns the configured router model, falling back to the advisor model."""
+    provider_token = canonical_provider(provider) or str(provider or "").strip().lower()
+    routing = chat_model_routing_config(chat_config)
+    configured = str(routing.get("router_model") or "").strip() or cheap_chat_model_for_provider(
+        provider_token,
+        chat_config=chat_config,
+    )
+    return normalize_chat_model_selection(provider_token, configured or advisor_model)
+
+
+def utility_chat_model_for_provider(
+    provider: str | None,
+    *,
+    advisor_model: str,
+    chat_config: Mapping[str, Any] | None = None,
+) -> str:
+    """Returns the configured utility model, falling back to router/advisor model."""
+    provider_token = canonical_provider(provider) or str(provider or "").strip().lower()
+    routing = chat_model_routing_config(chat_config)
+    configured = str(routing.get("utility_model") or "").strip() or cheap_chat_model_for_provider(
+        provider_token,
+        chat_config=chat_config,
+    )
+    if not configured:
+        configured = router_chat_model_for_provider(provider_token, advisor_model=advisor_model, chat_config=chat_config)
+    return normalize_chat_model_selection(provider_token, configured or advisor_model)
 
 
 def normalize_stored_advisor_model_selection(

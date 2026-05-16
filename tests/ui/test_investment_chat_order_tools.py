@@ -112,7 +112,7 @@ def test_chat_order_tool_uses_adk_confirmation_before_execution(monkeypatch) -> 
 
     assert waiting["status"] == "waiting_for_confirmation"
     assert waiting["submission_status"] == "not_submitted"
-    assert first_context.actions.skip_summarization is True
+    assert first_context.actions.skip_summarization is False
     assert first_context.confirmation_request is not None
     payload = first_context.confirmation_request["payload"]
     assert isinstance(payload, dict)
@@ -178,6 +178,85 @@ def test_chat_order_tool_rejects_adk_confirmation_without_execution(monkeypatch)
     )
 
     assert rejected["status"] == "rejected"
+    assert repo.execution_reports == []
+
+
+def test_chat_order_batch_tool_uses_one_adk_confirmation_before_execution(monkeypatch) -> None:
+    repo = _ChatOrderRepo()
+    tools = _build_raw_chat_tools(monkeypatch, repo)
+    submit_batch = tools["submit_order_batch_with_confirmation"]
+    orders = [
+        {
+            "ticker": "AAPL",
+            "side": "BUY",
+            "quantity": 1,
+            "price_krw": 100_000,
+            "rationale": "AAPL batch buy thesis with account context",
+            "exchange_code": "NASD",
+            "instrument_id": "NASD:AAPL",
+        },
+        {
+            "ticker": "MSFT",
+            "side": "BUY",
+            "quantity": 1,
+            "price_krw": 100_000,
+            "rationale": "MSFT batch buy thesis with account context",
+            "exchange_code": "NASD",
+            "instrument_id": "NASD:MSFT",
+        },
+    ]
+
+    first_context = _FakeToolContext(function_call_id="fc-order-batch")
+    waiting = submit_batch(orders=orders, tool_context=first_context)
+
+    assert waiting["status"] == "waiting_for_confirmation"
+    assert waiting["order_count"] == 2
+    assert waiting["submittable_count"] == 2
+    assert waiting["submission_status"] == "not_submitted"
+    assert first_context.actions.skip_summarization is False
+    assert first_context.confirmation_request is not None
+    payload = first_context.confirmation_request["payload"]
+    assert isinstance(payload, dict)
+    assert payload["action"] == "submit_order_batch"
+    assert payload["order_count"] == 2
+    assert payload["submittable_count"] == 2
+    assert repo.execution_reports == []
+
+    confirmed_context = _FakeToolContext(
+        function_call_id=first_context.function_call_id,
+        state=first_context.state,
+        tool_confirmation=SimpleNamespace(confirmed=True, payload={}),
+    )
+    submitted = submit_batch(orders=orders, tool_context=confirmed_context)
+
+    assert submitted["status"] == "submitted"
+    assert submitted["order_count"] == 2
+    assert submitted["submitted_count"] == 2
+    assert len(repo.execution_reports) == 2
+
+
+def test_chat_order_batch_tool_rejects_one_confirmation_without_execution(monkeypatch) -> None:
+    repo = _ChatOrderRepo()
+    tools = _build_raw_chat_tools(monkeypatch, repo)
+    submit_batch = tools["submit_order_batch_with_confirmation"]
+    orders = [
+        {"ticker": "AAPL", "side": "BUY", "quantity": 1, "price_krw": 100_000, "rationale": "batch buy AAPL"},
+        {"ticker": "MSFT", "side": "BUY", "quantity": 1, "price_krw": 100_000, "rationale": "batch buy MSFT"},
+    ]
+
+    first_context = _FakeToolContext(function_call_id="fc-order-batch-reject")
+    waiting = submit_batch(orders=orders, tool_context=first_context)
+    assert waiting["status"] == "waiting_for_confirmation"
+
+    rejected_context = _FakeToolContext(
+        function_call_id=first_context.function_call_id,
+        state=first_context.state,
+        tool_confirmation=SimpleNamespace(confirmed=False, payload={}),
+    )
+    rejected = submit_batch(orders=orders, tool_context=rejected_context)
+
+    assert rejected["status"] == "rejected"
+    assert rejected["order_count"] == 2
     assert repo.execution_reports == []
 
 

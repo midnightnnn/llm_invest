@@ -26,6 +26,23 @@ def test_investment_chat_wrapped_adk_confirmation_tool_builds_declaration(monkey
     assert "tool_context" not in json.dumps(declaration.model_dump(), default=str)
 
 
+def test_investment_chat_batch_order_confirmation_tool_builds_declaration(monkeypatch) -> None:
+    from google.adk.tools.function_tool import FunctionTool
+
+    repo = _ChatOrderRepo()
+    agent = _build_fake_chat_agent(monkeypatch, repo)
+    tool = next(candidate for candidate in agent.tools if candidate.__name__ == "submit_order_batch_with_confirmation")
+
+    declaration = FunctionTool(tool)._get_declaration()
+    params = declaration.parameters.model_dump(mode="json", exclude_none=True)
+
+    assert declaration is not None
+    assert declaration.name == "submit_order_batch_with_confirmation"
+    assert "tool_context" not in json.dumps(declaration.model_dump(), default=str)
+    assert params["properties"]["orders"]["type"] == "ARRAY"
+    assert params["properties"]["orders"]["items"]["type"] == "OBJECT"
+
+
 def test_chat_order_tool_schema_describes_ontology_friendly_rationale(monkeypatch) -> None:
     from google.adk.tools.function_tool import FunctionTool
 
@@ -67,6 +84,7 @@ def test_chat_config_tools_expose_structured_schema(monkeypatch) -> None:
 
     assert "propose_config_change" not in tools
     assert {
+        "list_chat_model_options",
         "propose_agent_config_change",
         "propose_chat_agent_config_change",
         "propose_tenant_config_change",
@@ -156,3 +174,41 @@ def test_chat_analysis_tool_schema_keeps_required_fields_with_optional_params(mo
     assert params["properties"]["tickers"]["items"]["type"] == "STRING"
     assert params["properties"]["strategy"]["enum"] == ["sharpe", "risk_parity", "forecast"]
     assert params["properties"]["forecast_mode"]["enum"] == ["default", "all", "stacked", "base", "balanced", "lgbm", "ridge", "avg"]
+
+
+def test_chat_research_tool_schema_exposes_on_demand_refresh_and_category_enum(monkeypatch) -> None:
+    from google.adk.tools.function_tool import FunctionTool
+    from arena.agents.investment_chat import factory
+    from arena.agents.investment_chat import memory as chat_memory
+
+    settings = load_settings()
+    settings.trading_mode = "paper"
+    settings.kis_target_market = "us"
+    repo = _ChatOrderRepo()
+
+    _FakeExecutionMemory.instances.clear()
+    monkeypatch.setattr(chat_memory, "MemoryStore", _FakeExecutionMemory, raising=False)
+    monkeypatch.setattr(factory, "_resolve_model", lambda *args, **kwargs: "fake-model")
+    monkeypatch.setattr(factory, "Agent", lambda **kwargs: SimpleNamespace(**kwargs))
+    agent = factory.build_investment_chat_agent(
+        repo=repo,
+        settings=settings,
+        tenant_id="local",
+        registry=None,
+    )
+    tool = next(candidate for candidate in _chat_advisor_agent(agent).tools if candidate.__name__ == "get_research_briefing")
+
+    declaration = FunctionTool(tool)._get_declaration()
+    params = declaration.parameters.model_dump(mode="json", exclude_none=True)
+    props = params["properties"]
+
+    assert "refresh_missing" in props
+    assert props["refresh_missing"]["type"] == "BOOLEAN"
+    assert props["categories"]["items"]["enum"] == [
+        "global_market",
+        "geopolitical",
+        "sector_trends",
+        "sector",
+    ]
+    assert 'categories=["geopolitical"]' not in declaration.description
+    assert 'tickers=["AAPL"]' not in declaration.description

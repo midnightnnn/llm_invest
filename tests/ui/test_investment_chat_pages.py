@@ -217,6 +217,14 @@ def test_investment_chat_page_uses_stored_provider_with_tenant_agent_model(monke
         json.dumps({"provider": "claude", "model": "claude-opus-4-7"}),
         "seed",
     )
+    repo.set_config(
+        "local",
+        "agents_config",
+        json.dumps([
+            {"id": "claude", "provider": "claude", "model": "claude-sonnet-4-6", "capital_krw": 1_000_000}
+        ]),
+        "seed",
+    )
     app = _build_app(repo=repo, settings=load_settings())
     client = DirectRouteClient(app)
 
@@ -331,7 +339,7 @@ def test_investment_chat_page_ignores_stale_session_cheap_model(monkeypatch) -> 
     assert response.status_code == 200
     assert "/investment-chat/adk/dev-ui/?tenant_id=midnightnnn&amp;provider=gemini" in response.text
     assert "model=gemini-3.1-pro-preview" in response.text
-    assert "gemini-3-flash-preview" not in response.text
+    assert "model=gemini-3-flash-preview" not in response.text
     assert client.session["investment_chat_provider"] == "gemini"
     assert client.session["investment_chat_model"] == "gemini-3.1-pro-preview"
 
@@ -368,7 +376,7 @@ def test_investment_chat_page_ignores_stale_session_gpt_model(monkeypatch) -> No
 
     assert response.status_code == 200
     assert "/investment-chat/adk/dev-ui/?tenant_id=midnightnnn&amp;provider=gpt&amp;model=gpt-5.5" in response.text
-    assert "gpt-5.2" not in response.text
+    assert "model=gpt-5.2" not in response.text
     assert client.session["investment_chat_provider"] == "gpt"
     assert client.session["investment_chat_model"] == "gpt-5.5"
 
@@ -390,6 +398,14 @@ def test_investment_chat_provider_options_are_limited_to_tenant_model_keys(monke
         "has_gemini": False,
         "has_anthropic": True,
     }
+    repo.set_config(
+        "czxnms",
+        "agents_config",
+        json.dumps([
+            {"id": "claude", "provider": "claude", "model": "claude-sonnet-4-6", "capital_krw": 1_000_000}
+        ]),
+        "seed",
+    )
     app = _build_app(repo=repo, settings=load_settings())
     client = DirectRouteClient(app)
 
@@ -438,6 +454,9 @@ def test_investment_chat_provider_options_show_no_iframe_when_no_tenant_model_ke
     assert "Google Gemini" in response.text
     assert "Anthropic Claude" in response.text
     assert "DeepSeek" not in response.text
+    assert 'data-llm-key-options-button' in response.text
+    assert "/investment-chat/model-key/options" in response.text
+    assert "investment-chat-key-model-map" not in response.text
     assert "<iframe" not in response.text
 
 
@@ -464,15 +483,25 @@ def test_investment_chat_model_key_post_saves_key_and_redirects(
     }
     app = _build_app(repo=repo, settings=load_settings())
     client = DirectRouteClient(app)
+    monkeypatch.setattr(
+        "arena.ui.routes.investment_chat.discover_model_options_with_api_key",
+        lambda provider, api_key: {
+            "provider": provider,
+            "advisor_models": ["gpt-5.5"],
+            "router_models": ["gpt-5.4-mini"],
+            "utility_models": ["gpt-5.4-mini"],
+        },
+    )
 
     response = client.post(
         "/investment-chat/model-key",
         data={
             "tenant_id": "czxnms",
-            "provider": "gpt",
-            "model": "gpt-5.5",
-            "api_key": "sk-test-chat-key",
-        },
+                "provider": "gpt",
+                "model": "gpt-5.5",
+                "cheap_model": "gpt-5.4-mini",
+                "api_key": "sk-test-chat-key",
+            },
     )
 
     assert response.status_code == 303
@@ -482,6 +511,47 @@ def test_investment_chat_model_key_post_saves_key_and_redirects(
     saved_config = json.loads(repo.get_config("czxnms", "investment_chat_config") or "{}")
     assert saved_config["provider"] == "gpt"
     assert saved_config["model"] == "gpt-5.5"
+    assert saved_config["model_routing"]["router_model"] == "gpt-5.4-mini"
+    assert saved_config["model_routing"]["utility_model"] == "gpt-5.4-mini"
+
+
+def test_investment_chat_model_key_options_uses_submitted_key(monkeypatch, tmp_path) -> None:
+    import arena.ui.app as ui_app
+
+    monkeypatch.setenv("ARENA_UI_AUTH_ENABLED", "false")
+    monkeypatch.setenv("ARENA_LOCAL_CREDENTIALS_FILE", str(tmp_path / "credentials.json"))
+    monkeypatch.setattr(
+        ui_app,
+        "build_investment_chat_adk_app",
+        lambda **kwargs: FastAPI(title="stub-adk"),
+    )
+    seen: dict[str, str] = {}
+
+    def _discover(provider: str, api_key: str):
+        seen["provider"] = provider
+        seen["api_key"] = api_key
+        return {
+            "provider": provider,
+            "advisor_models": ["gpt-5.5"],
+            "router_models": ["gpt-5.4-mini"],
+            "utility_models": ["gpt-5.4-mini"],
+        }
+
+    monkeypatch.setattr("arena.ui.routes.investment_chat.discover_model_options_with_api_key", _discover)
+    repo = _DummyRepo()
+    app = _build_app(repo=repo, settings=load_settings())
+    client = DirectRouteClient(app)
+
+    response = client.post(
+        "/investment-chat/model-key/options",
+        data={"tenant_id": "local", "provider": "gpt", "api_key": "sk-live"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["advisor_models"] == ["gpt-5.5"]
+    assert payload["router_models"] == ["gpt-5.4-mini"]
+    assert seen == {"provider": "gpt", "api_key": "sk-live"}
 
 
 def test_investment_chat_with_existing_key_hides_persistent_key_form(monkeypatch) -> None:
@@ -501,6 +571,14 @@ def test_investment_chat_with_existing_key_hides_persistent_key_form(monkeypatch
         "has_gemini": False,
         "has_anthropic": False,
     }
+    repo.set_config(
+        "czxnms",
+        "agents_config",
+        json.dumps([
+            {"id": "gpt", "provider": "gpt", "model": "gpt-5.5", "capital_krw": 1_000_000}
+        ]),
+        "seed",
+    )
     app = _build_app(repo=repo, settings=load_settings())
     client = DirectRouteClient(app)
 

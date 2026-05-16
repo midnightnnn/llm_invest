@@ -92,12 +92,14 @@ def build_tool_wrapper(
     name = str(entry.name or entry.tool_id or getattr(fn, "__name__", "tool")).strip() or "tool"
 
     @functools.wraps(fn)
-    def wrapper(*args, **kwargs):
+    async def wrapper(*args, **kwargs):
         t0 = time.perf_counter()
         t0_epoch = time.time()
         err = None
         try:
             res = fn(*args, **kwargs)
+            if inspect.isawaitable(res):
+                res = await res
         except Exception as exc:
             err = str(exc)
             res = {"error": err}

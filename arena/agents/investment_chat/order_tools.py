@@ -35,6 +35,7 @@ logger = logging.getLogger(__name__)
 
 OrderSide = Literal["BUY", "SELL"]
 OrderScope = Literal["account", "agent_sleeve"]
+MAX_BATCH_ORDERS = 20
 
 
 def _parse_audit_detail(row: dict[str, Any]) -> dict[str, Any]:
@@ -56,6 +57,11 @@ def _confirmation_state_key(tool_context: ToolContext) -> str:
     return f"investment_chat.order_confirmation.{function_call_id or 'unknown'}"
 
 
+def _batch_confirmation_state_key(tool_context: ToolContext) -> str:
+    function_call_id = str(getattr(tool_context, "function_call_id", "") or "").strip()
+    return f"investment_chat.order_batch_confirmation.{function_call_id or 'unknown'}"
+
+
 def _confirmation_payload(draft: dict[str, Any]) -> dict[str, Any]:
     intent = draft.get("intent") if isinstance(draft.get("intent"), dict) else {}
     risk = draft.get("risk") if isinstance(draft.get("risk"), dict) else {}
@@ -73,6 +79,45 @@ def _confirmation_payload(draft: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _batch_order_summary(token: str, draft: dict[str, Any]) -> dict[str, Any]:
+    payload = _confirmation_payload(draft)
+    payload["approval_token"] = token
+    payload["status"] = str(draft.get("status") or "").strip().lower()
+    payload["submittable"] = payload["status"] == "draft" and bool(payload.get("risk_allowed"))
+    payload["batch_index"] = draft.get("batch_index")
+    return payload
+
+
+def _batch_confirmation_payload(batch_token: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
+    submittable = [row for row in rows if row.get("submittable")]
+    return {
+        "action": "submit_order_batch",
+        "batch_token": batch_token,
+        "order_count": len(rows),
+        "submittable_count": len(submittable),
+        "blocked_count": len(rows) - len(submittable),
+        "notional_krw": sum(float(row.get("notional_krw") or 0.0) for row in submittable),
+        "orders": [
+            {
+                key: row.get(key)
+                for key in (
+                    "ticker",
+                    "side",
+                    "quantity",
+                    "notional_krw",
+                    "scope",
+                    "target_agent_id",
+                    "risk_allowed",
+                    "policy_hits",
+                    "submittable",
+                )
+            }
+            for row in rows
+        ],
+        "judgment_source": "user+investment_chat",
+    }
+
+
 def _confirmation_hint(draft: dict[str, Any]) -> str:
     payload = _confirmation_payload(draft)
     ticker = str(payload.get("ticker") or "").strip().upper()
@@ -87,6 +132,46 @@ def _confirmation_hint(draft: dict[str, Any]) -> str:
         f"예상 금액 {float(notional):,.0f}원. "
         "ADK Web 확인창에서 Confirmed 체크박스를 체크한 뒤 Submit을 눌러야 승인됩니다."
     )
+
+
+def _batch_confirmation_hint(rows: list[dict[str, Any]]) -> str:
+    submittable = [row for row in rows if row.get("submittable")]
+    blocked_count = max(0, len(rows) - len(submittable))
+    total_notional = sum(float(row.get("notional_krw") or 0.0) for row in submittable)
+    preview = ", ".join(
+        f"{str(row.get('ticker') or '').upper()} {str(row.get('side') or '').upper()} {float(row.get('quantity') or 0):g}주"
+        for row in submittable[:5]
+    )
+    suffix = f" 외 {len(submittable) - 5}건" if len(submittable) > 5 else ""
+    blocked_note = f" 리스크/입력 문제로 {blocked_count}건은 제출되지 않습니다." if blocked_count else ""
+    return (
+        f"총 {len(submittable)}건의 주문을 일괄 제출할까요? {preview}{suffix}, "
+        f"예상 합계 {total_notional:,.0f}원.{blocked_note} "
+        "ADK Web 확인창에서 Confirmed 체크박스를 체크한 뒤 Submit을 눌러야 승인됩니다."
+    )
+
+
+def _batch_confirmation_token(tokens: list[str]) -> str:
+    return approval_token({"approval_tokens": tokens})
+
+
+def _batch_required_confirmation(tokens: list[str]) -> str:
+    return f"CONFIRM_BATCH {_batch_confirmation_token(tokens)}"
+
+
+def _batch_submit_status(results: list[dict[str, Any]]) -> str:
+    if not results:
+        return "blocked"
+    submitted_statuses = {"submitted", "already_submitted"}
+    submitted_count = sum(
+        1 for result in results if str(result.get("status") or "").strip().lower() in submitted_statuses
+    )
+    if submitted_count == len(results):
+        return "submitted"
+    if submitted_count > 0:
+        return "partial"
+    first_status = str(results[0].get("status") or "").strip().lower()
+    return first_status or "blocked"
 
 
 def _build_order_tool_entries(
@@ -169,6 +254,113 @@ def _build_order_tool_entries(
             "tenant_id": tenant,
             "count": len(orders),
             "orders": orders,
+        }
+
+    def _build_batch_drafts(
+        orders: list[dict[str, Any]],
+        *,
+        approval_channel: str = "",
+    ) -> dict[str, Any]:
+        if not isinstance(orders, list) or not orders:
+            return {"status": "error", "error": "orders must be a non-empty list"}
+        if len(orders) > MAX_BATCH_ORDERS:
+            return {
+                "status": "error",
+                "error": f"orders cannot contain more than {MAX_BATCH_ORDERS} items",
+                "max_orders": MAX_BATCH_ORDERS,
+            }
+
+        results: list[dict[str, Any]] = []
+        tokens: list[str] = []
+        for index, raw_order in enumerate(orders):
+            if not isinstance(raw_order, dict):
+                results.append(
+                    {
+                        "status": "error",
+                        "batch_index": index,
+                        "error": "each order must be an object",
+                    }
+                )
+                continue
+            price_native_raw = raw_order.get("price_native")
+            price_native = (
+                None
+                if price_native_raw is None or str(price_native_raw).strip() == ""
+                else safe_float(price_native_raw)
+            )
+            result = validate_order_draft(
+                ticker=str(raw_order.get("ticker") or ""),
+                side=str(raw_order.get("side") or "").upper(),  # type: ignore[arg-type]
+                quantity=safe_float(raw_order.get("quantity")),
+                price_krw=safe_float(raw_order.get("price_krw")),
+                rationale=str(raw_order.get("rationale") or ""),
+                agent_id=str(raw_order.get("agent_id") or AGENT_ID),
+                scope=str(raw_order.get("scope") or "account"),  # type: ignore[arg-type]
+                exchange_code=str(raw_order.get("exchange_code") or ""),
+                instrument_id=str(raw_order.get("instrument_id") or ""),
+                price_native=price_native,
+                quote_currency=str(raw_order.get("quote_currency") or ""),
+                fx_rate=safe_float(raw_order.get("fx_rate")),
+            )
+            result["batch_index"] = index
+            token = str(result.get("approval_token") or "").strip()
+            if token:
+                tokens.append(token)
+            results.append(result)
+
+        batch_token = approval_token(
+            {
+                "tenant_id": tenant,
+                "approval_tokens": tokens,
+                "batch_nonce": uuid4().hex,
+            }
+        )
+        rows: list[dict[str, Any]] = []
+        for result in results:
+            token = str(result.get("approval_token") or "").strip()
+            if not token:
+                rows.append(
+                    {
+                        "approval_token": "",
+                        "status": str(result.get("status") or "error").strip().lower(),
+                        "submittable": False,
+                        "batch_index": result.get("batch_index"),
+                        "error": result.get("error") or "",
+                    }
+                )
+                continue
+            draft = load_draft(repo, tenant_id=tenant, token=token)
+            if isinstance(draft, dict):
+                draft["batch_token"] = batch_token
+                draft["batch_index"] = result.get("batch_index")
+                draft["batch_count"] = len(results)
+                if approval_channel:
+                    draft["approval_channel"] = approval_channel
+                save_draft(repo, tenant_id=tenant, token=token, draft=draft)
+                rows.append(_batch_order_summary(token, draft))
+            else:
+                rows.append(
+                    {
+                        "approval_token": token,
+                        "status": "missing",
+                        "submittable": False,
+                        "batch_index": result.get("batch_index"),
+                    }
+                )
+        submittable_tokens = [str(row.get("approval_token") or "") for row in rows if row.get("submittable")]
+        return {
+            "status": "ok",
+            "tenant_id": tenant,
+            "batch_token": batch_token,
+            "order_count": len(results),
+            "submittable_count": len(submittable_tokens),
+            "blocked_count": len(rows) - len(submittable_tokens),
+            "approval_tokens": [token for token in tokens if token],
+            "submittable_approval_tokens": submittable_tokens,
+            "notional_krw": sum(float(row.get("notional_krw") or 0.0) for row in rows if row.get("submittable")),
+            "orders": rows,
+            "submission_status": "not_submitted",
+            "approval_required": bool(submittable_tokens),
         }
 
     def validate_order_draft(
@@ -369,6 +561,10 @@ def _build_order_tool_entries(
             "expires_at": utc_iso(expires_at),
             "snapshot_meta": snapshot_meta,
         }
+
+    def validate_order_batch_draft(orders: list[dict[str, Any]]) -> dict[str, Any]:
+        """Validates multiple proposed order drafts without submitting them."""
+        return _build_batch_drafts(orders)
 
     def submit_approved_order(approval_token: str, confirmation_text: str) -> dict[str, Any]:
         """Submits a previously validated order draft from a backend/UI approval bridge."""
@@ -572,6 +768,57 @@ def _build_order_tool_entries(
             **({"error": str(report.message or "")} if response_status != "submitted" else {}),
         }
 
+    def submit_approved_order_batch(approval_tokens: list[str], confirmation_text: str) -> dict[str, Any]:
+        """Submits multiple previously validated order drafts from a backend/UI approval bridge."""
+        tokens: list[str] = []
+        seen: set[str] = set()
+        for raw_token in approval_tokens or []:
+            token = str(raw_token or "").strip()
+            if token and token not in seen:
+                seen.add(token)
+                tokens.append(token)
+        required = _batch_required_confirmation(tokens)
+        if not tokens:
+            return {"status": "blocked", "error": "approval_tokens is required", "required_confirmation": required}
+        if str(confirmation_text or "").strip() != required:
+            return {
+                "status": "blocked",
+                "error": "confirmation_text must exactly match the required batch confirmation phrase",
+                "required_confirmation": required,
+            }
+
+        results = [
+            submit_approved_order(approval_token=token, confirmation_text=f"CONFIRM {token}")
+            for token in tokens
+        ]
+        submitted_statuses = {"submitted", "already_submitted"}
+        submitted_count = sum(
+            1 for result in results if str(result.get("status") or "").strip().lower() in submitted_statuses
+        )
+        status = _batch_submit_status(results)
+        user_email = chat_actor_email()
+        append_chat_audit(
+            repo,
+            tenant_id=tenant,
+            action="chat_order_batch_submit",
+            status="ok" if status in {"submitted", "partial"} else "error",
+            detail={
+                "approval_tokens": tokens,
+                "submitted_count": submitted_count,
+                "failed_count": len(results) - submitted_count,
+                "result_status": status,
+            },
+            user_email=user_email,
+        )
+        return {
+            "status": status,
+            "tenant_id": tenant,
+            "order_count": len(tokens),
+            "submitted_count": submitted_count,
+            "failed_count": len(results) - submitted_count,
+            "orders": results,
+        }
+
     def submit_order_with_confirmation(
         ticker: str,
         side: OrderSide,
@@ -672,7 +919,6 @@ def _build_order_tool_entries(
             hint=_confirmation_hint(draft),
             payload=_confirmation_payload(draft),
         )
-        tool_context.actions.skip_summarization = True
         return {
             "status": "waiting_for_confirmation",
             "tenant_id": tenant,
@@ -688,7 +934,122 @@ def _build_order_tool_entries(
             "message": "ADK tool confirmation is required before this order can be submitted.",
         }
 
+    def submit_order_batch_with_confirmation(
+        orders: list[dict[str, Any]],
+        tool_context: ToolContext,
+    ) -> dict[str, Any]:
+        """Validates multiple orders, asks for one ADK confirmation, then submits approved drafts."""
+        state_key = _batch_confirmation_state_key(tool_context)
+        confirmation = getattr(tool_context, "tool_confirmation", None)
+        state = getattr(tool_context, "state", None)
+        if confirmation is not None:
+            stored = state.get(state_key) if state is not None else None
+            approval_tokens: list[str] = []
+            if isinstance(stored, dict):
+                raw_tokens = stored.get("approval_tokens")
+                if isinstance(raw_tokens, list):
+                    approval_tokens = [str(token or "").strip() for token in raw_tokens if str(token or "").strip()]
+            elif isinstance(stored, list):
+                approval_tokens = [str(token or "").strip() for token in stored if str(token or "").strip()]
+
+            if not bool(getattr(confirmation, "confirmed", False)):
+                confirmation_payload = getattr(confirmation, "payload", None)
+                reason = "confirmed_checkbox_unchecked" if confirmation_payload is not None else "not_confirmed"
+                for token in approval_tokens:
+                    draft = load_draft(repo, tenant_id=tenant, token=token)
+                    if isinstance(draft, dict) and str(draft.get("status") or "").strip().lower() == "draft":
+                        draft["status"] = "rejected"
+                        draft["rejected_at"] = utc_iso()
+                        draft["rejection_reason"] = reason
+                        save_draft(repo, tenant_id=tenant, token=token, draft=draft)
+                append_chat_audit(
+                    repo,
+                    tenant_id=tenant,
+                    action="chat_order_batch_submit",
+                    status="blocked",
+                    detail={
+                        "approval_tokens": approval_tokens,
+                        "stage": "adk_tool_confirmation",
+                        "reason": reason,
+                    },
+                    user_email=chat_actor_email(),
+                )
+                return {
+                    "status": "rejected",
+                    "tenant_id": tenant,
+                    "order_count": len(approval_tokens),
+                    "reason": reason,
+                    "submission_status": "not_submitted",
+                    "message": (
+                        "ADK Web에서 confirmed=false가 반환되어 주문 묶음을 제출하지 않았습니다. "
+                        "승인하려면 ADK Web 확인창에서 Confirmed 체크박스를 체크한 뒤 Submit을 눌러야 합니다."
+                        if reason == "confirmed_checkbox_unchecked"
+                        else "ADK Web에서 주문 묶음이 확인되지 않아 제출하지 않았습니다."
+                    ),
+                }
+            if not approval_tokens:
+                return {
+                    "status": "blocked",
+                    "tenant_id": tenant,
+                    "error": "ADK tool confirmation state was missing; batch orders were not submitted.",
+                }
+            return submit_approved_order_batch(
+                approval_tokens=approval_tokens,
+                confirmation_text=_batch_required_confirmation(approval_tokens),
+            )
+
+        draft_batch = _build_batch_drafts(orders, approval_channel="adk_tool_confirmation")
+        if str(draft_batch.get("status") or "").strip().lower() != "ok":
+            return draft_batch
+        submittable_tokens = [
+            str(token or "").strip()
+            for token in draft_batch.get("submittable_approval_tokens", [])
+            if str(token or "").strip()
+        ]
+        rows = draft_batch.get("orders") if isinstance(draft_batch.get("orders"), list) else []
+        if not submittable_tokens:
+            return {
+                **draft_batch,
+                "status": "blocked",
+                "error": "No orders passed validation for submission.",
+                "approval_required": False,
+            }
+        if state is not None:
+            state[state_key] = {
+                "batch_token": draft_batch.get("batch_token") or "",
+                "approval_tokens": submittable_tokens,
+            }
+        tool_context.request_confirmation(
+            hint=_batch_confirmation_hint(rows),
+            payload=_batch_confirmation_payload(str(draft_batch.get("batch_token") or ""), rows),
+        )
+        return {
+            **draft_batch,
+            "status": "waiting_for_confirmation",
+            "approval_required": True,
+            "approval_ui": "adk_tool_confirmation",
+            "message": "One ADK tool confirmation is required before this order batch can be submitted.",
+        }
+
     entries = [
+        ToolEntry(
+            tool_id="submit_order_batch_with_confirmation",
+            name="submit_order_batch_with_confirmation",
+            description=(
+                "Preferred order submission tool when the user asks for two or more buy/sell orders in one turn. "
+                "Pass every order in the orders array using keys ticker, side, quantity, price_krw, rationale, "
+                "and optional agent_id, scope, exchange_code, instrument_id, price_native, quote_currency, fx_rate. "
+                "The tool validates all orders, asks for one ADK confirmation for the whole batch, and submits only "
+                "after the user approves. Write each rationale as an ontology-friendly investment memo with explicit "
+                "ticker names, catalyst/risk/thesis/outcome terms, account or sleeve context, and why the side/size "
+                "is appropriate."
+            ),
+            category="execution",
+            callable=submit_order_batch_with_confirmation,
+            tier="core",
+            label_ko="ADK 승인 주문 일괄 제출",
+            sort_order=2,
+        ),
         ToolEntry(
             tool_id="submit_order_with_confirmation",
             name="submit_order_with_confirmation",
@@ -706,6 +1067,20 @@ def _build_order_tool_entries(
             sort_order=3,
         ),
         ToolEntry(
+            tool_id="validate_order_batch_draft",
+            name="validate_order_batch_draft",
+            description=(
+                "Builds and risk-checks multiple proposed order drafts without submitting them. Use this for "
+                "multi-order draft/risk-check requests where the user did not ask to submit. Always returns "
+                "submission_status='not_submitted'."
+            ),
+            category="execution",
+            callable=validate_order_batch_draft,
+            tier="core",
+            label_ko="주문 초안 일괄 검증",
+            sort_order=4,
+        ),
+        ToolEntry(
             tool_id="validate_order_draft",
             name="validate_order_draft",
             description=(
@@ -718,7 +1093,7 @@ def _build_order_tool_entries(
             callable=validate_order_draft,
             tier="core",
             label_ko="주문 초안 검증",
-            sort_order=4,
+            sort_order=5,
         ),
         ToolEntry(
             tool_id="get_order_approval_status",
@@ -728,21 +1103,33 @@ def _build_order_tool_entries(
             callable=get_order_approval_status,
             tier="core",
             label_ko="승인 결과 조회",
-            sort_order=5,
+            sort_order=6,
         ),
     ]
     if include_internal_bridge:
-        entries.append(
-            ToolEntry(
-                tool_id="submit_approved_order",
-                name="submit_approved_order",
-                description="Internal backend/UI approval bridge for submitting a stored order draft. Not exposed to the LLM tool registry.",
-                category="execution",
-                callable=submit_approved_order,
-                tier="internal",
-                label_ko="승인 주문 제출",
-                sort_order=6,
-            )
+        entries.extend(
+            [
+                ToolEntry(
+                    tool_id="submit_approved_order",
+                    name="submit_approved_order",
+                    description="Internal backend/UI approval bridge for submitting a stored order draft. Not exposed to the LLM tool registry.",
+                    category="execution",
+                    callable=submit_approved_order,
+                    tier="internal",
+                    label_ko="승인 주문 제출",
+                    sort_order=7,
+                ),
+                ToolEntry(
+                    tool_id="submit_approved_order_batch",
+                    name="submit_approved_order_batch",
+                    description="Internal backend/UI approval bridge for submitting multiple stored order drafts. Not exposed to the LLM tool registry.",
+                    category="execution",
+                    callable=submit_approved_order_batch,
+                    tier="internal",
+                    label_ko="승인 주문 일괄 제출",
+                    sort_order=8,
+                ),
+            ]
         )
     return entries
 
@@ -757,9 +1144,13 @@ def build_order_tool_entries(*, repo: Any, settings: Settings, tenant_id: str) -
 
 
 def build_order_bridge_tool_entries(*, repo: Any, settings: Settings, tenant_id: str) -> list[ToolEntry]:
-    return _build_order_tool_entries(
+    return [
+        entry
+        for entry in _build_order_tool_entries(
         repo=repo,
         settings=settings,
         tenant_id=tenant_id,
         include_internal_bridge=True,
-    )[-1:]
+        )
+        if entry.tier == "internal"
+    ]

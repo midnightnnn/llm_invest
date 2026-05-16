@@ -12,6 +12,7 @@ def test_validate_settings_allows_missing_gemini_for_research_when_llm_enabled(m
     settings.agent_ids = ["gpt"]
     settings.agent_configs = {}
     settings.openai_api_key = "test-openai-key"
+    settings.openai_model = "gpt-test"
     settings.gemini_api_key = ""
     settings.research_gemini_model = "gemini-2.5-flash"
     settings.research_enabled = True
@@ -28,11 +29,37 @@ def test_validate_settings_allows_single_gpt_trader_with_gemini_research() -> No
     settings.agent_ids = ["gpt"]
     settings.agent_configs = {}
     settings.openai_api_key = "test-openai-key"
+    settings.openai_model = "gpt-test"
     settings.gemini_api_key = "test-gemini-key"
     settings.research_gemini_model = "gemini-2.5-flash"
     settings.research_enabled = True
 
     validate_settings(settings, require_llm=True)
+
+
+def test_load_settings_provider_models_default_empty(monkeypatch) -> None:
+    monkeypatch.delenv("OPENAI_MODEL", raising=False)
+    monkeypatch.delenv("GEMINI_MODEL", raising=False)
+    monkeypatch.delenv("ANTHROPIC_MODEL", raising=False)
+
+    settings = load_settings()
+
+    assert settings.openai_model == ""
+    assert settings.gemini_model == ""
+    assert settings.anthropic_model == ""
+
+
+def test_validate_settings_requires_model_for_configured_adk_provider(monkeypatch) -> None:
+    monkeypatch.setenv("ARENA_MODE", "local")
+    settings = load_settings()
+    settings.agent_ids = ["gpt"]
+    settings.agent_configs = {}
+    settings.openai_api_key = "test-openai-key"
+    settings.openai_model = ""
+    settings.research_enabled = False
+
+    with pytest.raises(SettingsError, match="Model is required"):
+        validate_settings(settings, require_llm=True)
 
 
 def test_validate_settings_allows_local_mode_without_gcp_settings(monkeypatch) -> None:
@@ -60,6 +87,26 @@ def test_research_generation_status_reports_shared_live_tenant(monkeypatch) -> N
     assert status["code"] == "shared_live_tenant"
     assert status["can_generate"] is True
     assert status["research_source_tenant"] == "midnightnnn"
+
+
+def test_research_generation_status_vertex_is_not_limited_by_default_shared_source(monkeypatch) -> None:
+    monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "true")
+    monkeypatch.delenv("ARENA_SHARED_RESEARCH_GEMINI_SOURCE_TENANT", raising=False)
+    settings = load_settings()
+    settings.gemini_api_key = ""
+    settings.research_gemini_api_key = ""
+    settings.research_gemini_source = ""
+    settings.research_gemini_source_tenant = ""
+    settings.distribution_mode = "paper_only"
+    settings.real_trading_approved = False
+    settings.research_enabled = True
+
+    status = research_generation_status(settings)
+
+    assert status["code"] == "vertex_enabled"
+    assert status["can_generate"] is True
+    assert status["shared_source_tenant"] == "midnightnnn"
+    assert status["vertex_limited_to_live_tenants"] is False
 
 
 def test_validate_settings_rejects_deepseek_trader_until_adk_implemented() -> None:
@@ -97,6 +144,7 @@ def test_validate_settings_skips_missing_claude_credentials_gracefully(caplog) -
     settings.agent_ids = ["gpt", "claude"]
     settings.agent_configs = {}
     settings.openai_api_key = "test-openai-key"
+    settings.openai_model = "gpt-test"
     settings.gemini_api_key = ""
     settings.anthropic_api_key = ""
     settings.anthropic_use_vertexai = False

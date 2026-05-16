@@ -5,48 +5,20 @@ from typing import Any, Callable, Mapping, Sequence
 
 from arena.agents.investment_chat.config_tools import load_chat_agent_config
 from arena.agents.investment_chat.selection import (
+    chat_model_routing_config,
     normalize_chat_model_selection,
     normalize_stored_advisor_model_selection,
+    router_chat_model_for_provider,
     tenant_default_chat_selection,
+    utility_chat_model_for_provider,
 )
 from arena.config import Settings
+from arena.providers.model_discovery import load_model_options_catalog
 from arena.providers.registry import (
     canonical_provider,
-    default_model_for_provider,
-    list_adk_provider_specs,
 )
 from arena.ui.investment_chat_providers import tenant_available_provider_specs
 from arena.ui.templating import render_ui_template
-
-
-_CHAT_MODEL_PRESETS: dict[str, list[str]] = {
-    "gemini": [
-        "gemini-3-flash-preview",
-        "gemini-3.1-pro-preview",
-        "gemini-3-pro-preview",
-        "gemini-2.5-flash",
-        "gemini-2.5-pro",
-    ],
-    "gpt": ["gpt-5.5", "gpt-5.2", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex"],
-    "claude": [
-        "claude-sonnet-4-6",
-        "claude-opus-4-7",
-        "claude-opus-4-5",
-        "claude-sonnet-4-5",
-    ],
-}
-
-
-def _chat_model_options(provider: str, default_model: str, current_model: str = "") -> list[str]:
-    provider_token = canonical_provider(provider) or str(provider or "").strip().lower()
-    seen: set[str] = set()
-    out: list[str] = []
-    for token in [current_model, default_model, *_CHAT_MODEL_PRESETS.get(provider_token, [])]:
-        value = normalize_chat_model_selection(provider_token, token)
-        if value and value not in seen:
-            seen.add(value)
-            out.append(value)
-    return out
 
 
 def _chat_provider_options(repo: Any, tenant_id: str) -> list[dict[str, str]]:
@@ -54,17 +26,15 @@ def _chat_provider_options(repo: Any, tenant_id: str) -> list[dict[str, str]]:
     return [{"value": s.provider_id, "label": s.label} for s in specs]
 
 
-def _chat_model_preset_map(
-    settings: Settings, provider_options: list[dict[str, str]]
-) -> dict[str, list[str]]:
-    provider_ids = {item["value"] for item in provider_options}
-    return {
-        spec.provider_id: _chat_model_options(
-            spec.provider_id, default_model_for_provider(settings, spec.provider_id)
-        )
-        for spec in list_adk_provider_specs()
-        if spec.provider_id in provider_ids
-    }
+def _options_with_current(options: list[str], current: str) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in [current, *list(options or [])]:
+        token = str(value or "").strip()
+        if token and token not in seen:
+            seen.add(token)
+            out.append(token)
+    return out
 
 
 def _build_research_banner(research_status: Mapping[str, Any]) -> dict[str, str] | None:
@@ -220,9 +190,12 @@ def build_agents_panel(
 
     chat_provider_options: list[dict[str, str]] = []
     chat_model_options_list: list[str] = []
-    chat_model_presets: dict[str, list[str]] = {}
+    chat_router_model_options_list: list[str] = []
+    chat_utility_model_options_list: list[str] = []
     chat_provider_current = ""
     chat_model_current = ""
+    chat_router_model_current = ""
+    chat_utility_model_current = ""
     if repo is not None:
         chat_provider_options = _chat_provider_options(repo, tenant)
         chat_config = load_chat_agent_config(repo, tenant_id=tenant)
@@ -236,23 +209,43 @@ def build_agents_panel(
             or tenant_default_provider
             or (chat_provider_options[0]["value"] if chat_provider_options else "")
         )
-        chat_default_model = (
-            default_model_for_provider(tenant_settings, chat_provider_current)
-            if chat_provider_current
-            else ""
-        )
         chat_model_current = normalize_stored_advisor_model_selection(
             chat_provider_current,
             chat_config.get("model"),
-            advisor_default_model=chat_default_model,
+            advisor_default_model="",
             chat_config=chat_config,
         )
-        if not chat_model_current:
-            chat_model_current = normalize_chat_model_selection(chat_provider_current, chat_default_model)
-        chat_model_options_list = _chat_model_options(
-            chat_provider_current, chat_default_model, chat_model_current
+        chat_model_current = normalize_chat_model_selection(chat_provider_current, chat_model_current)
+        routing_config = chat_model_routing_config(chat_config)
+        chat_router_model_current = router_chat_model_for_provider(
+            chat_provider_current,
+            advisor_model=chat_model_current,
+            chat_config=chat_config,
         )
-        chat_model_presets = _chat_model_preset_map(tenant_settings, chat_provider_options)
+        chat_utility_model_current = utility_chat_model_for_provider(
+            chat_provider_current,
+            advisor_model=chat_model_current,
+            chat_config=chat_config,
+        )
+        catalog = load_model_options_catalog(repo, tenant_id=tenant)
+        provider_catalog = {}
+        providers_catalog = catalog.get("providers") if isinstance(catalog.get("providers"), dict) else {}
+        if isinstance(providers_catalog, dict):
+            provider_catalog = providers_catalog.get(chat_provider_current) or {}
+        if not isinstance(provider_catalog, dict):
+            provider_catalog = {}
+        chat_model_options_list = _options_with_current(
+            list(provider_catalog.get("advisor_models") or []),
+            chat_model_current,
+        )
+        chat_router_model_options_list = _options_with_current(
+            list(provider_catalog.get("router_models") or []),
+            str(routing_config.get("router_model") or chat_router_model_current),
+        )
+        chat_utility_model_options_list = _options_with_current(
+            list(provider_catalog.get("utility_models") or []),
+            str(routing_config.get("utility_model") or chat_utility_model_current),
+        )
 
     return render_ui_template(
         "settings_agents_panel.jinja2",
@@ -274,7 +267,10 @@ def build_agents_panel(
         tool_tips_json=json.dumps(tool_tips, ensure_ascii=False),
         chat_provider_options=chat_provider_options,
         chat_model_options=chat_model_options_list,
-        chat_model_presets=chat_model_presets,
+        chat_router_model_options=chat_router_model_options_list,
+        chat_utility_model_options=chat_utility_model_options_list,
         chat_provider_current=chat_provider_current,
         chat_model_current=chat_model_current,
+        chat_router_model_current=chat_router_model_current,
+        chat_utility_model_current=chat_utility_model_current,
     )

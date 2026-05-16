@@ -20,7 +20,7 @@ from tests.context.helpers import (
 )
 
 
-def test_context_builder_builds_environment_queries_from_research_briefings() -> None:
+def test_context_builder_does_not_build_environment_queries_from_research_briefings() -> None:
     repo = FakeRepo()
     repo.research_briefings = [
         {
@@ -51,8 +51,8 @@ def test_context_builder_builds_environment_queries_from_research_briefings() ->
     queries = builder._build_memory_search_queries("gpt", snapshot, [])
 
     assert any("portfolio state" in query for query in queries)
-    assert any("macro regime" in query and "higher-for-longer" in query for query in queries)
-    assert any("geopolitical risk" in query and "Shipping disruptions" in query for query in queries)
+    assert not any("higher-for-longer" in query for query in queries)
+    assert not any("Shipping disruptions" in query for query in queries)
 
 
 def test_context_builder_hydrates_vector_hits_and_prefers_ticker_overlap() -> None:
@@ -239,7 +239,7 @@ def test_context_builder_returns_empty_memory_when_state_query_has_no_vector_hit
     assert context["memory_context"] == ""
 
 
-def test_context_builder_renders_research_detail_json_as_compact_digest() -> None:
+def test_context_builder_does_not_inject_stored_research_detail_json() -> None:
     repo = FakeRepo()
     repo.research_briefings = [
         {
@@ -272,17 +272,11 @@ def test_context_builder_renders_research_detail_json_as_compact_digest() -> Non
 
     context = builder.build(agent_id="gpt", snapshot=snapshot)
 
-    assert context["research_context"] == (
-        "- [VZ 2026-05-12 +] EPS beat; FY26 guide raised; postpaid adds positive. "
-        "Risk: valuation after rally"
-    )
-    assert context["research_briefings"][0]["detail_json"]["risks"] == [
-        "valuation after rally",
-        "integration execution",
-    ]
+    assert context["research_context"] == ""
+    assert context["research_briefings"] == []
 
 
-def test_context_builder_renders_legacy_research_as_compact_fallback() -> None:
+def test_context_builder_does_not_inject_legacy_stored_research() -> None:
     repo = FakeRepo()
     repo.research_briefings = [
         {
@@ -299,6 +293,26 @@ def test_context_builder_renders_legacy_research_as_compact_fallback() -> None:
 
     context = builder.build(agent_id="gpt", snapshot=snapshot)
 
-    assert context["research_context"] == (
-        "- [GLOBAL 2026-05-09] 글로벌 증시: 미국 증시는 강세였고 중동 리스크로 유가와 금리가 상승했습니다."
-    )
+    assert context["research_context"] == ""
+    assert context["research_briefings"] == []
+
+
+def test_context_builder_does_not_inject_sector_trends_research_category() -> None:
+    repo = FakeRepo()
+    repo.research_briefings = [
+        {
+            "briefing_id": "brf_sector",
+            "created_at": "2026-05-13T02:00:00Z",
+            "ticker": "SECTOR",
+            "category": "sector_trends",
+            "headline": "AI infrastructure demand broadens",
+            "summary": "Semis and power equipment continue to lead sector breadth.",
+        }
+    ]
+    snapshot = AccountSnapshot(cash_krw=1_000_000, total_equity_krw=1_000_000, positions={})
+    builder = ContextBuilder(repo=repo, memory=FakeMemory(), board=FakeBoard(), settings=_settings())
+
+    context = builder.build(agent_id="gpt", snapshot=snapshot)
+
+    assert context["research_context"] == ""
+    assert context["research_briefings"] == []

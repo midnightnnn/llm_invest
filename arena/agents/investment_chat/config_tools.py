@@ -21,6 +21,7 @@ from arena.agents.investment_chat.scope import chat_actor_email
 from arena.agents.investment_chat.utils import latest_account_snapshot, safe_float, sources_for_settings, utc_iso
 from arena.config import Settings
 from arena.providers import list_adk_provider_specs, provider_alias_map
+from arena.providers.model_discovery import load_model_options_catalog
 from arena.tools.registry import ToolEntry
 from arena.ui.admin_agent_config import (
     AdminAgentConfigStore,
@@ -811,7 +812,6 @@ def _build_config_tool_entries(
             hint=_confirmation_hint(draft),
             payload=_confirmation_payload(draft),
         )
-        tool_context.actions.skip_summarization = True
         return {
             "status": "waiting_for_confirmation",
             "tenant_id": tenant,
@@ -892,6 +892,9 @@ def _build_config_tool_entries(
     def propose_chat_agent_config_change(
         provider: str = "",
         model: str = "",
+        router_model: str = "",
+        utility_model: str = "",
+        cheap_model: str = "",
         disabled_tools: Optional[list[str]] = None,
         llm_params_json: str = "",
         model_routing_json: str = "",
@@ -916,6 +919,13 @@ def _build_config_tool_entries(
             model_routing = _json_object_field(model_routing_json, field_name="model_routing_json")
         except Exception as exc:
             return {"status": "error", "tenant_id": tenant, "error": str(exc)}
+        shared_cheap_model = str(cheap_model or "").strip()
+        router_model_token = str(router_model or shared_cheap_model).strip()
+        utility_model_token = str(utility_model or shared_cheap_model).strip()
+        if router_model_token:
+            model_routing["router_model"] = router_model_token
+        if utility_model_token:
+            model_routing["utility_model"] = utility_model_token
         if llm_params:
             fields["llm_params"] = llm_params
         if model_routing:
@@ -925,6 +935,66 @@ def _build_config_tool_entries(
             rationale=rationale,
             tool_context=tool_context,
         )
+
+    def list_chat_model_options(provider: str = "") -> dict[str, Any]:
+        """Returns cached provider model options discovered from the tenant's saved API key."""
+        catalog = load_model_options_catalog(repo, tenant_id=tenant)
+        providers = catalog.get("providers") if isinstance(catalog.get("providers"), dict) else {}
+        chat_config = load_chat_agent_config(repo, tenant_id=tenant)
+        routing = chat_config.get("model_routing") if isinstance(chat_config.get("model_routing"), dict) else {}
+        current = {
+            "provider": provider_alias_map().get(
+                str(chat_config.get("provider") or "").strip().lower(),
+                str(chat_config.get("provider") or "").strip().lower(),
+            ),
+            "advisor_model": str(chat_config.get("model") or "").strip(),
+            "router_model": str(routing.get("router_model") or routing.get("cheap_model") or "").strip(),
+            "utility_model": str(routing.get("utility_model") or routing.get("cheap_model") or "").strip(),
+        }
+        if not isinstance(providers, dict) or not providers:
+            return {
+                "status": "missing",
+                "tenant_id": tenant,
+                "current": current,
+                "error": "model options have not been fetched yet; refresh models in settings or the API-key setup flow",
+            }
+        provider_token = str(provider or "").strip().lower()
+        if provider_token:
+            provider_token = provider_alias_map().get(provider_token, provider_token)
+            item = providers.get(provider_token)
+            if not isinstance(item, dict):
+                return {
+                    "status": "missing",
+                    "tenant_id": tenant,
+                    "provider": provider_token,
+                    "current": current,
+                    "error": "cached model options not found for provider",
+                }
+            return {
+                "status": "ok",
+                "tenant_id": tenant,
+                "provider": provider_token,
+                "current": current,
+                "advisor_models": list(item.get("advisor_models") or []),
+                "router_models": list(item.get("router_models") or []),
+                "utility_models": list(item.get("utility_models") or []),
+                "fetched_at": str(item.get("fetched_at") or ""),
+            }
+        return {
+            "status": "ok",
+            "tenant_id": tenant,
+            "current": current,
+            "providers": {
+                str(key): {
+                    "advisor_models": list(value.get("advisor_models") or []),
+                    "router_models": list(value.get("router_models") or []),
+                    "utility_models": list(value.get("utility_models") or []),
+                    "fetched_at": str(value.get("fetched_at") or ""),
+                }
+                for key, value in providers.items()
+                if isinstance(value, dict)
+            },
+        }
 
     def propose_tenant_config_change(
         system_prompt: str = "",
@@ -1087,13 +1157,26 @@ def _build_config_tool_entries(
 
     entries = [
         ToolEntry(
+            tool_id="list_chat_model_options",
+            name="list_chat_model_options",
+            description=(
+                "Lists the provider-supported chat model IDs that were last discovered using the tenant's saved "
+                "LLM API key. Use this before proposing chat advisor, router, or utility model changes."
+            ),
+            category="admin",
+            callable=list_chat_model_options,
+            tier="core",
+            label_ko="채팅 모델 목록",
+            sort_order=19,
+        ),
+        ToolEntry(
             tool_id="propose_agent_config_change",
             name="propose_agent_config_change",
             description=(
                 "Creates an investment agent settings change draft. The tool never applies settings directly; "
-                "ADK tool confirmation is required before it applies. Use capital_allocation_mode for fixed_krw, "
-                "add_krw, account_percent, or whole_account sleeve assignment. Use add_krw when the user asks to "
-                "add/increase capital by a KRW amount; use fixed_krw when the user asks to set the final capital."
+                "ADK tool confirmation is required before it applies. Select the capital allocation mode that "
+                "matches whether the user wants a final sleeve amount, an increase, an account-percentage "
+                "assignment, or whole-account assignment."
             ),
             category="admin",
             callable=propose_agent_config_change,
@@ -1105,7 +1188,8 @@ def _build_config_tool_entries(
             tool_id="propose_chat_agent_config_change",
             name="propose_chat_agent_config_change",
             description=(
-                "Creates an investment chat agent settings change draft for model/provider/tool/memory settings. "
+                "Creates an investment chat agent settings change draft for advisor, router, utility, provider, "
+                "tool, and memory settings. "
                 "The tool never applies settings directly; ADK tool confirmation is required before it applies."
             ),
             category="admin",

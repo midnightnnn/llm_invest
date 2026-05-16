@@ -18,6 +18,15 @@ def _build_chat_client(monkeypatch, repo: _ChatOrderRepo, tmp_path) -> DirectRou
         "build_investment_chat_adk_app",
         lambda **kwargs: FastAPI(title="stub-adk"),
     )
+    monkeypatch.setattr(
+        "arena.ui.routes.investment_chat.discover_model_options_with_api_key",
+        lambda provider, api_key: {
+            "provider": provider,
+            "advisor_models": [f"{provider}-3-flash-preview" if provider == "gemini" else "gpt-5.5"],
+            "router_models": [f"{provider}-3-flash-preview" if provider == "gemini" else "gpt-5.4-mini"],
+            "utility_models": [f"{provider}-3-flash-preview" if provider == "gemini" else "gpt-5.4-mini"],
+        },
+    )
     repo.recent_runtime_audit_logs = lambda limit=50: list(reversed(repo.audit_logs[-limit:]))  # type: ignore[method-assign]
     return DirectRouteClient(_build_app(repo=repo, settings=load_settings()))
 
@@ -52,7 +61,12 @@ def test_credential_draft_api_lists_and_applies_model_key(monkeypatch, tmp_path)
 
     response = client.post(
         f"/investment-chat/credential-drafts/{token}/apply",
-        data={"tenant_id": "local", "api_key": "gemini-test-key"},
+        data={
+            "tenant_id": "local",
+            "model": "gemini-3-flash-preview",
+            "cheap_model": "gemini-3-flash-preview",
+            "api_key": "gemini-test-key",
+        },
     )
 
     assert response.status_code == 200
@@ -82,6 +96,7 @@ def test_credential_draft_api_deletes_provider_key(monkeypatch, tmp_path) -> Non
             "tenant_id": "local",
             "provider": "gemini",
             "model": "gemini-3-flash-preview",
+            "cheap_model": "gemini-3-flash-preview",
             "api_key": "gemini-test-key",
         },
     )

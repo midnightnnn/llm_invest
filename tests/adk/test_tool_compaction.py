@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
 from arena.agents.adk_agents import _compact_tool_result_for_prompt
@@ -372,7 +373,7 @@ def test_tool_wrapper_injects_memory_for_macro_tools_with_typed_query() -> None:
         apply_tool_schema_metadata=lambda fn, **kwargs: fn,
     )
 
-    out = wrapper()
+    out = asyncio.run(wrapper())
 
     memory = out["_memory_context"][0]
     assert memory["t"] == "007610"

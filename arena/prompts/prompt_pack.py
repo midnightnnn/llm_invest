@@ -233,10 +233,14 @@ class PromptPack:
         provider: str = "",
         advisor_model_id: str = "",
         cheap_model_id: str = "",
+        router_model_id: str = "",
+        utility_model_id: str = "",
         advisor_agent_name: str = "",
         utility_agent_name: str = "",
     ) -> str:
         tenant = str(tenant_id or "").strip().lower() or "local"
+        router_model = router_model_id or cheap_model_id
+        utility_model = utility_model_id or cheap_model_id
         return render_prompt_text(
             "investment_chat",
             "router_prompt.txt",
@@ -244,7 +248,9 @@ class PromptPack:
                 "tenant_id": tenant,
                 "provider": provider,
                 "advisor_model_id": advisor_model_id or "provider default",
-                "cheap_model_id": cheap_model_id or "provider default",
+                "router_model_id": router_model or "provider default",
+                "utility_model_id": utility_model or "provider default",
+                "cheap_model_id": utility_model or "provider default",
                 "advisor_agent_name": advisor_agent_name,
                 "utility_agent_name": utility_agent_name,
             },

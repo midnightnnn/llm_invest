@@ -61,6 +61,7 @@ def test_investment_chat_loader_binds_default_tenant(monkeypatch) -> None:
 
     calls: dict[str, object] = {}
     settings = load_settings()
+    settings.gemini_model = "gemini-3-flash-preview"
 
     def fake_build_agent(**kwargs):
         calls.update(kwargs)
@@ -93,6 +94,7 @@ def test_investment_chat_loader_separates_model_selection(monkeypatch) -> None:
 
     calls: dict[str, object] = {}
     settings = load_settings()
+    settings.anthropic_model = "claude-sonnet-4-6"
 
     def fake_build_agent(**kwargs):
         calls.update(kwargs)
@@ -274,6 +276,7 @@ def test_investment_chat_loader_restricts_selection_to_tenant_model_keys(monkeyp
 
     calls: dict[str, object] = {}
     settings = load_settings()
+    settings.anthropic_model = "claude-sonnet-4-6"
     repo = _DummyRepo()
     repo.runtime_credentials["czxnms"] = {
         "tenant_id": "czxnms",

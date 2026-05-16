@@ -336,6 +336,7 @@ class _ADKDecisionRunner:
         self._llm_call_ids_by_phase: dict[str, str] = {}
         self._latest_llm_call_id: str = ""
         self._cycle_supervisor = AgentCycleSupervisor(cycle_id="")
+        self._supervisor_model_operations_by_llm_call_id: dict[str, str] = {}
         tool_resolution = resolve_adk_tools(
             repo=self.repo,
             tenant_id=self.tenant_id,
@@ -396,15 +397,94 @@ class _ADKDecisionRunner:
         }
 
     def _model_call_timeout_seconds(self, model: str) -> int:
-        return self._cycle_supervisor.model_call_timeout_seconds(
+        timeout_seconds = self._cycle_supervisor.model_call_timeout_seconds(
             provider=self.provider,
             model=model,
         )
+        context = self._current_context if isinstance(self._current_context, dict) else {}
+        logger.info(
+            "[blue]Agent cycle supervisor model timeout policy[/blue] agent=%s provider=%s phase=%s model=%s timeout=%ss",
+            self.agent_id,
+            self.provider,
+            self._current_phase,
+            str(model or "").strip() or "-",
+            timeout_seconds,
+            extra=event_extra(
+                "agent_cycle_supervisor_model_timeout_policy",
+                tenant_id=self.tenant_id,
+                cycle_id=str(context.get("cycle_id") or self._cycle_supervisor.cycle_id or "").strip(),
+                agent_id=self.agent_id,
+                provider=self.provider,
+                phase=self._current_phase,
+                llm_call_id=self._latest_llm_call_id,
+                model=str(model or "").strip(),
+                timeout_seconds=timeout_seconds,
+            ),
+        )
+        return timeout_seconds
 
     def _sync_cycle_supervisor(self, cycle_id: str) -> None:
         normalized = str(cycle_id or "").strip()
         if normalized and self._cycle_supervisor.cycle_id != normalized:
             self._cycle_supervisor = AgentCycleSupervisor(cycle_id=normalized)
+            self._supervisor_model_operations_by_llm_call_id = {}
+
+    def _supervisor_operation_key(self, fields: dict[str, Any]) -> str:
+        llm_call_id = str(fields.get("llm_call_id") or "").strip()
+        if llm_call_id:
+            return llm_call_id
+        return f"{str(fields.get('phase') or 'unknown').strip() or 'unknown'}:{len(self._supervisor_model_operations_by_llm_call_id) + 1}"
+
+    def _start_supervisor_model_operation(self, fields: dict[str, Any]) -> None:
+        supervisor = getattr(self, "_cycle_supervisor", None)
+        if not isinstance(supervisor, AgentCycleSupervisor):
+            return
+        operations = getattr(self, "_supervisor_model_operations_by_llm_call_id", None)
+        if not isinstance(operations, dict):
+            operations = {}
+            self._supervisor_model_operations_by_llm_call_id = operations
+        operation_key = self._supervisor_operation_key(fields)
+        metadata = {
+            "tenant_id": self.tenant_id,
+            "provider": self.provider,
+            "cycle_id": str(fields.get("cycle_id") or supervisor.cycle_id or "").strip(),
+            "llm_call_id": str(fields.get("llm_call_id") or "").strip(),
+            "message_count": fields.get("message_count"),
+            "tool_count": fields.get("tool_count"),
+        }
+        operations[operation_key] = supervisor.start_operation(
+            kind="model_call",
+            phase=str(fields.get("phase") or self._current_phase or "unknown").strip() or "unknown",
+            agent_id=self.agent_id,
+            metadata=metadata,
+        )
+
+    def _finish_supervisor_model_operation(
+        self,
+        fields: dict[str, Any],
+        *,
+        status: str,
+    ) -> None:
+        supervisor = getattr(self, "_cycle_supervisor", None)
+        operations = getattr(self, "_supervisor_model_operations_by_llm_call_id", None)
+        if not isinstance(supervisor, AgentCycleSupervisor) or not isinstance(operations, dict):
+            return
+        operation_key = self._supervisor_operation_key(fields)
+        operation_id = operations.pop(operation_key, None)
+        if operation_id is None and len(operations) == 1:
+            operation_id = operations.pop(next(iter(operations)))
+        if not operation_id:
+            return
+        supervisor.finish_operation(
+            operation_id,
+            status=status,
+            metadata={
+                "finish_reason": fields.get("finish_reason"),
+                "error_code": fields.get("error_code"),
+                "prompt_tokens": fields.get("prompt_tokens"),
+                "completion_tokens": fields.get("completion_tokens"),
+            },
+        )
 
     @staticmethod
     def _llm_request_shape(llm_request: Any) -> dict[str, Any]:
@@ -447,6 +527,7 @@ class _ADKDecisionRunner:
             fields.get("llm_call_id") or "-",
             extra=event_extra("adk_before_model", **fields),
         )
+        self._start_supervisor_model_operation(fields)
         return None
 
     def _after_model_callback(
@@ -469,6 +550,7 @@ class _ADKDecisionRunner:
             fields.get("error_code") or "-",
             extra=event_extra("adk_after_model", **fields),
         )
+        self._finish_supervisor_model_operation(fields, status="success")
         return None
 
     def _on_model_error_callback(
@@ -495,6 +577,7 @@ class _ADKDecisionRunner:
             str(exc),
             extra=failure_extra("adk_model_error", exc, **fields),
         )
+        self._finish_supervisor_model_operation(fields, status="error")
         return None
 
     def _available_tools_payload(self) -> list[dict[str, Any]]:

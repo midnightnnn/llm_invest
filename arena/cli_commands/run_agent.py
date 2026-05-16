@@ -349,12 +349,15 @@ def _run_agent_cycle_once(
             )
 
         current_stage = "research"
-        held_tickers = _research_held_tickers(repo, settings)
-        from arena.agents.research_agent import ResearchAgent
+        if bool(getattr(settings, "research_precycle_enabled", False)):
+            held_tickers = _research_held_tickers(repo, settings)
+            from arena.agents.research_agent import ResearchAgent
 
-        research_agent = ResearchAgent(settings=settings, repo=repo)
-        briefings = asyncio.run(research_agent.run(held_tickers))
-        logger.info("[cyan]Research phase[/cyan] briefings=%d held=%s", len(briefings), held_tickers)
+            research_agent = ResearchAgent(settings=settings, repo=repo)
+            briefings = asyncio.run(research_agent.run(held_tickers))
+            logger.info("[cyan]Research phase[/cyan] briefings=%d held=%s", len(briefings), held_tickers)
+        else:
+            logger.info("[cyan]Research phase skipped[/cyan] reason=precycle_disabled")
 
         current_stage = "trade"
         reports = orchestrator.run_cycle(snapshot=snapshot)

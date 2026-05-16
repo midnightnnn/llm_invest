@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from arena.agents.adk_agents import _ContextTools
 from arena.config import load_settings
 from tests.adk.context_tools_helpers import (
@@ -30,6 +32,40 @@ class _RepoForStructuredResearch:
         ][:limit]
 
 
+class _RepoForOnDemandResearch:
+    def __init__(self):
+        self.rows: list[dict] = []
+        self.calls: list[dict] = []
+        self.inserts: list[list[dict]] = []
+
+    def get_research_briefings(self, *, tickers=None, categories=None, limit=10, trading_mode="paper", tenant_id=None):
+        self.calls.append(
+            {
+                "tickers": tickers,
+                "categories": categories,
+                "limit": limit,
+                "trading_mode": trading_mode,
+                "tenant_id": tenant_id,
+            }
+        )
+        rows = list(self.rows)
+        filters = []
+        if tickers:
+            allowed_tickers = {str(ticker).strip().upper() for ticker in tickers if str(ticker).strip()}
+            filters.append(lambda row: str(row.get("ticker") or "").strip().upper() in allowed_tickers)
+        if categories:
+            allowed_categories = {str(category).strip().lower() for category in categories if str(category).strip()}
+            filters.append(lambda row: str(row.get("category") or "").strip().lower() in allowed_categories)
+        if filters:
+            rows = [row for row in rows if any(check(row) for check in filters)]
+        return rows[:limit]
+
+    def insert_research_briefings(self, rows):
+        inserted = [dict(row) for row in rows]
+        self.inserts.append(inserted)
+        self.rows.extend(inserted)
+
+
 def test_search_peer_lessons_returns_only_compactor_reflections() -> None:
     tool = _ContextTools.__new__(_ContextTools)
     tool.repo = _RepoForPeerLessons()
@@ -47,6 +83,103 @@ def test_search_peer_lessons_returns_only_compactor_reflections() -> None:
     assert out[0]["author_id"] == "gemini"
     assert out[0]["memory_source"] == "thesis_chain_compaction"
     assert tool._vector_store.calls[0]["agent_id"] == "gpt"
+
+
+def test_get_research_briefing_refreshes_missing_tickers_and_sector_alias(monkeypatch) -> None:
+    monkeypatch.delenv("GOOGLE_GENAI_USE_VERTEXAI", raising=False)
+    repo = _RepoForOnDemandResearch()
+    tool = _ContextTools.__new__(_ContextTools)
+    tool.repo = repo
+    tool.settings = load_settings()
+    tool.settings.trading_mode = "paper"
+    tool.settings.research_enabled = True
+    tool.settings.gemini_api_key = "tenant-gemini"
+    tool.settings.research_gemini_api_key = ""
+    tool.settings.research_gemini_source = ""
+    tool.settings.research_gemini_source_tenant = ""
+    tool.tenant_id = "tenant-a"
+    refresh_calls: list[dict] = []
+
+    async def _refresh(*, tickers=None, categories=None):
+        refresh_calls.append({"tickers": tickers, "categories": categories})
+        rows = [
+            {
+                "briefing_id": "brf_aapl",
+                "ticker": "AAPL",
+                "category": "held",
+                "headline": "AAPL fresh research",
+                "summary": "Fresh Apple context.",
+            },
+            {
+                "briefing_id": "brf_sector",
+                "ticker": "SECTOR",
+                "category": "sector_trends",
+                "headline": "Sector fresh research",
+                "summary": "Fresh sector context.",
+            },
+        ]
+        repo.insert_research_briefings(rows)
+        return rows
+
+    tool._research_refresher = _refresh
+
+    out = asyncio.run(
+        tool.get_research_briefing(
+            tickers=["aapl"],
+            categories=["sector"],
+            refresh_missing=True,
+            limit=5,
+        )
+    )
+
+    assert refresh_calls == [{"tickers": ["AAPL"], "categories": ["sector_trends"]}]
+    assert {row["briefing_id"] for row in out} == {"brf_aapl", "brf_sector"}
+    assert repo.calls[0]["categories"] == ["sector_trends"]
+    assert repo.calls[-1]["categories"] == ["sector_trends"]
+    assert not hasattr(tool, "get_research_briefing_adk")
+
+
+def test_get_research_briefing_refreshes_public_categories_when_unfiltered(monkeypatch) -> None:
+    monkeypatch.delenv("GOOGLE_GENAI_USE_VERTEXAI", raising=False)
+    repo = _RepoForOnDemandResearch()
+    tool = _ContextTools.__new__(_ContextTools)
+    tool.repo = repo
+    tool.settings = load_settings()
+    tool.settings.trading_mode = "paper"
+    tool.settings.research_enabled = True
+    tool.settings.gemini_api_key = "tenant-gemini"
+    tool.settings.research_gemini_api_key = ""
+    tool.settings.research_gemini_source = ""
+    tool.settings.research_gemini_source_tenant = ""
+    tool.tenant_id = "tenant-a"
+    refresh_calls: list[dict] = []
+
+    async def _refresh(*, tickers=None, categories=None):
+        refresh_calls.append({"tickers": tickers, "categories": categories})
+        rows = [
+            {
+                "briefing_id": f"brf_{category}",
+                "ticker": category.upper(),
+                "category": category,
+                "headline": f"{category} fresh research",
+                "summary": f"Fresh {category} context.",
+            }
+            for category in categories
+        ]
+        repo.insert_research_briefings(rows)
+        return rows
+
+    tool._research_refresher = _refresh
+
+    out = asyncio.run(tool.get_research_briefing(refresh_missing=True, limit=5))
+
+    assert refresh_calls == [
+        {
+            "tickers": [],
+            "categories": ["global_market", "geopolitical", "sector_trends"],
+        }
+    ]
+    assert [row["category"] for row in out] == ["global_market", "geopolitical", "sector_trends"]
 
 
 def test_get_research_briefing_falls_back_to_public_demo_for_no_key_tenant(monkeypatch) -> None:
@@ -67,7 +200,7 @@ def test_get_research_briefing_falls_back_to_public_demo_for_no_key_tenant(monke
     tool.settings.research_gemini_source_tenant = ""
     tool.tenant_id = "tenant-a"
 
-    out = tool.get_research_briefing(limit=2)
+    out = asyncio.run(tool.get_research_briefing(limit=2))
 
     assert [row["briefing_id"] for row in out] == ["pub_global", "pub_geo"]
     assert all(row["public_fallback"] is True for row in out)
@@ -107,7 +240,7 @@ def test_get_research_briefing_does_not_fallback_for_ticker_queries(monkeypatch)
     tool.settings.research_gemini_source_tenant = ""
     tool.tenant_id = "tenant-a"
 
-    out = tool.get_research_briefing(tickers=["AAPL"], limit=2)
+    out = asyncio.run(tool.get_research_briefing(tickers=["AAPL"], limit=2))
 
     assert out == []
     assert tool.repo.calls == [
@@ -128,7 +261,7 @@ def test_get_research_briefing_returns_full_structured_schema() -> None:
     tool.settings.trading_mode = "paper"
     tool.tenant_id = "tenant-a"
 
-    out = tool.get_research_briefing(tickers=["VZ"], limit=1)
+    out = asyncio.run(tool.get_research_briefing(tickers=["VZ"], limit=1))
 
     assert out[0]["detail_json"]["key_points"] == ["Q1 EPS beat", "FY26 guide raised"]
     assert out[0]["detail_json"]["risks"] == ["valuation after rally"]

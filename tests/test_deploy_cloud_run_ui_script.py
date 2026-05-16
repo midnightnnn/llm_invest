@@ -33,3 +33,11 @@ def test_ui_deploy_script_defaults_chat_sessions_to_firestore_without_min_instan
     assert 'CHAT_SESSION_SERVICE_URI="${ARENA_CHAT_SESSION_SERVICE_URI:-firestore://arena-investment-chat-adk-sessions}"' in script
     assert "ARENA_CHAT_SESSION_SERVICE_URI=${CHAT_SESSION_SERVICE_URI}" in script
     assert 'UI_MIN_INSTANCES="${CLOUD_RUN_UI_MIN_INSTANCES:-${CLOUD_RUN_MIN_INSTANCES:-0}}"' in script
+
+
+def test_ui_deploy_script_injects_optional_macro_api_keys_from_env() -> None:
+    script = (ROOT / "scripts" / "deploy_cloud_run_ui.sh").read_text()
+
+    assert "_append_run_env_var FRED_API_KEY" in script
+    assert "_append_run_env_var ECOS_API_KEY" in script
+    assert 'RUN_ENV_VARS="${RUN_ENV_VARS}${ENV_PAIR_DELIM}${name}=${value}"' in script

@@ -64,6 +64,7 @@
           <dd class="font-semibold text-ink-800" data-order-draft-scope></dd>
         </div>
       </dl>
+      <ul class="mt-3 max-h-32 space-y-1 overflow-y-auto text-xs text-ink-700" data-order-draft-list></ul>
       <p class="mt-3 rounded-md bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800" data-order-draft-risk></p>
       <button
         type="button"
@@ -121,6 +122,17 @@
             API key
             <input name="api_key" type="password" class="mt-1 h-10 w-full rounded-md border border-ink-200 bg-white px-2 text-sm text-ink-900" autocomplete="off" data-credential-api-key/>
           </label>
+          <button type="button" class="hidden h-10 w-full rounded-md border border-ink-300 bg-white px-3 text-sm font-semibold text-ink-800 hover:bg-ink-50 disabled:cursor-not-allowed disabled:bg-ink-100" data-credential-model-lookup>모델 조회</button>
+          <div class="hidden space-y-3" data-credential-model-fields>
+            <label class="block text-xs font-semibold text-ink-600">
+              Advisor model
+              <select name="model" class="mt-1 h-10 w-full rounded-md border border-ink-200 bg-white px-2 font-mono text-xs text-ink-900" data-credential-advisor-model disabled></select>
+            </label>
+            <label class="block text-xs font-semibold text-ink-600">
+              Router / utility model
+              <select name="cheap_model" class="mt-1 h-10 w-full rounded-md border border-ink-200 bg-white px-2 font-mono text-xs text-ink-900" data-credential-cheap-model disabled></select>
+            </label>
+          </div>
           <div class="hidden space-y-3" data-credential-kis-fields>
             <label class="block text-xs font-semibold text-ink-600">
               투자 환경
@@ -179,7 +191,7 @@
       {% if not llm_key_store_available %}
       <p class="mt-3 rounded-md bg-red-50 px-3 py-2 text-xs text-red-700">Credential store unavailable: {{ llm_key_store_error }}</p>
       {% endif %}
-      <form method="post" action="/investment-chat/model-key" class="mt-4 space-y-3">
+      <form method="post" action="/investment-chat/model-key" class="mt-4 space-y-3" data-llm-key-form>
         <input type="hidden" name="tenant_id" value="{{ tenant }}"/>
         <label class="block text-xs font-semibold text-ink-600">
           Provider
@@ -190,43 +202,111 @@
           </select>
         </label>
         <label class="block text-xs font-semibold text-ink-600">
-          Model
-          <input name="model" value="{{ llm_key_model }}" class="mt-1 h-10 w-full rounded-md border border-ink-200 bg-white px-2 font-mono text-xs text-ink-900" data-llm-key-model/>
-        </label>
-        <label class="block text-xs font-semibold text-ink-600">
           API key
           <input name="api_key" type="password" class="mt-1 h-10 w-full rounded-md border border-ink-200 bg-white px-2 text-sm text-ink-900" autocomplete="off"/>
         </label>
+        <button type="button" class="h-10 w-full rounded-md border border-ink-300 bg-white px-3 text-sm font-semibold text-ink-800 hover:bg-ink-50 disabled:cursor-not-allowed disabled:bg-ink-100" data-llm-key-options-button {% if not llm_key_store_available %}disabled{% endif %}>모델 조회</button>
+        <div class="hidden space-y-3" data-llm-key-model-step>
+          <label class="block text-xs font-semibold text-ink-600">
+            Advisor model
+            <select name="model" class="mt-1 h-10 w-full rounded-md border border-ink-200 bg-white px-2 font-mono text-xs text-ink-900" data-llm-key-model="advisor" disabled></select>
+          </label>
+          <label class="block text-xs font-semibold text-ink-600">
+            Router / utility model
+            <select name="cheap_model" class="mt-1 h-10 w-full rounded-md border border-ink-200 bg-white px-2 font-mono text-xs text-ink-900" data-llm-key-model="cheap" disabled></select>
+          </label>
+        </div>
+        <p class="hidden rounded-md px-3 py-2 text-xs" data-llm-key-options-status></p>
         <button type="submit" class="h-10 w-full rounded-md bg-ink-900 px-3 text-sm font-semibold text-white hover:bg-ink-800 disabled:cursor-not-allowed disabled:bg-ink-300" {% if not llm_key_store_available %}disabled{% endif %}>저장하고 투자챗봇 시작</button>
       </form>
     </div>
   </div>
   {% endif %}
 </section>
-<script type="application/json" id="investment-chat-key-model-map">{{ llm_key_model_presets | tojson }}</script>
 <script type="application/json" id="investment-chat-key-help-map">{{ llm_key_help_urls | tojson }}</script>
 <script type="application/json" id="investment-chat-kis-help-url">{{ kis_key_help_url | tojson }}</script>
 <script>
   (function() {
-    var raw = document.getElementById('investment-chat-key-model-map');
     var helpRaw = document.getElementById('investment-chat-key-help-map');
-    var presets = {};
     var helpUrls = {};
-    try { presets = JSON.parse(raw && raw.textContent || '{}') || {}; } catch (_err) { presets = {}; }
     try { helpUrls = JSON.parse(helpRaw && helpRaw.textContent || '{}') || {}; } catch (_err) { helpUrls = {}; }
     document.querySelectorAll('[data-llm-key-provider]').forEach(function(provider) {
       var form = provider.closest('form');
-      var model = form && form.querySelector('[data-llm-key-model]');
+      var model = form && form.querySelector('[data-llm-key-model="advisor"]');
+      var cheapModel = form && form.querySelector('[data-llm-key-model="cheap"]');
+      var apiKey = form && form.querySelector('input[name="api_key"]');
+      var lookupButton = form && form.querySelector('[data-llm-key-options-button]');
+      var modelStep = form && form.querySelector('[data-llm-key-model-step]');
+      var status = form && form.querySelector('[data-llm-key-options-status]');
+      var submitButton = form && form.querySelector('button[type="submit"]');
       var helpLink = form && form.parentNode && form.parentNode.querySelector('[data-llm-key-help-link]');
+      function fill(select, values) {
+        if (!select) return;
+        select.innerHTML = '';
+        values.forEach(function(v) {
+          var opt = document.createElement('option');
+          opt.value = v;
+          opt.textContent = v;
+          select.appendChild(opt);
+        });
+        if (values.length) select.value = values[0];
+        select.disabled = !values.length;
+      }
+      function setStatus(message, ok) {
+        if (!status) return;
+        status.textContent = message || '';
+        status.classList.toggle('hidden', !message);
+        status.classList.toggle('bg-emerald-50', !!ok);
+        status.classList.toggle('text-emerald-700', !!ok);
+        status.classList.toggle('bg-red-50', !!message && !ok);
+        status.classList.toggle('text-red-700', !!message && !ok);
+      }
+      function hideModels() {
+        fill(model, []);
+        fill(cheapModel, []);
+        if (modelStep) modelStep.classList.add('hidden');
+      }
       function syncHelpLink() {
         if (!helpLink) return;
         helpLink.href = helpUrls[provider.value] || 'https://platform.openai.com/api-keys';
       }
-      if (!model) return;
+      if (!model || !cheapModel) return;
       provider.addEventListener('change', function() {
-        var preset = presets[provider.value] || '';
-        if (preset) model.value = preset;
         syncHelpLink();
+        hideModels();
+        setStatus('', false);
+      });
+      if (apiKey) apiKey.addEventListener('input', function() { hideModels(); setStatus('', false); });
+      if (lookupButton) lookupButton.addEventListener('click', function() {
+        if (!apiKey || !apiKey.value.trim()) {
+          setStatus('API key를 입력한 뒤 모델을 조회하세요.', false);
+          return;
+        }
+        var data = new FormData(form);
+        lookupButton.disabled = true;
+        setStatus('모델 목록을 조회하고 있습니다.', true);
+        fetch('/investment-chat/model-key/options', { method: 'POST', body: data, credentials: 'same-origin' })
+          .then(function(res) { return res.json().then(function(payload) { return { ok: res.ok, payload: payload }; }); })
+          .then(function(result) {
+            if (!result.ok) throw new Error(result.payload && result.payload.error || '모델 조회에 실패했습니다.');
+            var advisorModels = result.payload.advisor_models || [];
+            var cheapModels = result.payload.router_models || result.payload.utility_models || [];
+            fill(model, advisorModels);
+            fill(cheapModel, cheapModels);
+            if (modelStep) modelStep.classList.remove('hidden');
+            setStatus('모델 목록을 불러왔습니다.', true);
+          })
+          .catch(function(err) {
+            hideModels();
+            setStatus(err && err.message || '모델 조회에 실패했습니다.', false);
+          })
+          .finally(function() { lookupButton.disabled = false; });
+      });
+      if (form) form.addEventListener('submit', function(event) {
+        if ((model && model.disabled) || (cheapModel && cheapModel.disabled)) {
+          event.preventDefault();
+          setStatus('모델 조회 후 저장할 모델을 선택하세요.', false);
+        }
       });
       syncHelpLink();
     });
@@ -504,11 +584,14 @@
     var title = panel.querySelector('[data-order-draft-title]');
     var notional = panel.querySelector('[data-order-draft-notional]');
     var scope = panel.querySelector('[data-order-draft-scope]');
+    var draftList = panel.querySelector('[data-order-draft-list]');
     var risk = panel.querySelector('[data-order-draft-risk]');
     var submit = panel.querySelector('[data-order-draft-submit]');
     var status = panel.querySelector('[data-order-draft-status]');
     var close = panel.querySelector('[data-order-draft-close]');
-    var activeToken = '';
+    var activeTokens = [];
+    var activeAllTokens = [];
+    var activeBatchToken = '';
     var dismissed = {};
 
     function fmtKrw(value) {
@@ -526,6 +609,34 @@
     function submitResultMessage(body) {
       var reportMessage = body && body.execution_report && body.execution_report.message;
       return body && (body.message || body.error) || reportMessage || ('status=' + (body && body.status || 'unknown'));
+    }
+
+    function submittableDrafts(drafts) {
+      return (drafts || []).filter(function(item) { return item && item.submittable && item.approval_token; });
+    }
+
+    function draftCreatedMillis(draft) {
+      var raw = String(draft && draft.created_at || '').trim();
+      if (!raw) return 0;
+      var millis = Date.parse(raw);
+      return isFinite(millis) ? millis : 0;
+    }
+
+    function visibleDraftGroup(drafts) {
+      var visible = (drafts || []).filter(function(item) {
+        return item && item.approval_token && !dismissed[item.approval_token] && ['draft', 'risk_rejected'].indexOf(String(item.status || '')) >= 0;
+      });
+      if (!visible.length) return [];
+      var first = visible[0];
+      var batchToken = String(first.batch_token || '');
+      if (batchToken) {
+        return visible.filter(function(item) { return String(item.batch_token || '') === batchToken; });
+      }
+      var firstMillis = draftCreatedMillis(first);
+      if (!firstMillis) return [first];
+      return visible.filter(function(item) {
+        return !String(item.batch_token || '') && Math.abs(draftCreatedMillis(item) - firstMillis) <= 10000;
+      });
     }
 
     function isAdkChatBusy(doc) {
@@ -578,18 +689,57 @@
       return deliverOrderResultToChat(body && body.chat_delivery_text);
     }
 
-    function renderDraft(draft) {
-      if (!draft || !draft.approval_token) return;
-      activeToken = draft.approval_token;
-      var intent = draft.intent || {};
-      var riskObj = draft.risk || {};
-      var side = String(intent.side || '').toUpperCase();
-      title.textContent = [intent.ticker, side, intent.quantity ? ('x ' + intent.quantity) : ''].filter(Boolean).join(' ');
-      notional.textContent = fmtKrw(draft.notional_krw || intent.price_krw * intent.quantity);
-      scope.textContent = draft.scope || 'account';
-      var hits = riskObj.policy_hits || [];
-      risk.textContent = draft.submittable ? '리스크 검증 통과. 버튼을 누르면 저장된 주문 초안을 제출합니다.' : ('제출 불가: ' + (hits.length ? hits.join(', ') : draft.status));
-      submit.disabled = !draft.submittable;
+    function renderDrafts(drafts) {
+      drafts = (drafts || []).filter(function(item) { return item && item.approval_token; });
+      if (!drafts.length) return;
+      var submittable = submittableDrafts(drafts);
+      activeTokens = submittable.map(function(item) { return item.approval_token; });
+      activeAllTokens = drafts.map(function(item) { return item.approval_token; });
+      activeBatchToken = String(drafts[0].batch_token || '');
+      var total = submittable.reduce(function(sum, draft) {
+        var intent = draft.intent || {};
+        return sum + Number(draft.notional_krw || intent.price_krw * intent.quantity || 0);
+      }, 0);
+      if (drafts.length === 1) {
+        var intent = drafts[0].intent || {};
+        var side = String(intent.side || '').toUpperCase();
+        title.textContent = [intent.ticker, side, intent.quantity ? ('x ' + intent.quantity) : ''].filter(Boolean).join(' ');
+      } else {
+        title.textContent = '주문 ' + drafts.length + '건 일괄 승인';
+      }
+      notional.textContent = fmtKrw(total);
+      var scopes = drafts.map(function(item) { return String(item.scope || 'account'); });
+      scope.textContent = scopes.every(function(item) { return item === scopes[0]; }) ? scopes[0] : 'mixed';
+      if (draftList) {
+        draftList.innerHTML = '';
+        drafts.forEach(function(draft) {
+          var intent = draft.intent || {};
+          var riskObj = draft.risk || {};
+          var hits = riskObj.policy_hits || [];
+          var item = document.createElement('li');
+          item.className = 'flex items-center justify-between gap-3 rounded-md bg-ink-50 px-2 py-1';
+          var label = document.createElement('span');
+          label.className = 'min-w-0 truncate font-semibold';
+          label.textContent = [intent.ticker, String(intent.side || '').toUpperCase(), intent.quantity ? (intent.quantity + '주') : ''].filter(Boolean).join(' ');
+          var state = document.createElement('span');
+          state.className = draft.submittable ? 'shrink-0 text-emerald-700' : 'shrink-0 text-amber-700';
+          state.textContent = draft.submittable ? '가능' : (hits.length ? hits.join(', ') : draft.status);
+          item.appendChild(label);
+          item.appendChild(state);
+          draftList.appendChild(item);
+        });
+      }
+      if (submittable.length) {
+        risk.textContent = drafts.length === 1
+          ? '리스크 검증 통과. 버튼을 누르면 저장된 주문 초안을 제출합니다.'
+          : ('리스크 검증을 통과한 주문 ' + submittable.length + '건을 한 번에 제출합니다.');
+      } else {
+        var firstRisk = drafts[0].risk || {};
+        var firstHits = firstRisk.policy_hits || [];
+        risk.textContent = '제출 불가: ' + (firstHits.length ? firstHits.join(', ') : drafts[0].status);
+      }
+      submit.disabled = !submittable.length;
+      submit.textContent = drafts.length === 1 ? '주문 승인' : ('주문 ' + submittable.length + '건 승인');
       setStatus('');
       panel.classList.remove('hidden');
     }
@@ -599,36 +749,43 @@
         .then(function(resp) { return resp.ok ? resp.json() : null; })
         .then(function(payload) {
           var drafts = payload && payload.drafts || [];
-          var draft = drafts.find(function(item) {
-            return item && item.approval_token && !dismissed[item.approval_token] && ['draft', 'risk_rejected'].indexOf(String(item.status || '')) >= 0;
-          });
-          if (draft) renderDraft(draft);
+          var visible = visibleDraftGroup(drafts);
+          if (visible.length) renderDrafts(visible);
         })
         .catch(function() {});
     }
 
     if (close) {
       close.addEventListener('click', function() {
-        if (activeToken) dismissed[activeToken] = true;
+        activeAllTokens.forEach(function(token) { dismissed[token] = true; });
         panel.classList.add('hidden');
       });
     }
     if (submit) {
       submit.addEventListener('click', function() {
-        if (!activeToken || submit.disabled) return;
+        if (!activeTokens.length || submit.disabled) return;
         submit.disabled = true;
         setStatus('제출 중...');
-        fetch('/investment-chat/order-drafts/' + encodeURIComponent(activeToken) + '/submit?tenant_id=' + encodeURIComponent(tenant), {
+        var batch = activeTokens.length > 1;
+        var url = batch
+          ? ('/investment-chat/order-drafts/batch-submit?tenant_id=' + encodeURIComponent(tenant))
+          : ('/investment-chat/order-drafts/' + encodeURIComponent(activeTokens[0]) + '/submit?tenant_id=' + encodeURIComponent(tenant));
+        var options = {
           method: 'POST',
           credentials: 'same-origin'
-        })
+        };
+        if (batch) {
+          options.headers = {'Content-Type': 'application/json'};
+          options.body = JSON.stringify({approval_tokens: activeTokens, batch_token: activeBatchToken});
+        }
+        fetch(url, options)
           .then(function(resp) { return resp.json().then(function(body) { return {ok: resp.ok, body: body}; }); })
           .then(function(result) {
             var body = result.body || {};
-            if (body.status === 'submitted' || body.status === 'already_submitted') {
-              setStatus(body.status === 'already_submitted' ? '이미 제출된 주문입니다.' : '제출 완료');
+            if (body.status === 'submitted' || body.status === 'already_submitted' || body.status === 'partial') {
+              setStatus(body.status === 'partial' ? '일부 제출 완료' : (body.status === 'already_submitted' ? '이미 제출된 주문입니다.' : '제출 완료'));
               deliverSubmitResult(body);
-              dismissed[activeToken] = true;
+              activeAllTokens.forEach(function(token) { dismissed[token] = true; });
               window.setTimeout(function() { panel.classList.add('hidden'); }, 1200);
             } else {
               submit.disabled = false;
@@ -783,6 +940,10 @@
     var form = panel.querySelector('[data-credential-draft-form]');
     var keyField = panel.querySelector('[data-credential-key-field]');
     var apiKey = panel.querySelector('[data-credential-api-key]');
+    var lookupModelButton = panel.querySelector('[data-credential-model-lookup]');
+    var modelFields = panel.querySelector('[data-credential-model-fields]');
+    var advisorModel = panel.querySelector('[data-credential-advisor-model]');
+    var cheapModel = panel.querySelector('[data-credential-cheap-model]');
     var kisFields = panel.querySelector('[data-credential-kis-fields]');
     var kisEnv = panel.querySelector('[data-credential-kis-env]');
     var kisAccountNo = panel.querySelector('[data-credential-kis-account-no]');
@@ -800,6 +961,7 @@
     var activeToken = '';
     var activeAction = '';
     var activeKind = 'model_key';
+    var activeProvider = '';
     var dismissed = {};
     var credentialDraftPageLoadedAt = Date.now() - 5000;
     var helpMap = {};
@@ -852,6 +1014,55 @@
       el.classList.toggle('hidden', !visible);
     }
 
+    function fillModelSelect(select, values, preferred) {
+      if (!select) return;
+      select.innerHTML = '';
+      (values || []).forEach(function(value) {
+        var opt = document.createElement('option');
+        opt.value = value;
+        opt.textContent = value;
+        select.appendChild(opt);
+      });
+      if (preferred && (values || []).indexOf(preferred) >= 0) select.value = preferred;
+      else if ((values || []).length) select.value = values[0];
+      select.disabled = !(values || []).length;
+    }
+
+    function lookupCredentialModels() {
+      if (!form || !apiKey || !activeProvider) return;
+      if (!apiKey.value.trim()) {
+        setCredentialStatus('API key를 입력한 뒤 모델을 조회하세요.');
+        return;
+      }
+      var data = new FormData(form);
+      data.set('tenant_id', tenant);
+      data.set('provider', activeProvider);
+      if (lookupModelButton) lookupModelButton.disabled = true;
+      setCredentialStatus('모델 목록을 조회하고 있습니다.');
+      fetch('/investment-chat/model-key/options', {
+        method: 'POST',
+        credentials: 'same-origin',
+        body: data
+      })
+        .then(function(resp) { return resp.json().then(function(body) { return {ok: resp.ok, body: body}; }); })
+        .then(function(result) {
+          if (!result.ok) throw new Error(result.body && result.body.error || '모델 조회에 실패했습니다.');
+          fillModelSelect(advisorModel, result.body.advisor_models || [], '');
+          fillModelSelect(cheapModel, result.body.router_models || result.body.utility_models || [], '');
+          setBlockVisible(modelFields, true);
+          setCredentialStatus('모델 목록을 불러왔습니다.');
+        })
+        .catch(function(err) {
+          fillModelSelect(advisorModel, [], '');
+          fillModelSelect(cheapModel, [], '');
+          setBlockVisible(modelFields, false);
+          setCredentialStatus(err && err.message || '모델 조회에 실패했습니다.');
+        })
+        .finally(function() {
+          if (lookupModelButton) lookupModelButton.disabled = false;
+        });
+    }
+
     function setConfirmVisible(visible) {
       if (!confirmField) return;
       confirmField.classList.toggle('hidden', !visible);
@@ -875,6 +1086,7 @@
       activeToken = draft.approval_token;
       activeAction = String(draft.action || '').toLowerCase();
       activeKind = String(draft.credential_kind || (draft.provider ? 'model_key' : 'kis_account')).toLowerCase();
+      activeProvider = String(draft.provider || '').toLowerCase();
       var isKis = activeKind === 'kis_account';
       var label = isKis ? 'KIS' : (draft.provider_label || draft.provider || 'provider');
       title.textContent = activeAction === 'delete' ? (label + ' key 삭제') : (label + ' key 저장');
@@ -889,6 +1101,8 @@
         helpLink.textContent = isKis ? 'KIS Developers 열기' : 'API key 발급';
       }
       setBlockVisible(keyField, !isKis && activeAction !== 'delete');
+      setBlockVisible(lookupModelButton, !isKis && activeAction !== 'delete');
+      setBlockVisible(modelFields, false);
       setBlockVisible(kisFields, isKis);
       setConfirmVisible(activeAction === 'delete');
       if (confirmCopy) {
@@ -898,6 +1112,10 @@
       }
       if (kisEnv) kisEnv.value = draft.env === 'real' ? 'real' : 'demo';
       if (apiKey) apiKey.value = '';
+      if (!isKis && activeAction !== 'delete') {
+        fillModelSelect(advisorModel, [], draft.model || '');
+        fillModelSelect(cheapModel, [], draft.cheap_model || draft.router_model || '');
+      }
       if (kisAccountNo) kisAccountNo.value = '';
       kisSecretInputs.forEach(function(input) { input.value = ''; });
       if (confirm) confirm.checked = false;
@@ -929,6 +1147,19 @@
         panel.classList.add('hidden');
       });
     }
+    if (lookupModelButton) {
+      lookupModelButton.addEventListener('click', lookupCredentialModels);
+    }
+    if (apiKey) {
+      apiKey.addEventListener('input', function() {
+        if (activeKind === 'model_key' && activeAction !== 'delete') {
+          fillModelSelect(advisorModel, [], '');
+          fillModelSelect(cheapModel, [], '');
+          setBlockVisible(modelFields, false);
+          setCredentialStatus('');
+        }
+      });
+    }
     if (form) {
       form.addEventListener('submit', function(event) {
         event.preventDefault();
@@ -936,6 +1167,11 @@
         apply.disabled = true;
         setCredentialStatus(activeAction === 'delete' ? '삭제 중...' : '저장 중...');
         var data = new FormData(form);
+        if (activeKind === 'model_key' && activeAction !== 'delete' && ((advisorModel && advisorModel.disabled) || (cheapModel && cheapModel.disabled))) {
+          apply.disabled = false;
+          setCredentialStatus('모델 조회 후 저장할 모델을 선택하세요.');
+          return;
+        }
         if (activeKind === 'kis_account') {
           data.delete('api_key');
         }

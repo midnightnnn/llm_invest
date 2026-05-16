@@ -198,79 +198,6 @@ class ContextBuilder:
         return parsed if isinstance(parsed, dict) else {}
 
     @staticmethod
-    def _research_sentiment_marker(value: object) -> str:
-        token = str(value or "").strip().lower()
-        if token == "positive":
-            return "+"
-        if token == "negative":
-            return "-"
-        if token == "mixed":
-            return "~"
-        return "0"
-
-    @staticmethod
-    def _date_token(value: object) -> str:
-        if isinstance(value, datetime):
-            return value.date().isoformat()
-        if isinstance(value, date):
-            return value.isoformat()
-        text = str(value or "").strip()
-        return text[:10] if len(text) >= 10 else ""
-
-    @staticmethod
-    def _clean_research_digest_text(value: object) -> str:
-        text = str(value or "").strip()
-        text = re.sub(r"[*_`#>]+", "", text)
-        text = re.sub(r"^\s*[-•]\s*", "", text, flags=re.MULTILINE)
-        text = re.sub(r"\s+", " ", text)
-        return text.strip()
-
-    def _render_research_context_line(self, row: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
-        ticker = str(row.get("ticker") or "").strip().upper()
-        category = str(row.get("category") or "").strip().lower()
-        label = ticker or category or "research"
-        headline = self._trim_text(row.get("headline"), max_len=90)
-        summary = self._trim_text(row.get("summary"), max_len=160)
-        detail = self._json_dict(row.get("detail_json"))
-        if detail:
-            digest = self._trim_text(detail.get("summary") or summary, max_len=180)
-            if not digest:
-                return None
-            date_token = self._date_token(row.get("created_at"))
-            sentiment = self._research_sentiment_marker(detail.get("sentiment"))
-            label_parts = [label]
-            if date_token:
-                label_parts.append(date_token)
-            if sentiment:
-                label_parts.append(sentiment)
-            risks = detail.get("risks")
-            if isinstance(risks, list) and risks:
-                risk = self._trim_text(risks[0], max_len=70)
-                if risk:
-                    digest = f"{digest} Risk: {risk}"
-            line = f"- [{' '.join(label_parts)}] {digest}"
-        else:
-            digest = self._trim_text(self._clean_research_digest_text(summary or headline), max_len=180)
-            if not digest:
-                return None
-            date_token = self._date_token(row.get("created_at"))
-            label_parts = [label]
-            if date_token:
-                label_parts.append(date_token)
-            line = f"- [{' '.join(label_parts)}] {digest}"
-        compact = {
-            "briefing_id": str(row.get("briefing_id") or "").strip(),
-            "created_at": row.get("created_at"),
-            "ticker": ticker or None,
-            "category": category or None,
-            "headline": headline,
-            "summary": summary,
-        }
-        if detail:
-            compact["detail_json"] = detail
-        return line, compact
-
-    @staticmethod
     def _fmt_qty(value: object) -> str:
         try:
             number = float(value)
@@ -1660,86 +1587,6 @@ class ContextBuilder:
                 break
         return "\n".join(lines) if added else ""
 
-    def _environment_memory_queries(self) -> list[str]:
-        """Builds semantic environment anchors from recent shared research briefings."""
-        loader = getattr(self.repo, "get_research_briefings", None)
-        if not callable(loader):
-            return []
-        try:
-            rows = list(
-                loader(
-                    categories=["global_market", "geopolitical"],
-                    limit=3,
-                    trading_mode=self.settings.trading_mode,
-                )
-            )
-        except Exception as exc:
-            logger.warning(
-                "[yellow]environment briefing load failed[/yellow] err=%s",
-                str(exc),
-                extra=failure_extra("environment_briefing_load_failed", exc),
-            )
-            return []
-
-        queries: list[str] = []
-        for row in rows:
-            category = str(row.get("category") or "").strip().lower()
-            headline = self._trim_text(row.get("headline"), max_len=90)
-            summary = self._trim_text(row.get("summary"), max_len=150)
-            if category == "global_market":
-                prefix = "market environment macro regime"
-            elif category == "geopolitical":
-                prefix = "market environment geopolitical risk"
-            else:
-                prefix = "market environment"
-            query = self._trim_text(
-                " ".join(part for part in [prefix, headline, summary] if part),
-                max_len=220,
-            )
-            if len(query) >= 12:
-                queries.append(query)
-        return [q for q in dict.fromkeys(queries)]
-
-    def _build_research_context(self, *, focus_tickers: list[str]) -> tuple[str, list[dict[str, Any]]]:
-        """Builds a compact stored-research block for prompt/debug visibility."""
-        loader = getattr(self.repo, "get_research_briefings", None)
-        if not callable(loader):
-            return "", []
-        tickers = [str(t or "").strip().upper() for t in focus_tickers if str(t or "").strip()]
-        tickers = list(dict.fromkeys(tickers))[:4]
-        try:
-            rows = list(
-                loader(
-                    tickers=tickers or None,
-                    categories=["global_market", "geopolitical", "sector"],
-                    limit=6,
-                    trading_mode=self.settings.trading_mode,
-                )
-            )
-        except Exception as exc:
-            logger.warning(
-                "[yellow]research context load failed[/yellow] err=%s",
-                str(exc),
-                extra=failure_extra(
-                    "research_context_load_failed",
-                    exc,
-                    ticker_count=len(tickers),
-                ),
-            )
-            return "", []
-        lines: list[str] = []
-        compact_rows: list[dict[str, Any]] = []
-        for row in rows[:6]:
-            if not isinstance(row, dict):
-                continue
-            rendered = self._render_research_context_line(row)
-            if rendered is None:
-                continue
-            line, compact = rendered
-            lines.append(line)
-            compact_rows.append(compact)
-        return "\n".join(lines), compact_rows
-
     def _compress_relation_context(self, rows: list[dict[str, Any]]) -> str:
         if not memory_graph_semantic_triples_inject_enabled(self.settings.memory_policy):
             return ""
@@ -1860,10 +1707,6 @@ class ContextBuilder:
                     max_len=220,
                 )
             )
-
-        environment_queries = self._environment_memory_queries()
-        if environment_queries:
-            queries.extend(environment_queries[:2])
 
         secondary_bits: list[str] = []
         if winners:
@@ -2546,7 +2389,8 @@ class ContextBuilder:
             focus_tickers=focus_tickers,
             total_limit=min(6, self.settings.context_max_memory_events),
         )
-        research_context, research_rows = self._build_research_context(focus_tickers=focus_tickers)
+        research_context = ""
+        research_rows: list[dict[str, Any]] = []
         active_thesis_rows = self._active_thesis_rows(agent_id=agent_id, focus_tickers=focus_tickers)
         active_thesis_context = self._compress_active_thesis_context(active_thesis_rows)
         active_thesis_context_explore = self._compress_active_thesis_context(

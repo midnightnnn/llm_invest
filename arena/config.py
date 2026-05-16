@@ -166,7 +166,7 @@ class Settings:
     live_slippage_bps_impact: float = 12.0
     live_slippage_bps_max: float = 80.0
     anthropic_api_key: str = ""
-    anthropic_model: str = "claude-sonnet-4-6"
+    anthropic_model: str = ""
     anthropic_use_vertexai: bool = False
     research_gemini_api_key: str = ""
     research_gemini_source: str = ""
@@ -180,6 +180,7 @@ class Settings:
     llm_timeout_runtime_override_seconds: int | None = None
 
     research_enabled: bool = True
+    research_precycle_enabled: bool = False
     research_max_tickers: int = 5
     research_mover_top_n: int = 3
     research_earnings_lookahead_days: int = 7
@@ -308,9 +309,10 @@ def research_generation_status(settings: Settings) -> dict[str, Any]:
     research_source = getattr(settings, "research_gemini_source", "").strip().lower()
     research_source_tenant = getattr(settings, "research_gemini_source_tenant", "").strip().lower()
     use_vertex = _to_bool(os.getenv("GOOGLE_GENAI_USE_VERTEXAI"), False)
-    shared_source_tenant = str(os.getenv("ARENA_SHARED_RESEARCH_GEMINI_SOURCE_TENANT", "") or "").strip().lower()
+    explicit_shared_source_tenant = str(os.getenv("ARENA_SHARED_RESEARCH_GEMINI_SOURCE_TENANT", "") or "").strip().lower()
+    shared_source_tenant = explicit_shared_source_tenant or "midnightnnn"
     public_fallback_tenant = str(os.getenv("ARENA_PUBLIC_DEMO_TENANT", "") or shared_source_tenant or "").strip().lower()
-    vertex_limited_to_live_tenants = bool(use_vertex and shared_source_tenant)
+    vertex_limited_to_live_tenants = bool(use_vertex and explicit_shared_source_tenant)
     vertex_allowed = True
     if vertex_limited_to_live_tenants:
         vertex_allowed = (
@@ -328,7 +330,7 @@ def research_generation_status(settings: Settings) -> dict[str, Any]:
         source_label = research_source_tenant or "configured operator tenant"
         message = (
             "Research briefing generation uses operator-managed Gemini shared from "
-            f"{source_label} for approved live tenants."
+            f"{source_label} for tenants without their own research key."
         )
     elif has_research_gemini_key:
         code = "enabled"
@@ -373,7 +375,7 @@ class AgentConfig:
 
     agent_id: str                                        # free-form name (e.g. "aggressive-gpt")
     provider: str                                        # canonical: "gpt" | "gemini" | "claude"
-    model: str                                           # e.g. "gpt-5.2"
+    model: str                                           # e.g. "gpt-5.5"
     capital_krw: float
     target_market: str = ""                              # "" → use global kis_target_market
     system_prompt: str | None = None                     # None → use global prompt
@@ -622,12 +624,12 @@ def load_settings() -> Settings:
         context_max_memory_events=context_max_memory_events,
         context_max_market_rows=_to_int(os.getenv("ARENA_CONTEXT_MAX_MARKET_ROWS"), 64),
         openai_api_key=os.getenv("OPENAI_API_KEY", "").strip(),
-        openai_model=os.getenv("OPENAI_MODEL", "gpt-5.2").strip(),
+        openai_model=os.getenv("OPENAI_MODEL", "").strip(),
         gemini_api_key=os.getenv("GEMINI_API_KEY", "").strip(),
-        gemini_model=os.getenv("GEMINI_MODEL", "gemini-3-flash-preview").strip(),
+        gemini_model=os.getenv("GEMINI_MODEL", "").strip(),
         research_gemini_model=os.getenv("ARENA_RESEARCH_GEMINI_MODEL", "gemini-2.5-flash").strip(),
         anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", "").strip(),
-        anthropic_model=os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6").strip(),
+        anthropic_model=os.getenv("ANTHROPIC_MODEL", "").strip(),
         anthropic_use_vertexai=_to_bool(os.getenv("ANTHROPIC_USE_VERTEXAI"), False),
         research_gemini_api_key=os.getenv("ARENA_RESEARCH_GEMINI_API_KEY", "").strip(),
         research_gemini_source=("env" if os.getenv("ARENA_RESEARCH_GEMINI_API_KEY", "").strip() else ""),
@@ -641,6 +643,7 @@ def load_settings() -> Settings:
         live_slippage_bps_impact=_to_float(os.getenv("ARENA_LIVE_SLIPPAGE_BPS_IMPACT"), 12.0),
         live_slippage_bps_max=_to_float(os.getenv("ARENA_LIVE_SLIPPAGE_BPS_MAX"), 80.0),
         research_enabled=_to_bool(os.getenv("ARENA_RESEARCH_ENABLED"), True),
+        research_precycle_enabled=_to_bool(os.getenv("ARENA_RESEARCH_PRECYCLE_ENABLED"), False),
         research_max_tickers=_to_int(os.getenv("ARENA_RESEARCH_MAX_TICKERS"), 5),
         research_mover_top_n=_to_int(os.getenv("ARENA_RESEARCH_MOVER_TOP_N"), 3),
         research_earnings_lookahead_days=_to_int(os.getenv("ARENA_RESEARCH_EARNINGS_LOOKAHEAD_DAYS"), 7),
@@ -1198,6 +1201,22 @@ def validate_settings(
                 "No agents have usable credentials. ARENA_AGENT_IDS must include at least one of: "
                 f"{supported_tokens} whose provider has API credentials (or vertex fallback configured)."
             )
+        else:
+            configured_provider_ids = {spec.provider_id for spec in configured_adk_specs}
+            missing_model_agents = [
+                f"{aid}({ac.provider})"
+                for aid in settings.agent_ids
+                for ac in [settings.agent_configs.get(aid)]
+                if ac
+                and str(ac.provider).strip().lower() in configured_provider_ids
+                and not str(ac.model or "").strip()
+            ]
+            if missing_model_agents:
+                errors.append(
+                    "Model is required for configured ADK agents: "
+                    f"{', '.join(missing_model_agents)}. Set it in agents_config or the provider model env var "
+                    "(OPENAI_MODEL, GEMINI_MODEL, or ANTHROPIC_MODEL)."
+                )
 
     if require_kis:
         market_tokens = _market_tokens(settings.kis_target_market)

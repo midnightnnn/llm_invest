@@ -173,8 +173,38 @@ def test_run_agent_cycle_once_ignores_post_cycle_maintenance_failures(monkeypatc
     assert failure_record.exc_info is not None
 
 
+def test_run_agent_cycle_once_skips_precycle_research_by_default(monkeypatch) -> None:
+    settings = load_settings()
+
+    class _Repo(_FakeRepo):
+        def get_latest_position_tickers(self, *, market="", all_tenants=False):
+            raise AssertionError("pre-cycle research should not query holdings by default")
+
+    class _Orchestrator:
+        def run_cycle(self, snapshot=None):
+            _ = snapshot
+            return []
+
+    class _FakeResearchAgent:
+        def __init__(self, settings, repo):
+            raise AssertionError("pre-cycle research should be disabled by default")
+
+    monkeypatch.setattr("arena.agents.research_agent.ResearchAgent", _FakeResearchAgent)
+    monkeypatch.setattr(cli, "_run_post_cycle_maintenance", lambda *args, **kwargs: None)
+
+    cli._run_agent_cycle_once(
+        False,
+        settings=settings,
+        repo=_Repo(),
+        orchestrator=_Orchestrator(),
+        tenant="tenant-a",
+        run_id="run-1",
+    )
+
+
 def test_run_agent_cycle_once_research_uses_account_wide_holdings(monkeypatch) -> None:
     settings = load_settings()
+    settings.research_precycle_enabled = True
     settings.kis_target_market = "us"
     seen: dict[str, list[str]] = {}
 

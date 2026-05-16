@@ -5,7 +5,7 @@ import json
 import logging
 import os
 from datetime import date, datetime, timezone
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from arena.config import Settings, research_generation_status
 from arena.data.bq import BigQueryRepository
@@ -21,7 +21,30 @@ from arena.tools._market_scope import MarketScope, MarketScopeError
 
 _PEER_LESSON_SOURCES = frozenset({"memory_compaction", "thesis_chain_compaction"})
 _PUBLIC_RESEARCH_CATEGORIES = ("global_market", "geopolitical", "sector_trends")
+ResearchCategory = Literal["global_market", "geopolitical", "sector_trends", "sector"]
 logger = logging.getLogger(__name__)
+
+
+def _normalize_research_category(category: object) -> str:
+    token = str(category or "").strip().lower()
+    if token == "sector":
+        return "sector_trends"
+    return token
+
+
+def _clean_research_tickers(tickers: Optional[list[str]]) -> list[str] | None:
+    if not tickers:
+        return None
+    clean = [str(ticker).strip().upper() for ticker in tickers if str(ticker).strip()]
+    return list(dict.fromkeys(clean)) or None
+
+
+def _clean_research_categories(categories: Optional[list[str]]) -> list[str] | None:
+    if not categories:
+        return None
+    clean = [_normalize_research_category(category) for category in categories if str(category or "").strip()]
+    clean = [category for category in clean if category]
+    return list(dict.fromkeys(clean)) or None
 
 
 def _parse_json_field(value: Any) -> Any:
@@ -73,6 +96,7 @@ class _ContextTools:
         self._vector_store = build_vector_store(repo, settings.memory_policy)
         self._seen_memory_ids: set[str] = set()
         self._seen_memory_ids_shared = False
+        self._research_refresher = None
 
     def set_context(self, context: dict[str, Any]) -> None:
         """Stores current cycle context for subsequent tool calls."""
@@ -443,16 +467,43 @@ class _ContextTools:
             out.append(merged)
         return out[: max(1, min(int(limit), 10))]
 
-    def get_research_briefing(
+    async def get_research_briefing(
         self,
         tickers: Optional[list[str]] = None,
-        categories: Optional[list[str]] = None,
+        categories: Optional[list[ResearchCategory]] = None,
         limit: int = 5,
+        refresh_missing: bool = False,
     ) -> list[dict[str, Any]]:
-        """Fetches research briefings (global market, geopolitical, sector, held-stock)."""
+        """Fetches research briefings and can generate missing requested context on demand."""
         max_limit = max(1, min(int(limit), 20))
-        clean_tickers = [str(t).strip().upper() for t in tickers if str(t).strip()] if tickers else None
-        clean_cats = [str(c).strip().lower() for c in categories if str(c).strip()] if categories else None
+        clean_tickers = _clean_research_tickers(tickers)
+        clean_cats = _clean_research_categories(categories)
+        rows = self._get_research_briefing_rows(
+            clean_tickers=clean_tickers,
+            clean_cats=clean_cats,
+            max_limit=max_limit,
+        )
+        if refresh_missing:
+            refreshed = await self._refresh_missing_research_briefings(
+                requested_tickers=clean_tickers or [],
+                requested_categories=clean_cats,
+                current_rows=rows,
+            )
+            if refreshed:
+                rows = self._get_research_briefing_rows(
+                    clean_tickers=clean_tickers,
+                    clean_cats=clean_cats,
+                    max_limit=max_limit,
+                )
+        return rows[:max_limit]
+
+    def _get_research_briefing_rows(
+        self,
+        *,
+        clean_tickers: list[str] | None,
+        clean_cats: list[str] | None,
+        max_limit: int,
+    ) -> list[dict[str, Any]]:
         rows = list(
             self.repo.get_research_briefings(
                 tickers=clean_tickers or None,
@@ -468,7 +519,7 @@ class _ContextTools:
 
         fallback_tenant = str(
             os.getenv("ARENA_PUBLIC_DEMO_TENANT", "")
-            or os.getenv("ARENA_SHARED_RESEARCH_GEMINI_SOURCE_TENANT", "")
+            or os.getenv("ARENA_SHARED_RESEARCH_GEMINI_SOURCE_TENANT", "midnightnnn")
             or ""
         ).strip().lower()
         if not fallback_tenant or fallback_tenant == self.tenant_id:
@@ -476,7 +527,11 @@ class _ContextTools:
         if clean_tickers:
             return rows[:max_limit]
 
-        fallback_categories = [category for category in (clean_cats or list(_PUBLIC_RESEARCH_CATEGORIES)) if category in _PUBLIC_RESEARCH_CATEGORIES]
+        fallback_categories = [
+            category
+            for category in (clean_cats or list(_PUBLIC_RESEARCH_CATEGORIES))
+            if category in _PUBLIC_RESEARCH_CATEGORIES
+        ]
         if not fallback_categories:
             return rows[:max_limit]
 
@@ -516,6 +571,56 @@ class _ContextTools:
             if len(merged) >= max_limit:
                 break
         return merged[:max_limit]
+
+    async def _refresh_missing_research_briefings(
+        self,
+        *,
+        requested_tickers: list[str],
+        requested_categories: list[str] | None,
+        current_rows: list[dict[str, Any]],
+    ) -> bool:
+        status = research_generation_status(self.settings)
+        if not bool(status.get("can_generate")):
+            return False
+
+        target_categories = list(requested_categories or [])
+        if not requested_tickers and requested_categories is None:
+            target_categories = list(_PUBLIC_RESEARCH_CATEGORIES)
+
+        present_tickers = {
+            str(row.get("ticker") or "").strip().upper()
+            for row in current_rows
+            if str(row.get("ticker") or "").strip()
+        }
+        present_categories = {
+            _normalize_research_category(row.get("category"))
+            for row in current_rows
+            if str(row.get("category") or "").strip()
+        }
+        missing_tickers = [ticker for ticker in requested_tickers if ticker not in present_tickers]
+        missing_categories = [category for category in target_categories if category not in present_categories]
+        if not missing_tickers and not missing_categories:
+            return False
+
+        try:
+            max_tickers = int(getattr(self.settings, "research_max_tickers", 5) or 5)
+        except (TypeError, ValueError):
+            max_tickers = 5
+        missing_tickers = missing_tickers[: max(1, max_tickers)]
+
+        refresher = getattr(self, "_research_refresher", None)
+        if callable(refresher):
+            result = refresher(tickers=missing_tickers, categories=missing_categories)
+        else:
+            from arena.agents.research_agent import ResearchAgent
+
+            result = ResearchAgent(settings=self.settings, repo=self.repo).run_on_demand(
+                tickers=missing_tickers,
+                categories=missing_categories,
+            )
+        if inspect.isawaitable(result):
+            result = await result
+        return bool(result)
 
     def _portfolio_weights(self) -> tuple[dict[str, float], float, float]:
         """Returns per-ticker market value weights based on current context."""

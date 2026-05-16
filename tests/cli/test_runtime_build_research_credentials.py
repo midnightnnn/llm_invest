@@ -3,8 +3,15 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import arena.cli as cli
+from arena.cli_runtime import _shared_research_gemini_source_tenant
 from arena.config import load_settings
 from tests.cli.helpers import _FakeRepo
+
+
+def test_shared_research_gemini_source_defaults_to_midnightnnn(monkeypatch) -> None:
+    monkeypatch.delenv("ARENA_SHARED_RESEARCH_GEMINI_SOURCE_TENANT", raising=False)
+
+    assert _shared_research_gemini_source_tenant() == "midnightnnn"
 
 
 def test_build_runtime_does_not_restore_shared_gemini_for_research(monkeypatch) -> None:
@@ -79,8 +86,8 @@ def test_build_runtime_does_not_restore_shared_gemini_for_research(monkeypatch) 
     assert out_settings.research_gemini_api_key == ""
 
 
-def test_build_runtime_restores_shared_research_gemini_for_approved_live_tenant(monkeypatch) -> None:
-    monkeypatch.setenv("ARENA_SHARED_RESEARCH_GEMINI_SOURCE_TENANT", "midnightnnn")
+def test_build_runtime_restores_shared_research_gemini_for_tenant_without_own_key(monkeypatch) -> None:
+    monkeypatch.delenv("ARENA_SHARED_RESEARCH_GEMINI_SOURCE_TENANT", raising=False)
     monkeypatch.delenv("GOOGLE_GENAI_USE_VERTEXAI", raising=False)
     monkeypatch.delenv("ARENA_RESEARCH_GEMINI_API_KEY", raising=False)
     settings = load_settings()
@@ -145,8 +152,8 @@ def test_build_runtime_restores_shared_research_gemini_for_approved_live_tenant(
 
     def _fake_apply_runtime_overrides(settings, repo, tenant_id):
         _ = repo, tenant_id
-        settings.distribution_mode = "private"
-        settings.real_trading_approved = True
+        settings.distribution_mode = "paper_only"
+        settings.real_trading_approved = False
         return settings
 
     monkeypatch.setattr(cli, "apply_runtime_overrides", _fake_apply_runtime_overrides)

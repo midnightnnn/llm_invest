@@ -6,6 +6,56 @@ from types import SimpleNamespace
 from tests.ui.investment_chat_helpers import _ChatOrderRepo, _FakeToolContext, _build_raw_chat_tools
 
 
+def test_chat_config_tool_lists_cached_provider_models(monkeypatch) -> None:
+    repo = _ChatOrderRepo()
+    repo.set_config(
+        "local",
+        "investment_chat_model_options",
+        json.dumps(
+            {
+                "providers": {
+                    "gpt": {
+                        "provider": "gpt",
+                        "advisor_models": ["gpt-5.5"],
+                        "router_models": ["gpt-5.4-mini"],
+                        "utility_models": ["gpt-5.4-mini"],
+                    }
+                }
+            }
+        ),
+        "seed",
+    )
+    repo.set_config(
+        "local",
+        "investment_chat_config",
+        json.dumps(
+            {
+                "provider": "gpt",
+                "model": "gpt-5.5",
+                "model_routing": {
+                    "router_model": "gpt-5.4-mini",
+                    "utility_model": "gpt-5.4-mini",
+                },
+            }
+        ),
+        "seed",
+    )
+    tools = _build_raw_chat_tools(monkeypatch, repo, include_internal_bridge=True)
+
+    result = tools["list_chat_model_options"](provider="gpt")
+
+    assert result["status"] == "ok"
+    assert result["provider"] == "gpt"
+    assert result["advisor_models"] == ["gpt-5.5"]
+    assert result["router_models"] == ["gpt-5.4-mini"]
+    assert result["current"] == {
+        "provider": "gpt",
+        "advisor_model": "gpt-5.5",
+        "router_model": "gpt-5.4-mini",
+        "utility_model": "gpt-5.4-mini",
+    }
+
+
 def test_chat_config_change_tool_requires_button_approval(monkeypatch) -> None:
     from arena.agents.investment_chat.drafts import config_draft_key
 
@@ -118,7 +168,7 @@ def test_chat_config_tool_uses_adk_confirmation_before_apply(monkeypatch) -> Non
     assert waiting["approval_required"] is True
     assert waiting["approval_ui"] == "adk_tool_confirmation"
     assert waiting["apply_status"] == "not_applied"
-    assert first_context.actions.skip_summarization is True
+    assert first_context.actions.skip_summarization is False
     assert first_context.confirmation_request is not None
     payload = first_context.confirmation_request["payload"]
     assert isinstance(payload, dict)

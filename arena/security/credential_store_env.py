@@ -11,7 +11,12 @@ import tempfile
 from typing import Any
 
 from arena.models import utc_now
-from arena.providers.credentials import build_model_secret_payload, parse_model_secret_providers, runtime_credential_flags
+from arena.providers.credentials import (
+    build_model_secret_payload,
+    normalize_provider_token,
+    parse_model_secret_providers,
+    runtime_credential_flags,
+)
 
 
 @dataclass(slots=True)
@@ -123,6 +128,24 @@ class EnvCredentialStore:
             for item in accounts
             if isinstance(item, dict) and str(item.get("cano") or "").strip()
         ]
+
+    def model_api_key(self, *, tenant_id: str, provider: str) -> str:
+        tenant = str(tenant_id or "").strip().lower() or "local"
+        provider_token = normalize_provider_token(provider)
+        if not provider_token:
+            return ""
+        model_secret_id = ""
+        latest_fn = getattr(self.repo, "latest_runtime_credentials", None)
+        if callable(latest_fn):
+            try:
+                latest = latest_fn(tenant_id=tenant) or {}
+            except Exception:
+                latest = {}
+            model_secret_id = str(latest.get("model_secret_name") or "").strip()
+        if not model_secret_id:
+            model_secret_id = self._secret_id(tenant, "models")
+        providers = parse_model_secret_providers(self._latest_secret_json(secret_id=model_secret_id))
+        return str((providers.get(provider_token) or {}).get("api_key") or "").strip()
 
     def save_kis_accounts(
         self,

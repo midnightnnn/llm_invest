@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import inspect
 from types import SimpleNamespace
 
@@ -41,6 +42,39 @@ def test_apply_tool_schema_metadata_prefers_registry_description() -> None:
 
     assert wrapped.__name__ == "screen_market"
     assert wrapped.__doc__ == "Canonical registry description for the model schema."
+
+
+def test_build_tool_wrapper_awaits_async_callables() -> None:
+    from arena.agents.adk_tool_helpers import noop_search_tool_memories, noop_update_candidate_ledger
+
+    async def original_tool(ticker: str) -> dict[str, str]:
+        return {"ticker": ticker, "status": "fresh"}
+
+    entry = ToolEntry(
+        tool_id="sample_async_tool",
+        name="sample_async_tool",
+        description="Fetch research.",
+        category="context",
+        callable=original_tool,
+    )
+    tool_events: list[dict] = []
+
+    wrapped = build_tool_wrapper(
+        entry,
+        settings=load_settings(),
+        agent_id="gpt",
+        tool_events=tool_events,
+        update_candidate_ledger=noop_update_candidate_ledger,
+        search_tool_memories=noop_search_tool_memories,
+        apply_tool_schema_metadata=_apply_tool_schema_metadata,
+    )
+
+    out = asyncio.run(wrapped(ticker="AAPL"))
+
+    assert out["ticker"] == "AAPL"
+    assert out["status"] == "fresh"
+    assert "_runtime_clock" in out
+    assert tool_events[0]["result"] == {"ticker": "AAPL", "status": "fresh"}
 
 
 def test_batch_default_tool_schema_preserves_required_fields_and_enums() -> None:

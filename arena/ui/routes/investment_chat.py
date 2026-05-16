@@ -4,6 +4,7 @@ import html
 import json
 import time
 from datetime import datetime, timezone
+from typing import Any
 from urllib.parse import urlencode
 
 from fastapi import FastAPI, Form, Request
@@ -34,14 +35,21 @@ from arena.agents.investment_chat.credential_tools import (
     recent_credential_drafts,
     save_credential_draft,
 )
-from arena.agents.investment_chat.drafts import load_draft
+from arena.agents.investment_chat.drafts import approval_token, load_draft
 from arena.agents.investment_chat.order_tools import build_order_bridge_tool_entries
 from arena.agents.investment_chat.selection import (
+    chat_model_routing_config,
     normalize_chat_model_selection,
     normalize_stored_advisor_model_selection,
     tenant_default_chat_selection,
 )
 from arena.providers.registry import canonical_provider, default_model_for_provider, list_adk_provider_specs
+from arena.providers.model_discovery import (
+    ModelDiscoveryError,
+    discover_model_options_with_api_key,
+    model_option_sets,
+    save_model_options_catalog,
+)
 from arena.ui.investment_chat_adk import _chat_app_name
 from arena.ui.investment_chat_providers import tenant_available_provider_specs
 from arena.ui.routes.viewer import ViewerRouteDeps
@@ -96,27 +104,89 @@ def _provider_options(repo=None, tenant_id: str = "") -> list[dict[str, str]]:
     ]
 
 
-def _model_key_provider_options(tenant_settings, current_provider: str = "") -> list[dict[str, str | bool]]:
+def _model_key_provider_options(tenant_settings, current_provider: str = "") -> list[dict[str, Any]]:
+    _ = tenant_settings
     current = canonical_provider(current_provider) or str(current_provider or "").strip().lower()
-    options: list[dict[str, str | bool]] = []
+    options: list[dict[str, Any]] = []
     for spec in list_adk_provider_specs():
         if not spec.api_key_setting:
             continue
-        model = normalize_chat_model_selection(
-            spec.provider_id,
-            default_model_for_provider(tenant_settings, spec.provider_id),
-        )
         options.append(
             {
                 "value": spec.provider_id,
                 "label": spec.label,
-                "default_model": model,
+                "default_model": "",
+                "default_cheap_model": "",
+                "advisor_models": [],
+                "aux_models": [],
                 "selected": spec.provider_id == current,
             }
         )
     if options and not any(bool(item.get("selected")) for item in options):
         options[0]["selected"] = True
     return options
+
+
+def _selected_model_key_option(options: list[dict[str, Any]]) -> dict[str, Any]:
+    return next((item for item in options if item.get("selected")), options[0] if options else {})
+
+
+def _merge_chat_model_routing(existing: dict, *, router_model: str, utility_model: str) -> dict:
+    routing = dict(existing.get("model_routing") or {}) if isinstance(existing.get("model_routing"), dict) else {}
+    routing["router_model"] = router_model
+    routing["utility_model"] = utility_model
+    return routing
+
+
+def _upsert_provider_agent_config(
+    repo,
+    *,
+    tenant: str,
+    tenant_settings,
+    provider: str,
+    model: str,
+    updated_by: str,
+) -> None:
+    getter = getattr(repo, "get_config", None)
+    setter = getattr(repo, "set_config", None)
+    if not callable(getter) or not callable(setter):
+        return
+    try:
+        raw = getter(tenant, "agents_config")
+    except Exception:
+        raw = ""
+    try:
+        parsed = json.loads(str(raw or ""))
+    except Exception:
+        parsed = []
+    entries = [dict(entry) for entry in parsed if isinstance(entry, dict)] if isinstance(parsed, list) else []
+    provider_token = canonical_provider(provider) or str(provider or "").strip().lower()
+    target_id = provider_token
+    matched = False
+    for entry in entries:
+        entry_provider = canonical_provider(entry.get("provider")) or str(entry.get("provider") or "").strip().lower()
+        entry_id = str(entry.get("id") or "").strip().lower()
+        if entry_provider == provider_token or entry_id == target_id:
+            entry["id"] = entry_id or target_id
+            entry["provider"] = provider_token
+            entry["model"] = model
+            if not entry.get("capital_krw"):
+                entry["capital_krw"] = float(getattr(tenant_settings, "sleeve_capital_krw", 0.0) or 0.0)
+            if not entry.get("target_market"):
+                entry["target_market"] = str(getattr(tenant_settings, "kis_target_market", "") or "us").strip().lower()
+            matched = True
+            break
+    if not matched:
+        entries.append(
+            {
+                "id": target_id,
+                "provider": provider_token,
+                "model": model,
+                "capital_krw": float(getattr(tenant_settings, "sleeve_capital_krw", 0.0) or 0.0),
+                "target_market": str(getattr(tenant_settings, "kis_target_market", "") or "us").strip().lower(),
+            }
+        )
+    setter(tenant, "agents_config", json.dumps(entries, ensure_ascii=False), updated_by=updated_by)
 
 
 def _parse_audit_detail(row: dict) -> dict:
@@ -144,6 +214,15 @@ def _chat_quantity(value) -> str:
 
 
 def _order_result_chat_delivery_text(result: dict) -> str:
+    orders = result.get("orders")
+    if isinstance(orders, list) and orders:
+        count = len(orders)
+        submitted = int(result.get("submitted_count") or 0)
+        if result.get("status") in {"submitted", "already_submitted"}:
+            return f"방금 주문 {count}건 일괄 승인 결과를 확인해서 알려줘."
+        if submitted:
+            return f"방금 주문 {count}건 중 {submitted}건 승인 결과를 확인해서 알려줘."
+        return "방금 주문 일괄 승인이 실패했어. 실패 이유를 확인해서 알려줘."
     intent = result.get("intent") if isinstance(result.get("intent"), dict) else {}
     ticker = str(intent.get("ticker") or "").strip().upper()
     side = str(intent.get("side") or "").strip().upper()
@@ -233,7 +312,7 @@ def _existing_kis_account_rows(credential_store, *, tenant_id: str) -> list[dict
     return rows
 
 
-def _recent_order_drafts(repo, *, tenant_id: str, limit: int = 5) -> list[dict]:
+def _recent_order_drafts(repo, *, tenant_id: str, limit: int = 20) -> list[dict]:
     loader = getattr(repo, "recent_runtime_audit_logs", None)
     if not callable(loader):
         return []
@@ -272,10 +351,14 @@ def _recent_order_drafts(repo, *, tenant_id: str, limit: int = 5) -> list[dict]:
                 "approval_token": token,
                 "status": status,
                 "submittable": status == "draft",
+                "created_at": draft.get("created_at") or "",
                 "expires_at": draft.get("expires_at") or "",
                 "notional_krw": draft.get("notional_krw") or 0,
                 "scope": draft.get("scope") or "account",
                 "target_agent_id": draft.get("target_agent_id") or "",
+                "batch_token": draft.get("batch_token") or "",
+                "batch_index": draft.get("batch_index"),
+                "batch_count": draft.get("batch_count"),
                 "intent": intent,
                 "risk": risk,
             }
@@ -371,14 +454,19 @@ def register_investment_chat_routes(app: FastAPI, *, deps: ViewerRouteDeps) -> N
         chat_session_app_name = _chat_app_name(tenant, provider_token, model_token) if provider_token and model_token else ""
         chat_session_user_id = "user"
         model_key_options = _model_key_provider_options(tenant_settings, provider_token)
-        selected_key_provider = str(
-            next((item["value"] for item in model_key_options if item.get("selected")), "")
-        )
+        selected_key_option = _selected_model_key_option(model_key_options)
+        selected_key_provider = str(selected_key_option.get("value") or "")
         selected_key_model = (
             model_token
             if selected_key_provider == provider_token
-            else str(next((item["default_model"] for item in model_key_options if item.get("selected")), ""))
+            else str(selected_key_option.get("default_model") or "")
         )
+        if not selected_key_model:
+            selected_key_model = str(selected_key_option.get("default_model") or "")
+        selected_key_cheap_model = str(selected_key_option.get("default_cheap_model") or selected_key_model)
+        if selected_key_provider == provider_token:
+            routing_config = chat_model_routing_config(chat_config)
+            selected_key_cheap_model = str(routing_config.get("router_model") or "").strip() or selected_key_cheap_model
         body = render_ui_template(
             "investment_chat_body.jinja2",
             iframe_src=_adk_iframe_src(tenant, provider_token, model_token) if provider_token and model_token else "",
@@ -388,10 +476,9 @@ def register_investment_chat_routes(app: FastAPI, *, deps: ViewerRouteDeps) -> N
             llm_key_provider_options=model_key_options,
             llm_key_provider=selected_key_provider,
             llm_key_model=selected_key_model,
-            llm_key_model_presets={
-                str(item["value"]): str(item.get("default_model") or "")
-                for item in model_key_options
-            },
+            llm_key_cheap_model=selected_key_cheap_model,
+            llm_key_model_presets={str(item["value"]): list(item.get("advisor_models") or []) for item in model_key_options},
+            llm_key_cheap_model_presets={str(item["value"]): list(item.get("aux_models") or []) for item in model_key_options},
             llm_key_help_urls={
                 str(item["value"]): _MODEL_KEY_HELP_URLS.get(str(item["value"]), "")
                 for item in model_key_options
@@ -416,12 +503,43 @@ def register_investment_chat_routes(app: FastAPI, *, deps: ViewerRouteDeps) -> N
             max_age=0,
         )
 
+    @app.post("/investment-chat/model-key/options")
+    def investment_chat_model_key_options(
+        request: Request,
+        tenant_id: str = Form(default="local"),
+        provider: str = Form(default=""),
+        api_key: str = Form(default=""),
+    ):
+        tenant, _agent_ids, user, redirect = deps.resolve_viewer_context(
+            request,
+            requested_tenant=tenant_id,
+            next_path=_next_path(tenant_id),
+        )
+        if redirect is not None:
+            return JSONResponse({"error": "authentication required"}, status_code=401)
+        tenant_settings = deps.settings_for_tenant(tenant)
+        allowed = {str(item["value"]) for item in _model_key_provider_options(tenant_settings, provider)}
+        provider_token = canonical_provider(provider) or str(provider or "").strip().lower()
+        if provider_token not in allowed:
+            return JSONResponse({"error": "invalid provider"}, status_code=400)
+        api_key_token = str(api_key or "").strip()
+        if not api_key_token:
+            return JSONResponse({"error": "api_key is required"}, status_code=400)
+        try:
+            options = discover_model_options_with_api_key(provider_token, api_key_token)
+        except ModelDiscoveryError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        updated_by = str((user or {}).get("email") or "").strip() or "investment_chat"
+        save_model_options_catalog(deps.repo, tenant_id=tenant, options=options, updated_by=updated_by)
+        return JSONResponse({"status": "ok", **options})
+
     @app.post("/investment-chat/model-key")
     def investment_chat_model_key(
         request: Request,
         tenant_id: str = Form(default="local"),
         provider: str = Form(default=""),
         model: str = Form(default=""),
+        cheap_model: str = Form(default=""),
         api_key: str = Form(default=""),
     ):
         tenant, _agent_ids, user, redirect = deps.resolve_viewer_context(
@@ -447,14 +565,17 @@ def register_investment_chat_routes(app: FastAPI, *, deps: ViewerRouteDeps) -> N
         if not api_key_token:
             return JSONResponse({"error": "api_key is required"}, status_code=400)
 
+        try:
+            options = discover_model_options_with_api_key(provider_token, api_key_token)
+        except ModelDiscoveryError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        advisor_options, router_options, utility_options = model_option_sets(options)
         model_token = normalize_chat_model_selection(provider_token, model)
-        if not model_token:
-            model_token = normalize_chat_model_selection(
-                provider_token,
-                default_model_for_provider(tenant_settings, provider_token),
-            )
-        if not model_token:
+        if not model_token or model_token not in advisor_options:
             return JSONResponse({"error": "model is required"}, status_code=400)
+        cheap_model_token = normalize_chat_model_selection(provider_token, cheap_model)
+        if not cheap_model_token or cheap_model_token not in router_options or cheap_model_token not in utility_options:
+            return JSONResponse({"error": "cheap_model is required"}, status_code=400)
 
         user_email = str((user or {}).get("email") or "").strip()
         updated_by = user_email or "investment_chat"
@@ -468,10 +589,24 @@ def register_investment_chat_routes(app: FastAPI, *, deps: ViewerRouteDeps) -> N
         merged = dict(existing)
         merged["provider"] = provider_token
         merged["model"] = model_token
+        merged["model_routing"] = _merge_chat_model_routing(
+            merged,
+            router_model=cheap_model_token,
+            utility_model=cheap_model_token,
+        )
         deps.repo.set_config(
             tenant,
             "investment_chat_config",
             json.dumps(merged, ensure_ascii=False),
+            updated_by=updated_by,
+        )
+        save_model_options_catalog(deps.repo, tenant_id=tenant, options=options, updated_by=updated_by)
+        _upsert_provider_agent_config(
+            deps.repo,
+            tenant=tenant,
+            tenant_settings=tenant_settings,
+            provider=provider_token,
+            model=model_token,
             updated_by=updated_by,
         )
         try:
@@ -483,7 +618,7 @@ def register_investment_chat_routes(app: FastAPI, *, deps: ViewerRouteDeps) -> N
         return RedirectResponse(url=f"/investment-chat?{query}", status_code=303)
 
     @app.get("/investment-chat/order-drafts")
-    def investment_chat_order_drafts(request: Request, tenant_id: str = "", limit: int = 5):
+    def investment_chat_order_drafts(request: Request, tenant_id: str = "", limit: int = 20):
         tenant, _agent_ids, _user, redirect = deps.resolve_viewer_context(
             request,
             requested_tenant=tenant_id,
@@ -565,6 +700,8 @@ def register_investment_chat_routes(app: FastAPI, *, deps: ViewerRouteDeps) -> N
         approval_token: str,
         tenant_id: str = Form(default="local"),
         api_key: str = Form(default=""),
+        model: str = Form(default=""),
+        cheap_model: str = Form(default=""),
         kis_env: str = Form(default=""),
         kis_account_no: str = Form(default=""),
         kis_app_key: str = Form(default=""),
@@ -708,7 +845,11 @@ def register_investment_chat_routes(app: FastAPI, *, deps: ViewerRouteDeps) -> N
             if provider_token not in allowed:
                 return JSONResponse({"status": "blocked", "approval_token": token, "error": "invalid provider"}, status_code=400)
             provider_label = str(draft.get("provider_label") or provider_token)
-            model_token = normalize_chat_model_selection(provider_token, draft.get("model"))
+            model_token = normalize_chat_model_selection(provider_token, model or draft.get("model"))
+            cheap_model_token = normalize_chat_model_selection(
+                provider_token,
+                cheap_model or draft.get("cheap_model") or draft.get("router_model"),
+            )
             if action == "delete":
                 confirmed_token = str(confirmed or "").strip().lower()
                 if confirmed_token not in {"1", "true", "yes", "on", "confirmed"}:
@@ -723,13 +864,21 @@ def register_investment_chat_routes(app: FastAPI, *, deps: ViewerRouteDeps) -> N
                 api_key_token = str(api_key or "").strip()
                 if not api_key_token:
                     return JSONResponse({"status": "blocked", "approval_token": token, "error": "api_key is required"}, status_code=400)
-                if not model_token:
-                    model_token = normalize_chat_model_selection(
-                        provider_token,
-                        default_model_for_provider(tenant_settings, provider_token),
+                try:
+                    options = discover_model_options_with_api_key(provider_token, api_key_token)
+                except ModelDiscoveryError as exc:
+                    return JSONResponse(
+                        {"status": "blocked", "approval_token": token, "error": str(exc)},
+                        status_code=400,
                     )
-                if not model_token:
+                advisor_options, router_options, utility_options = model_option_sets(options)
+                if not model_token or model_token not in advisor_options:
                     return JSONResponse({"status": "blocked", "approval_token": token, "error": "model is required"}, status_code=400)
+                if not cheap_model_token or cheap_model_token not in router_options or cheap_model_token not in utility_options:
+                    return JSONResponse(
+                        {"status": "blocked", "approval_token": token, "error": "cheap_model is required"},
+                        status_code=400,
+                    )
                 credential_store.save_model_keys(
                     tenant_id=tenant,
                     updated_by=updated_by,
@@ -739,10 +888,24 @@ def register_investment_chat_routes(app: FastAPI, *, deps: ViewerRouteDeps) -> N
                 merged = dict(existing)
                 merged["provider"] = provider_token
                 merged["model"] = model_token
+                merged["model_routing"] = _merge_chat_model_routing(
+                    merged,
+                    router_model=cheap_model_token,
+                    utility_model=cheap_model_token,
+                )
                 deps.repo.set_config(
                     tenant,
                     "investment_chat_config",
                     json.dumps(merged, ensure_ascii=False),
+                    updated_by=updated_by,
+                )
+                save_model_options_catalog(deps.repo, tenant_id=tenant, options=options, updated_by=updated_by)
+                _upsert_provider_agent_config(
+                    deps.repo,
+                    tenant=tenant,
+                    tenant_settings=tenant_settings,
+                    provider=provider_token,
+                    model=model_token,
                     updated_by=updated_by,
                 )
                 draft["status"] = "applied"
@@ -763,6 +926,7 @@ def register_investment_chat_routes(app: FastAPI, *, deps: ViewerRouteDeps) -> N
             "provider": provider_token,
             "provider_label": provider_label or draft.get("provider_label") or provider_token,
             "model": model_token,
+            "cheap_model": cheap_model_token if credential_kind == "model_key" else "",
             "env": env_token,
             "reload_url": reload_url,
         }
@@ -778,11 +942,63 @@ def register_investment_chat_routes(app: FastAPI, *, deps: ViewerRouteDeps) -> N
                 "action": action,
                 "provider": provider_token,
                 "model": model_token,
+                "cheap_model": cheap_model_token if credential_kind == "model_key" else "",
                 "env": env_token,
             },
             user_email=user_email,
         )
         return JSONResponse(result)
+
+    @app.post("/investment-chat/order-drafts/batch-submit")
+    async def investment_chat_submit_order_draft_batch(
+        request: Request,
+        tenant_id: str = "",
+    ):
+        tenant, _agent_ids, user, redirect = deps.resolve_viewer_context(
+            request,
+            requested_tenant=tenant_id,
+            next_path=_next_path(tenant_id),
+        )
+        if redirect is not None:
+            return JSONResponse({"status": "blocked", "error": "authentication required"}, status_code=401)
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = {}
+        body = payload if isinstance(payload, dict) else {}
+        raw_tokens = body.get("approval_tokens")
+        if not isinstance(raw_tokens, list):
+            return JSONResponse({"status": "blocked", "error": "approval_tokens must be a list"}, status_code=400)
+        tokens: list[str] = []
+        seen: set[str] = set()
+        for raw_token in raw_tokens:
+            token = str(raw_token or "").strip()
+            if token and token not in seen:
+                seen.add(token)
+                tokens.append(token)
+        if not tokens:
+            return JSONResponse({"status": "blocked", "error": "approval_tokens is required"}, status_code=400)
+        settings = deps.settings_for_tenant(tenant)
+        bridge_entries = build_order_bridge_tool_entries(repo=deps.repo, settings=settings, tenant_id=tenant)
+        entry = next((item for item in bridge_entries if item.name == "submit_approved_order_batch"), None)
+        if entry is None or not callable(entry.callable):
+            return JSONResponse({"status": "error", "error": "order batch approval bridge unavailable"}, status_code=500)
+        user_email = str((user or {}).get("email") or "").strip().lower()
+        batch_token = str(body.get("batch_token") or "").strip()
+        email_token = REQUEST_USER_EMAIL.set(user_email)
+        try:
+            result = entry.callable(
+                approval_tokens=tokens,
+                confirmation_text=f"CONFIRM_BATCH {approval_token({'approval_tokens': tokens})}",
+            )
+        finally:
+            REQUEST_USER_EMAIL.reset(email_token)
+        if isinstance(result, dict):
+            result = dict(result)
+            if batch_token:
+                result["batch_token"] = batch_token
+            result["chat_delivery_text"] = _order_result_chat_delivery_text(result)
+        return result
 
     @app.post("/investment-chat/order-drafts/{approval_token}/submit")
     def investment_chat_submit_order_draft(request: Request, approval_token: str, tenant_id: str = ""):

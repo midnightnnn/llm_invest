@@ -2,44 +2,100 @@
   {% if chat_provider_options %}
   <section class="mb-5 rounded-2xl border border-ink-200/60 bg-white/80 p-4 backdrop-blur">
     <header class="mb-3 flex items-baseline justify-between">
-      <h3 class="font-display text-sm font-semibold text-ink-900">Chat Provider/Model</h3>
-      <p class="text-[11px] text-ink-500">투자챗봇이 사용하는 LLM. 페이지 진입 시 이 값이 적용됩니다.</p>
+      <h3 class="font-display text-sm font-semibold text-ink-900">Chat Models</h3>
+      <p class="text-[11px] text-ink-500">투자챗봇 router, utility, advisor 모델. 페이지 진입 시 이 값이 적용됩니다.</p>
     </header>
-    <form method="post" action="/settings/chat-model" class="flex flex-wrap items-center gap-2">
+    <form method="post" action="/settings/chat-model" class="grid gap-2 lg:grid-cols-[180px_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_auto_auto]" data-chat-model-settings-form>
       <input type="hidden" name="tenant_id" value="{{ tenant }}" />
-      <select name="provider" class="h-9 rounded-md border border-ink-200 bg-white px-2 text-xs font-semibold text-ink-700" data-chat-provider-settings>
-        {% for item in chat_provider_options %}
-        <option value="{{ item.value }}" {{ 'selected' if item.value == chat_provider_current else '' }}>{{ item.label }}</option>
-        {% endfor %}
-      </select>
-      <select name="model" class="h-9 min-w-0 flex-1 rounded-md border border-ink-200 bg-white px-2 font-mono text-xs text-ink-700 sm:max-w-[460px]" data-chat-model-settings>
-        {% for option in chat_model_options %}
-        <option value="{{ option }}" {{ 'selected' if option == chat_model_current else '' }}>{{ option }}</option>
-        {% endfor %}
-      </select>
-      <button type="submit" class="h-9 rounded-md bg-ink-900 px-3 text-xs font-semibold text-white hover:bg-ink-800">Apply</button>
+      <label class="block text-[11px] font-semibold text-ink-500">
+        Provider
+        <select name="provider" class="mt-1 h-9 w-full rounded-md border border-ink-200 bg-white px-2 text-xs font-semibold text-ink-700" data-chat-provider-settings>
+          {% for item in chat_provider_options %}
+          <option value="{{ item.value }}" {{ 'selected' if item.value == chat_provider_current else '' }}>{{ item.label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label class="block text-[11px] font-semibold text-ink-500">
+        Advisor
+        <select name="model" class="mt-1 h-9 w-full min-w-0 rounded-md border border-ink-200 bg-white px-2 font-mono text-xs text-ink-700" data-chat-model-settings="advisor">
+          {% for option in chat_model_options %}
+          <option value="{{ option }}" {{ 'selected' if option == chat_model_current else '' }}>{{ option }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label class="block text-[11px] font-semibold text-ink-500">
+        Router
+        <select name="router_model" class="mt-1 h-9 w-full min-w-0 rounded-md border border-ink-200 bg-white px-2 font-mono text-xs text-ink-700" data-chat-model-settings="router">
+          {% for option in chat_router_model_options %}
+          <option value="{{ option }}" {{ 'selected' if option == chat_router_model_current else '' }}>{{ option }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label class="block text-[11px] font-semibold text-ink-500">
+        Utility
+        <select name="utility_model" class="mt-1 h-9 w-full min-w-0 rounded-md border border-ink-200 bg-white px-2 font-mono text-xs text-ink-700" data-chat-model-settings="utility">
+          {% for option in chat_utility_model_options %}
+          <option value="{{ option }}" {{ 'selected' if option == chat_utility_model_current else '' }}>{{ option }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <button type="button" class="h-9 self-end rounded-md border border-ink-300 bg-white px-3 text-xs font-semibold text-ink-700 hover:bg-ink-50" data-chat-model-options-refresh>Refresh</button>
+      <button type="submit" class="h-9 self-end rounded-md bg-ink-900 px-3 text-xs font-semibold text-white hover:bg-ink-800">Apply</button>
+      <p class="hidden lg:col-span-6 rounded-md px-3 py-2 text-xs" data-chat-model-options-status></p>
     </form>
   </section>
-  <script type="application/json" id="settings-chat-model-map">{{ chat_model_presets | tojson }}</script>
   <script>
     (function() {
       var provider = document.querySelector('[data-chat-provider-settings]');
-      var model = document.querySelector('[data-chat-model-settings]');
-      var raw = document.getElementById('settings-chat-model-map');
-      if (!provider || !model || !raw) return;
-      var presets = {};
-      try { presets = JSON.parse(raw.textContent || '{}') || {}; } catch (_e) { presets = {}; }
-      provider.addEventListener('change', function() {
-        var values = presets[provider.value] || [];
-        model.innerHTML = '';
+      var advisor = document.querySelector('[data-chat-model-settings="advisor"]');
+      var router = document.querySelector('[data-chat-model-settings="router"]');
+      var utility = document.querySelector('[data-chat-model-settings="utility"]');
+      var form = document.querySelector('[data-chat-model-settings-form]');
+      var refresh = document.querySelector('[data-chat-model-options-refresh]');
+      var status = document.querySelector('[data-chat-model-options-status]');
+      if (!provider || !advisor || !router || !utility || !form || !refresh) return;
+      function fill(select, values, preferred) {
+        var previous = preferred || select.value || '';
+        select.innerHTML = '';
         values.forEach(function(v) {
           var opt = document.createElement('option');
           opt.value = v;
           opt.textContent = v;
-          model.appendChild(opt);
+          select.appendChild(opt);
         });
-        if (values.length) model.value = values[0];
-      });
+        if (previous && values.indexOf(previous) >= 0) select.value = previous;
+        else if (values.length) select.value = values[0];
+        select.disabled = !values.length;
+      }
+      function setStatus(message, ok) {
+        if (!status) return;
+        status.textContent = message || '';
+        status.classList.toggle('hidden', !message);
+        status.classList.toggle('bg-emerald-50', !!ok);
+        status.classList.toggle('text-emerald-700', !!ok);
+        status.classList.toggle('bg-red-50', !!message && !ok);
+        status.classList.toggle('text-red-700', !!message && !ok);
+      }
+      function refreshOptions() {
+        var data = new FormData(form);
+        refresh.disabled = true;
+        setStatus('모델 목록을 조회하고 있습니다.', true);
+        fetch('/settings/chat-model/options', { method: 'POST', body: data, credentials: 'same-origin' })
+          .then(function(res) { return res.json().then(function(payload) { return { ok: res.ok, payload: payload }; }); })
+          .then(function(result) {
+            if (!result.ok) throw new Error(result.payload && result.payload.error || '모델 조회에 실패했습니다.');
+            fill(advisor, result.payload.advisor_models || []);
+            fill(router, result.payload.router_models || []);
+            fill(utility, result.payload.utility_models || []);
+            setStatus('저장된 API key 기준 모델 목록을 불러왔습니다.', true);
+          })
+          .catch(function(err) {
+            setStatus(err && err.message || '모델 조회에 실패했습니다.', false);
+          })
+          .finally(function() { refresh.disabled = false; });
+      }
+      provider.addEventListener('change', refreshOptions);
+      refresh.addEventListener('click', refreshOptions);
     })();
   </script>
   {% endif %}

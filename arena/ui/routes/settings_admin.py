@@ -11,6 +11,12 @@ from arena.agents.investment_chat.config_tools import load_chat_agent_config
 from arena.agents.investment_chat.selection import normalize_chat_model_selection
 from arena.config import Settings
 from arena.providers import list_adk_provider_specs, provider_alias_map
+from arena.providers.model_discovery import (
+    ModelDiscoveryError,
+    discover_model_options_with_api_key,
+    model_option_sets,
+    save_model_options_catalog,
+)
 from arena.providers.registry import canonical_provider
 from arena.ui.admin_agent_config import (
     AdminAgentConfigStore,
@@ -23,6 +29,17 @@ from arena.ui.admin_runtime_ops import (
     live_market_sources_for_market_value,
 )
 from arena.ui.investment_chat_providers import tenant_available_provider_specs
+
+
+def discover_saved_model_options(credential_store: Any, *, tenant_id: str, provider: str) -> dict[str, Any]:
+    loader = getattr(credential_store, "model_api_key", None)
+    if not callable(loader):
+        raise ModelDiscoveryError("credential store cannot read provider API keys")
+    api_key = str(loader(tenant_id=tenant_id, provider=provider) or "").strip()
+    if not api_key:
+        raise ModelDiscoveryError("stored provider API key is missing")
+    return discover_model_options_with_api_key(provider, api_key)
+
 
 @dataclass(frozen=True)
 class AdminSettingsRouteDeps:
@@ -754,12 +771,51 @@ def register_admin_settings_routes(app: FastAPI, *, deps: AdminSettingsRouteDeps
             )
             return _settings_redirect(tenant, ok=False, msg=str(exc))
 
+    @app.post("/settings/chat-model/options")
+    def settings_chat_model_options(
+        request: Request,
+        tenant_id: str = Form(default=""),
+        provider: str = Form(default=""),
+    ):
+        if not settings_enabled:
+            return JSONResponse({"error": "settings disabled"}, status_code=403)
+        _, user_email, tenant, _, redirect = _resolve_admin_context(
+            request,
+            requested_tenant=tenant_id,
+            next_path=f"/settings?tab=agents&tenant_id={tenant_id}",
+        )
+        if redirect:
+            return redirect
+        if _tenant_access_denied(tenant_id, tenant):
+            return JSONResponse({"error": "tenant access denied"}, status_code=403)
+        if credential_store is None:
+            return JSONResponse({"error": "credential store unavailable"}, status_code=503)
+
+        provider_token = canonical_provider(provider) or str(provider or "").strip().lower()
+        specs, _credential_scoped = tenant_available_provider_specs(repo, tenant_id=tenant)
+        valid_provider_ids = {spec.provider_id for spec in specs}
+        if not provider_token or provider_token not in valid_provider_ids:
+            return JSONResponse({"error": "invalid provider"}, status_code=400)
+        try:
+            options = discover_saved_model_options(credential_store, tenant_id=tenant, provider=provider_token)
+        except ModelDiscoveryError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        save_model_options_catalog(
+            repo,
+            tenant_id=tenant,
+            options=options,
+            updated_by=user_email or "ui-admin",
+        )
+        return JSONResponse({"status": "ok", **options})
+
     @app.post("/settings/chat-model")
     def settings_chat_model(
         request: Request,
         tenant_id: str = Form(default=""),
         provider: str = Form(default=""),
         model: str = Form(default=""),
+        router_model: str = Form(default=""),
+        utility_model: str = Form(default=""),
         updated_by: str = Form(default="ui-admin"),
     ):
         if not settings_enabled:
@@ -779,15 +835,32 @@ def register_admin_settings_routes(app: FastAPI, *, deps: AdminSettingsRouteDeps
         valid_provider_ids = {spec.provider_id for spec in specs}
         if not provider_token or provider_token not in valid_provider_ids:
             return JSONResponse({"error": "invalid provider"}, status_code=400)
-
-        model_token = normalize_chat_model_selection(provider_token, model)
-        if not model_token:
-            return JSONResponse({"error": "invalid model"}, status_code=400)
+        if credential_store is None:
+            return JSONResponse({"error": "credential store unavailable"}, status_code=503)
 
         existing = load_chat_agent_config(repo, tenant_id=tenant)
+        try:
+            options = discover_saved_model_options(credential_store, tenant_id=tenant, provider=provider_token)
+        except ModelDiscoveryError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        advisor_options, router_options, utility_options = model_option_sets(options)
+        model_token = normalize_chat_model_selection(provider_token, model)
+        if not model_token or model_token not in advisor_options:
+            return JSONResponse({"error": "invalid model"}, status_code=400)
+        router_model_token = normalize_chat_model_selection(provider_token, router_model)
+        utility_model_token = normalize_chat_model_selection(provider_token, utility_model)
+        if not router_model_token or router_model_token not in router_options:
+            return JSONResponse({"error": "invalid router_model"}, status_code=400)
+        if not utility_model_token or utility_model_token not in utility_options:
+            return JSONResponse({"error": "invalid utility_model"}, status_code=400)
+
         merged = dict(existing)
         merged["provider"] = provider_token
         merged["model"] = model_token
+        routing = dict(merged.get("model_routing") or {}) if isinstance(merged.get("model_routing"), dict) else {}
+        routing["router_model"] = router_model_token
+        routing["utility_model"] = utility_model_token
+        merged["model_routing"] = routing
 
         try:
             repo.set_config(
@@ -796,13 +869,24 @@ def register_admin_settings_routes(app: FastAPI, *, deps: AdminSettingsRouteDeps
                 json.dumps(merged, ensure_ascii=False),
                 updated_by=user_email or updated_by,
             )
+            save_model_options_catalog(
+                repo,
+                tenant_id=tenant,
+                options=options,
+                updated_by=user_email or updated_by,
+            )
             _invalidate_tenant_cache(tenant, "runtime", "memory", "portfolio")
             repo.append_runtime_audit_log(
                 action="settings_chat_model_save",
                 status="ok",
                 user_email=user_email or updated_by,
                 tenant_id=tenant,
-                detail={"provider": provider_token, "model": model_token},
+                detail={
+                    "provider": provider_token,
+                    "model": model_token,
+                    "router_model": router_model_token,
+                    "utility_model": utility_model_token,
+                },
             )
             return _settings_redirect(tenant, ok=True, msg="chat model saved", tab="agents")
         except Exception as exc:

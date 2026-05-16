@@ -295,7 +295,7 @@ def test_build_investment_chat_agent_uses_stored_chat_agent_config(monkeypatch) 
         (item["provider"], item["model_override"], tuple(sorted(item["llm_params"].items())))
         for item in captured
     } >= {
-        ("gpt", "gpt-5.4-mini", ()),
+        ("gpt", "gpt-5.5", ()),
         ("gpt", "gpt-5.5", (("reasoning_effort", "high"), ("verbosity", "low"))),
     }
 
@@ -424,7 +424,7 @@ def test_build_investment_chat_agent_builds_cheap_router_tree(monkeypatch) -> No
     }
 
 
-def test_build_investment_chat_agent_defaults_claude_cheap_router_to_haiku(monkeypatch) -> None:
+def test_build_investment_chat_agent_defaults_claude_router_to_advisor_model(monkeypatch) -> None:
     from arena.agents.investment_chat import factory
 
     settings = load_settings()
@@ -450,7 +450,7 @@ def test_build_investment_chat_agent_defaults_claude_cheap_router_to_haiku(monke
         registry=ToolRegistry([]),
     )
 
-    assert agent.model == "claude:claude-haiku-4-5-20251001"
+    assert agent.model == "claude:claude-sonnet-4-6"
     assert _chat_advisor_agent(agent).model == "claude:claude-sonnet-4-6"
 
 

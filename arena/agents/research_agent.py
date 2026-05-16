@@ -19,6 +19,23 @@ from arena.models import utc_now
 logger = logging.getLogger(__name__)
 
 
+def _normalize_research_category(category: object) -> str:
+    token = str(category or "").strip().lower()
+    if token == "sector":
+        return "sector_trends"
+    return token
+
+
+def _clean_research_categories(categories: list[str] | None) -> list[str]:
+    clean = [_normalize_research_category(category) for category in (categories or []) if str(category or "").strip()]
+    return list(dict.fromkeys(category for category in clean if category))
+
+
+def _clean_research_tickers(tickers: list[str] | None) -> list[str]:
+    clean = [str(ticker).strip().upper() for ticker in (tickers or []) if str(ticker).strip()]
+    return list(dict.fromkeys(clean))
+
+
 # ---------------------------------------------------------------------------
 # Phase definitions
 # ---------------------------------------------------------------------------
@@ -426,6 +443,67 @@ class ResearchAgent:
                 sum(1 for b in briefings if b.get("category") == "held"),
             )
 
+            return briefings
+        finally:
+            self._restore_gemini_env()
+
+    async def run_on_demand(
+        self,
+        *,
+        tickers: list[str] | None = None,
+        categories: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Generates requested research briefings for an agent tool call and stores the result."""
+        try:
+            if not self.settings.research_enabled:
+                return []
+            if not self.research_status.get("can_generate"):
+                logger.info(
+                    "[cyan]Research refresh skipped[/cyan] reason=%s tickers=%d categories=%d",
+                    str(self.research_status.get("code") or "unknown"),
+                    len(tickers or []),
+                    len(categories or []),
+                )
+                return []
+
+            clean_tickers = _clean_research_tickers(tickers)[: self.settings.research_max_tickers]
+            clean_categories = _clean_research_categories(categories)
+
+            category_tasks = []
+            for category in clean_categories:
+                if category == "global_market":
+                    category_tasks.append(self._research_global())
+                elif category == "geopolitical":
+                    category_tasks.append(self._research_geopolitical())
+                elif category == "sector_trends":
+                    category_tasks.append(self._research_sectors())
+
+            briefings: list[dict[str, Any]] = []
+            if category_tasks:
+                category_results = await asyncio.gather(*category_tasks, return_exceptions=True)
+                for res in category_results:
+                    if isinstance(res, dict):
+                        briefings.append(res)
+
+            if clean_tickers:
+                ticker_tasks = [self._research_held_ticker(ticker) for ticker in clean_tickers]
+                ticker_results = await asyncio.gather(*ticker_tasks, return_exceptions=True)
+                for res in ticker_results:
+                    if isinstance(res, dict):
+                        briefings.append(res)
+
+            if briefings:
+                try:
+                    self.repo.insert_research_briefings(briefings)
+                except Exception as exc:
+                    logger.error("[red]Research briefings insert failed[/red] err=%s", str(exc))
+
+            logger.info(
+                "[cyan]Research refresh completed[/cyan] total_briefings=%d categories=%d tickers=%d",
+                len(briefings),
+                sum(1 for b in briefings if b.get("category") != "held"),
+                sum(1 for b in briefings if b.get("category") == "held"),
+            )
             return briefings
         finally:
             self._restore_gemini_env()

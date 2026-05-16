@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from arena.agents.adk_runner_bootstrap import build_tool_wrapper, resolve_max_tool_events, runner_identity
 from arena.config import load_settings
 from arena.tools.registry import ToolEntry
@@ -43,7 +45,7 @@ def test_tool_wrapper_returns_runtime_clock_without_polluting_tool_event() -> No
         apply_tool_schema_metadata=lambda fn, **kwargs: fn,
     )
 
-    result = wrapper(ticker="005930")
+    result = asyncio.run(wrapper(ticker="005930"))
 
     assert result["ticker"] == "005930"
     assert "_runtime_clock" in result

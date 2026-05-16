@@ -101,26 +101,38 @@ def _batch_tenant_work(
                 snapshot=snapshot,
             )
 
-        held_tickers = _account_held_tickers(repo, all_tenants=False) if repo else []
-        if not held_tickers and repo:
-            held_tickers = repo.get_all_held_tickers(market=settings.kis_target_market)
-        from arena.agents.research_agent import ResearchAgent
+        if bool(getattr(settings, "research_precycle_enabled", False)):
+            held_tickers = _account_held_tickers(repo, all_tenants=False) if repo else []
+            if not held_tickers and repo:
+                held_tickers = repo.get_all_held_tickers(market=settings.kis_target_market)
+            from arena.agents.research_agent import ResearchAgent
 
-        research_agent = ResearchAgent(settings=settings, repo=repo)
-        briefings = asyncio.run(research_agent.run(held_tickers))
-        logger.info(
-            "[cyan]Research phase[/cyan] tenant=%s briefings=%d held=%s",
-            tenant,
-            len(briefings),
-            held_tickers,
-            extra=event_extra(
-                "batch_research_phase",
-                tenant_id=tenant,
-                phase=phase,
-                briefing_count=len(briefings),
-                held_tickers=held_tickers,
-            ),
-        )
+            research_agent = ResearchAgent(settings=settings, repo=repo)
+            briefings = asyncio.run(research_agent.run(held_tickers))
+            logger.info(
+                "[cyan]Research phase[/cyan] tenant=%s briefings=%d held=%s",
+                tenant,
+                len(briefings),
+                held_tickers,
+                extra=event_extra(
+                    "batch_research_phase",
+                    tenant_id=tenant,
+                    phase=phase,
+                    briefing_count=len(briefings),
+                    held_tickers=held_tickers,
+                ),
+            )
+        else:
+            logger.info(
+                "[cyan]Research phase skipped[/cyan] tenant=%s reason=precycle_disabled",
+                tenant,
+                extra=event_extra(
+                    "batch_research_phase_skipped",
+                    tenant_id=tenant,
+                    phase=phase,
+                    reason="precycle_disabled",
+                ),
+            )
 
         reports = orchestrator.run_cycle(snapshot=snapshot)
         cli._run_post_cycle_maintenance(

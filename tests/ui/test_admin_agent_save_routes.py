@@ -46,8 +46,8 @@ def test_admin_agent_save_one_preserves_default_agents_when_agents_config_missin
     assert [str(entry["id"]) for entry in saved] == ["gpt", "gemini", "claude"]
     saved_by_id = {str(entry["id"]): entry for entry in saved}
     assert saved_by_id["gpt"]["model"] == "gpt-5.4"
-    assert saved_by_id["gemini"]["model"] == "gemini-3-flash-preview"
-    assert saved_by_id["claude"]["model"] == "claude-sonnet-4-6"
+    assert saved_by_id["gemini"]["model"] == ""
+    assert saved_by_id["claude"]["model"] == ""
 
 
 def test_admin_agent_save_one_syncs_tenant_market_from_agent_target_market(monkeypatch) -> None:
