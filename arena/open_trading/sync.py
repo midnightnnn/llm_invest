@@ -1731,10 +1731,14 @@ class MarketDataSyncService:
         *,
         ticker: str,
         span: dict[str, Any] | None,
+        min_daily_rows: int = 0,
     ) -> bool:
         """Returns whether KOSPI history should be fully backfilled again."""
         if not span:
             return False
+        row_count = int(span.get("row_count") or 0)
+        if min_daily_rows > 0 and row_count < min_daily_rows:
+            return True
         min_d = span.get("min_d")
         target_start = (
             datetime.now(timezone.utc).date()
@@ -1749,11 +1753,14 @@ class MarketDataSyncService:
         *,
         ticker: str,
         span: dict[str, Any] | None,
+        min_daily_rows: int = 0,
     ) -> bool:
         """Returns whether US history should be fully backfilled again."""
         if not span:
             return False
         row_count = int(span.get("row_count") or 0)
+        if min_daily_rows > 0 and row_count < min_daily_rows:
+            return True
         if row_count < 21:
             return True
         min_d = span.get("min_d")
@@ -1785,15 +1792,25 @@ class MarketDataSyncService:
                 symbols.append({"ticker": ticker, "quote_excd": ""})
         return symbols
 
-    def sync_market_features_for_tickers(self, tickers: list[str]) -> MarketSyncResult:
+    def sync_market_features_for_tickers(
+        self,
+        tickers: list[str],
+        *,
+        min_daily_rows: int = 0,
+    ) -> MarketSyncResult:
         """Fetches daily market features only for explicitly supplied account-held tickers."""
         self._universe_rank_metadata = {}
         symbols = self._symbols_for_tickers(tickers)
         for idx, symbol in enumerate(symbols, start=1):
             self._record_universe_rank_metadata(symbol.get("ticker"), "held", core_rank=idx)
-        return self._sync_market_features_for_symbols(symbols)
+        return self._sync_market_features_for_symbols(symbols, min_daily_rows=min_daily_rows)
 
-    def _sync_market_features_for_symbols(self, symbols: list[dict[str, str]]) -> MarketSyncResult:
+    def _sync_market_features_for_symbols(
+        self,
+        symbols: list[dict[str, str]],
+        *,
+        min_daily_rows: int = 0,
+    ) -> MarketSyncResult:
         """Fetches market data for preselected symbols and writes feature rows."""
         if not symbols:
             logger.warning(
@@ -1853,6 +1870,7 @@ class MarketDataSyncService:
                     if self._should_force_kospi_backfill(
                         ticker=ticker,
                         span=(spans_by_source.get(src) or {}).get(ticker),
+                        min_daily_rows=max(0, int(min_daily_rows or 0)),
                     ):
                         since_date = None
                         logger.info(
@@ -1870,6 +1888,7 @@ class MarketDataSyncService:
                     if self._should_force_us_backfill(
                         ticker=ticker,
                         span=(spans_by_source.get(src) or {}).get(ticker),
+                        min_daily_rows=max(0, int(min_daily_rows or 0)),
                     ):
                         since_date = None
                         logger.info(

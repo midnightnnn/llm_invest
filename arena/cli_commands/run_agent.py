@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from arena.cli_commands.sync import ACCOUNT_HELD_MARKET_SCOPE
@@ -13,6 +14,34 @@ from arena.orchestrator import ArenaOrchestrator
 from arena.cli_commands.run_shared import _MARKET_ALIAS
 
 logger = logging.getLogger(__name__)
+
+
+_POST_CYCLE_MAINTENANCE_STAGES = (
+    (
+        "memory_compaction",
+        "_run_memory_compaction",
+        "memory compaction",
+        "post_cycle_memory_compaction_failed",
+    ),
+    (
+        "memory_relation_extraction",
+        "_run_memory_relation_extraction_post_cycle",
+        "memory relation extraction",
+        "post_cycle_memory_relation_extraction_failed",
+    ),
+    (
+        "memory_relation_tuner",
+        "_run_memory_relation_tuner_post_cycle",
+        "memory relation tuner",
+        "post_cycle_memory_relation_tuner_failed",
+    ),
+    (
+        "memory_forgetting_tuner",
+        "_run_memory_forgetting_tuner_post_cycle",
+        "memory forgetting tuner",
+        "post_cycle_memory_forgetting_tuner_failed",
+    ),
+)
 
 
 def _cli():
@@ -50,6 +79,69 @@ def _research_held_tickers(repo: BigQueryRepository | None, settings: Settings) 
     return []
 
 
+def _elapsed_ms(started_at: float) -> int:
+    return max(0, int((time.perf_counter() - started_at) * 1000))
+
+
+def _run_post_cycle_maintenance_stage(
+    cli_module,
+    *,
+    stage: str,
+    func_name: str,
+    label: str,
+    failure_event: str,
+    tenant: str,
+    kwargs: dict[str, object],
+) -> None:
+    started_at = time.perf_counter()
+    status = "ok"
+    logger.info(
+        "[cyan]Post-cycle maintenance stage start[/cyan] tenant=%s stage=%s",
+        tenant,
+        stage,
+        extra=event_extra(
+            "post_cycle_maintenance_stage_start",
+            tenant_id=tenant,
+            stage=stage,
+        ),
+    )
+    try:
+        run_stage = getattr(cli_module, func_name)
+        run_stage(**kwargs)
+    except Exception as exc:
+        status = "error"
+        logger.warning(
+            "[yellow]Post-cycle %s failed; continuing[/yellow] tenant=%s err=%s",
+            label,
+            tenant,
+            str(exc),
+            extra=failure_extra(
+                failure_event,
+                exc,
+                tenant_id=tenant,
+                stage=stage,
+                elapsed_ms=_elapsed_ms(started_at),
+            ),
+            exc_info=True,
+        )
+    finally:
+        elapsed_ms = _elapsed_ms(started_at)
+        logger.info(
+            "[cyan]Post-cycle maintenance stage finish[/cyan] tenant=%s stage=%s status=%s elapsed_ms=%d",
+            tenant,
+            stage,
+            status,
+            elapsed_ms,
+            extra=event_extra(
+                "post_cycle_maintenance_stage_finish",
+                tenant_id=tenant,
+                stage=stage,
+                status=status,
+                elapsed_ms=elapsed_ms,
+            ),
+        )
+
+
 def _run_post_cycle_maintenance(
     cli_module,
     *,
@@ -59,69 +151,36 @@ def _run_post_cycle_maintenance(
     tenant: str,
 ) -> None:
     """Runs post-cycle maintenance without failing the trading cycle."""
-    try:
-        run_compaction = getattr(cli_module, "_run_memory_compaction")
-        run_compaction(settings=settings, repo=repo, orchestrator=orchestrator, tenant=tenant)
-    except Exception as exc:
-        logger.warning(
-            "[yellow]Post-cycle memory compaction failed; continuing[/yellow] tenant=%s err=%s",
-            tenant,
-            str(exc),
-            extra=failure_extra(
-                "post_cycle_memory_compaction_failed",
-                exc,
-                tenant_id=tenant,
-            ),
-            exc_info=True,
+    started_at = time.perf_counter()
+    logger.info(
+        "[cyan]Post-cycle maintenance start[/cyan] tenant=%s",
+        tenant,
+        extra=event_extra("post_cycle_maintenance_start", tenant_id=tenant),
+    )
+    for stage, func_name, label, failure_event in _POST_CYCLE_MAINTENANCE_STAGES:
+        stage_kwargs: dict[str, object] = {"settings": settings, "repo": repo, "tenant": tenant}
+        if stage == "memory_compaction":
+            stage_kwargs["orchestrator"] = orchestrator
+        _run_post_cycle_maintenance_stage(
+            cli_module,
+            stage=stage,
+            func_name=func_name,
+            label=label,
+            failure_event=failure_event,
+            tenant=tenant,
+            kwargs=stage_kwargs,
         )
-
-    try:
-        run_relation_extraction = getattr(cli_module, "_run_memory_relation_extraction_post_cycle")
-        run_relation_extraction(settings=settings, repo=repo, tenant=tenant)
-    except Exception as exc:
-        logger.warning(
-            "[yellow]Post-cycle memory relation extraction failed; continuing[/yellow] tenant=%s err=%s",
-            tenant,
-            str(exc),
-            extra=failure_extra(
-                "post_cycle_memory_relation_extraction_failed",
-                exc,
-                tenant_id=tenant,
-            ),
-            exc_info=True,
-        )
-
-    try:
-        run_relation_tuner = getattr(cli_module, "_run_memory_relation_tuner_post_cycle")
-        run_relation_tuner(settings=settings, repo=repo, tenant=tenant)
-    except Exception as exc:
-        logger.warning(
-            "[yellow]Post-cycle memory relation tuner failed; continuing[/yellow] tenant=%s err=%s",
-            tenant,
-            str(exc),
-            extra=failure_extra(
-                "post_cycle_memory_relation_tuner_failed",
-                exc,
-                tenant_id=tenant,
-            ),
-            exc_info=True,
-        )
-
-    try:
-        run_forgetting = getattr(cli_module, "_run_memory_forgetting_tuner_post_cycle")
-        run_forgetting(settings=settings, repo=repo, tenant=tenant)
-    except Exception as exc:
-        logger.warning(
-            "[yellow]Post-cycle memory forgetting tuner failed; continuing[/yellow] tenant=%s err=%s",
-            tenant,
-            str(exc),
-            extra=failure_extra(
-                "post_cycle_memory_forgetting_tuner_failed",
-                exc,
-                tenant_id=tenant,
-            ),
-            exc_info=True,
-        )
+    elapsed_ms = _elapsed_ms(started_at)
+    logger.info(
+        "[cyan]Post-cycle maintenance finish[/cyan] tenant=%s elapsed_ms=%d",
+        tenant,
+        elapsed_ms,
+        extra=event_extra(
+            "post_cycle_maintenance_finish",
+            tenant_id=tenant,
+            elapsed_ms=elapsed_ms,
+        ),
+    )
 
 
 def cmd_run_cycle(live: bool) -> None:

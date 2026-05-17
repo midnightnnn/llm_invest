@@ -7,7 +7,7 @@ import random
 import re
 import threading
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 import requests
@@ -704,21 +704,30 @@ class OpenTradingClient:
         symbol = ticker.strip().upper()
         if not symbol:
             raise ValueError("ticker is required")
+        if max_pages <= 0:
+            raise ValueError("max_pages must be positive")
 
-        rows: list[dict[str, Any]] = []
-        tr_cont = ""
+        current_bymd = str(bymd or "").strip()
+        current_end: date | None = None
+        if current_bymd:
+            try:
+                current_end = datetime.strptime(current_bymd, "%Y%m%d").date()
+            except ValueError as exc:
+                raise ValueError("bymd must be YYYYMMDD when provided") from exc
+
+        rows_by_date: dict[str, dict[str, Any]] = {}
+        fallback_rows: list[dict[str, Any]] = []
         for _ in range(max_pages):
-            body, headers = self._request(
+            body, _ = self._request(
                 method="GET",
                 path="/uapi/overseas-price/v1/quotations/dailyprice",
                 tr_id="HHDFS76240000",
-                tr_cont=tr_cont,
                 params={
                     "AUTH": "",
                     "EXCD": (excd or self.settings.kis_overseas_quote_excd).strip().upper(),
                     "SYMB": symbol,
                     "GUBN": gubn,
-                    "BYMD": bymd,
+                    "BYMD": current_bymd,
                     "MODP": modp,
                 },
             )
@@ -726,14 +735,39 @@ class OpenTradingClient:
             page_rows = body.get("output2") or []
             if isinstance(page_rows, dict):
                 page_rows = [page_rows]
-            rows.extend(dict(row) for row in page_rows if isinstance(row, dict))
-
-            next_flag = (headers.get("tr_cont") or "").upper()
-            if next_flag not in {"M", "F"}:
+            page_rows = [dict(row) for row in page_rows if isinstance(row, dict)]
+            if not page_rows:
                 break
-            tr_cont = "N"
 
-        return rows
+            oldest_dt: date | None = None
+            for row in page_rows:
+                raw_date = str(row.get("xymd") or row.get("stck_bsop_date") or "").strip()
+                if len(raw_date) != 8 or not raw_date.isdigit():
+                    fallback_rows.append(row)
+                    continue
+                try:
+                    row_dt = datetime.strptime(raw_date, "%Y%m%d").date()
+                except ValueError:
+                    fallback_rows.append(row)
+                    continue
+                if current_end is not None and row_dt > current_end:
+                    continue
+                rows_by_date[raw_date] = row
+                if oldest_dt is None or row_dt < oldest_dt:
+                    oldest_dt = row_dt
+
+            if oldest_dt is None:
+                break
+
+            next_end = oldest_dt - timedelta(days=1)
+            if current_end is not None and next_end >= current_end:
+                break
+            current_end = next_end
+            current_bymd = next_end.strftime("%Y%m%d")
+
+        if rows_by_date:
+            return [rows_by_date[key] for key in sorted(rows_by_date.keys(), reverse=True)]
+        return fallback_rows
 
     def get_overseas_period_rights(
         self,

@@ -89,6 +89,111 @@ def _date_key(value: Any) -> date:
             return date.min
 
 
+def _has_complete_forecast_signals(row: dict[str, Any]) -> bool:
+    return (
+        _finite_float(row.get("signal_forecast_er")) is not None
+        and _finite_float(row.get("signal_forecast_prob")) is not None
+    )
+
+
+def _filter_forecast_complete_scoring_rows(
+    rows: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    kept: list[dict[str, Any]] = []
+    dropped: list[str] = []
+    for row in rows:
+        if _has_complete_forecast_signals(row):
+            kept.append(row)
+            continue
+        ticker = str(row.get("ticker") or "").strip().upper()
+        if ticker:
+            dropped.append(ticker)
+
+    diagnostics = {
+        "required": True,
+        "loaded_rows": len(rows),
+        "scored_rows": len(kept),
+        "dropped_rows": len(rows) - len(kept),
+        "dropped_tickers_sample": dropped[:25],
+    }
+    return kept, diagnostics
+
+
+def _latest_forecasts_for_tickers(repo: Any, tickers: list[str]) -> dict[str, dict[str, float]]:
+    loader = getattr(repo, "get_predicted_returns", None)
+    if not callable(loader) or not tickers:
+        return {}
+
+    out: dict[str, dict[str, float]] = {}
+    clean_tickers = list(dict.fromkeys(str(t or "").strip().upper() for t in tickers if str(t or "").strip()))
+    for start in range(0, len(clean_tickers), 500):
+        chunk = clean_tickers[start:start + 500]
+        try:
+            rows = loader(tickers=chunk, limit=500, mode="stacked") or []
+        except TypeError:
+            rows = loader(tickers=chunk, limit=500) or []
+        except Exception:
+            logger.warning(
+                "[yellow]Joint policy latest forecast overlay failed[/yellow] tickers=%d",
+                len(chunk),
+                exc_info=True,
+            )
+            continue
+        for row in rows:
+            ticker = str(row.get("ticker") or "").strip().upper()
+            exp_return = _finite_float(row.get("exp_return_period"))
+            prob_up = _finite_float(row.get("prob_up"))
+            if not ticker or exp_return is None or prob_up is None:
+                continue
+            out[ticker] = {
+                "signal_forecast_er": float(exp_return),
+                "signal_forecast_prob": float(prob_up) - 0.5,
+            }
+    return out
+
+
+def _overlay_latest_forecasts_for_scoring_rows(
+    repo: Any,
+    rows: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    tickers = [str(row.get("ticker") or "").strip().upper() for row in rows]
+    forecasts = _latest_forecasts_for_tickers(repo, tickers)
+    if not forecasts:
+        return rows, {
+            "enabled": True,
+            "available_tickers": 0,
+            "updated_rows": 0,
+            "filled_missing_rows": 0,
+            "updated_tickers_sample": [],
+        }
+
+    updated_rows: list[dict[str, Any]] = []
+    updated_tickers: list[str] = []
+    filled_missing = 0
+    for row in rows:
+        ticker = str(row.get("ticker") or "").strip().upper()
+        forecast = forecasts.get(ticker)
+        if not forecast:
+            updated_rows.append(row)
+            continue
+        was_missing = not _has_complete_forecast_signals(row)
+        new_row = dict(row)
+        new_row["signal_forecast_er"] = forecast["signal_forecast_er"]
+        new_row["signal_forecast_prob"] = forecast["signal_forecast_prob"]
+        updated_rows.append(new_row)
+        updated_tickers.append(ticker)
+        if was_missing:
+            filled_missing += 1
+
+    return updated_rows, {
+        "enabled": True,
+        "available_tickers": len(forecasts),
+        "updated_rows": len(updated_tickers),
+        "filled_missing_rows": filled_missing,
+        "updated_tickers_sample": updated_tickers[:25],
+    }
+
+
 def _policy_version(*, as_of_date: date, signals_count: int) -> str:
     seed = f"joint-policy:{as_of_date.isoformat()}:{signals_count}:{SCORE_SOURCE}"
     digest = hashlib.sha1(seed.encode("utf-8")).hexdigest()[:12]
@@ -393,7 +498,21 @@ def build_and_store_joint_policy_ranker(
         if not callable(loader):
             raise RuntimeError("repo.load_signal_policy_training_rows is required for joint_policy_v1")
         training_rows = list(loader(lookback_days=lookback_days, market=market) or [])
-        scoring_rows = list(repo.load_signal_scoring_rows(limit=max_scoring_rows, market=market) or [])
+        loaded_scoring_rows = list(repo.load_signal_scoring_rows(limit=max_scoring_rows, market=market) or [])
+        forecast_scoring_rows, overlay_diagnostics = _overlay_latest_forecasts_for_scoring_rows(
+            repo,
+            loaded_scoring_rows,
+        )
+        scoring_rows, forecast_filter = _filter_forecast_complete_scoring_rows(forecast_scoring_rows)
+        forecast_filter["latest_forecast_overlay"] = overlay_diagnostics
+        if forecast_filter["dropped_rows"]:
+            logger.warning(
+                "[yellow]Joint policy scoring rows missing forecast; dropped[/yellow] loaded=%d scored=%d dropped=%d sample=%s",
+                forecast_filter["loaded_rows"],
+                forecast_filter["scored_rows"],
+                forecast_filter["dropped_rows"],
+                ",".join(forecast_filter["dropped_tickers_sample"]),
+            )
         char_returns, training_dates, observations = _characteristic_returns_by_date(
             training_rows,
             params=active_params,
@@ -412,7 +531,12 @@ def build_and_store_joint_policy_ranker(
                 len(scoring_rows),
                 None,
                 None,
-                {"note": note, "market": market, "score_source": SCORE_SOURCE},
+                {
+                    "note": note,
+                    "market": market,
+                    "score_source": SCORE_SOURCE,
+                    "forecast_scoring_filter": forecast_filter,
+                },
                 score_source=SCORE_SOURCE,
             )
             return OpportunityRankerBuildResult(
@@ -426,7 +550,11 @@ def build_and_store_joint_policy_ranker(
                 note=note,
             )
         if not scoring_rows:
-            note = "no scoring rows after latest refresh"
+            note = (
+                "no forecast-complete scoring rows after latest refresh"
+                if loaded_scoring_rows
+                else "no scoring rows after latest refresh"
+            )
             _append_run(
                 repo,
                 run_id,
@@ -439,7 +567,12 @@ def build_and_store_joint_policy_ranker(
                 0,
                 None,
                 None,
-                {"note": note, "market": market, "score_source": SCORE_SOURCE},
+                {
+                    "note": note,
+                    "market": market,
+                    "score_source": SCORE_SOURCE,
+                    "forecast_scoring_filter": forecast_filter,
+                },
                 score_source=SCORE_SOURCE,
             )
             return OpportunityRankerBuildResult(
@@ -486,6 +619,7 @@ def build_and_store_joint_policy_ranker(
                 "max_abs_weight": active_params.max_abs_weight,
             },
             "horizon_days": horizon_days,
+            "forecast_scoring_filter": forecast_filter,
         }
         _append_run(
             repo,

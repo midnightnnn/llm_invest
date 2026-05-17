@@ -244,6 +244,11 @@ def build_parser() -> argparse.ArgumentParser:
     run_shared_prep.add_argument("--market", type=str, default="", help="Override target market for this run (us, kospi)")
     run_shared_prep.add_argument("--dispatch-job", type=str, default="", help="Optional downstream Cloud Run agent job name")
     run_shared_prep.add_argument(
+        "--force-market-closed",
+        action="store_true",
+        help="Bypass the holiday/weekend market-closed guard for manual prep testing.",
+    )
+    run_shared_prep.add_argument(
         "--stage",
         choices=["all", "slow", "fast"],
         default="all",
@@ -369,6 +374,7 @@ def _dispatch_command(args: argparse.Namespace, parser: argparse.ArgumentParser)
             market_override=str(getattr(ns, "market", "") or ""),
             dispatch_job=str(getattr(ns, "dispatch_job", "") or ""),
             stage=str(getattr(ns, "stage", "all") or "all"),
+            force_market_closed=bool(getattr(ns, "force_market_closed", False)),
         ),
         "run-agent-cycle": lambda ns: cmd_run_agent_cycle(
             live=bool(ns.live),

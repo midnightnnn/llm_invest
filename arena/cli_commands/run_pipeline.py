@@ -24,6 +24,24 @@ def _cli():
     return cli
 
 
+def _shared_prep_ranker_args(settings: Settings) -> object:
+    return type(
+        "Args",
+        (),
+        {
+            "lookback_days": 540,
+            "horizon": 20,
+            "max_scoring_rows": int(getattr(settings, "opportunity_ranker_max_scoring_rows", 1000) or 1000),
+            "min_ic_dates": 60,
+            "min_valid_signals": 3,
+        },
+    )()
+
+
+def _truthy_env(name: str) -> bool:
+    return str(os.getenv(name, "")).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
 def _batch_tenant_work(
     phase: str | None,
     live: bool,
@@ -631,6 +649,7 @@ def cmd_run_shared_prep(
     market_override: str = "",
     dispatch_job: str = "",
     stage: str = "all",
+    force_market_closed: bool = False,
 ) -> None:
     """Runs shared prep steps. stage='slow' skips sync-market (run early, ML-heavy);
     stage='fast' runs only sync-market + dispatch (run just before agent);
@@ -723,7 +742,8 @@ def cmd_run_shared_prep(
             kr_win = cli.kospi_window()
             kr_open = not cli.is_kospi_holiday(kr_win.trading_date)
 
-        if not us_open and not kr_open:
+        force_closed_run = bool(force_market_closed) or _truthy_env("ARENA_SHARED_PREP_FORCE_MARKET_CLOSED")
+        if not us_open and not kr_open and not force_closed_run:
             logger.info(
                 "[yellow]All markets closed (holiday/weekend)[/yellow] — skipping shared prep",
                 extra=event_extra(
@@ -733,6 +753,20 @@ def cmd_run_shared_prep(
                 ),
             )
             return
+        if not us_open and not kr_open and force_closed_run:
+            logger.warning(
+                "[yellow]Shared prep market-closed guard bypassed[/yellow] stage=%s market=%s",
+                stage_norm,
+                market_override or "all",
+                extra=event_extra(
+                    "shared_prep_market_closed_bypassed",
+                    stage=stage_norm,
+                    live=live,
+                    market=market_override or "all",
+                    force_market_closed=bool(force_market_closed),
+                    env_force=_truthy_env("ARENA_SHARED_PREP_FORCE_MARKET_CLOSED"),
+                ),
+            )
 
         repo = cli._repo_or_exit(bootstrap_settings, tenant_id=cli._tenant_id() or "local")
         repo.ensure_dataset()
@@ -953,21 +987,6 @@ def cmd_run_shared_prep(
                 )
                 raise SystemExit(7)
 
-            logger.info("[bold cyan]Shared prep: build-forecasts[/bold cyan]")
-            fc_args = type(
-                "Args",
-                (),
-                {
-                    "top_n": 50,
-                    "lookback_days": 360,
-                    "horizon": 20,
-                    "min_series_length": 160,
-                    "max_steps": 200,
-                },
-            )()
-            forecast_result = cli.cmd_build_forecasts(fc_args)
-            forecast_rows_written = int(getattr(forecast_result, "rows_written", 0) or 0)
-
             logger.info("[bold cyan]Shared prep: refresh-fundamentals-derived[/bold cyan]")
             fund_args = type(
                 "Args",
@@ -990,18 +1009,53 @@ def cmd_run_shared_prep(
                     exc_info=True,
                 )
 
-            logger.info("[bold cyan]Shared prep: build-opportunity-ranker[/bold cyan]")
-            ranker_args = type(
+            ranker_args = _shared_prep_ranker_args(bootstrap_settings)
+            logger.info("[bold cyan]Shared prep: build-opportunity-ranker (forecast selection seed)[/bold cyan]")
+            try:
+                seed_ranker_result = cli.cmd_build_opportunity_ranker(ranker_args)
+                logger.info(
+                    "[cyan]Shared prep ranker seed[/cyan] status=%s scores=%d version=%s",
+                    str(getattr(seed_ranker_result, "status", "") or "").strip().lower() or "-",
+                    int(getattr(seed_ranker_result, "scores_written", 0) or 0),
+                    str(getattr(seed_ranker_result, "ranker_version", "") or ""),
+                    extra=event_extra(
+                        "shared_prep_ranker_seed_done",
+                        stage=stage_norm,
+                        market=market_override or "all",
+                        status=str(getattr(seed_ranker_result, "status", "") or "").strip().lower() or "-",
+                        scores_written=int(getattr(seed_ranker_result, "scores_written", 0) or 0),
+                        ranker_version=str(getattr(seed_ranker_result, "ranker_version", "") or ""),
+                    ),
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[yellow]Shared prep ranker seed failed; forecast selection will use previous fallback[/yellow] err=%s",
+                    str(exc),
+                    extra=failure_extra(
+                        "shared_prep_ranker_seed_failed",
+                        exc,
+                        stage=stage_norm,
+                        market=market_override or "all",
+                    ),
+                    exc_info=True,
+                )
+
+            logger.info("[bold cyan]Shared prep: build-forecasts[/bold cyan]")
+            fc_args = type(
                 "Args",
                 (),
                 {
-                    "lookback_days": 540,
+                    "top_n": 50,
+                    "lookback_days": 360,
                     "horizon": 20,
-                    "max_scoring_rows": int(getattr(bootstrap_settings, "opportunity_ranker_max_scoring_rows", 1000) or 1000),
-                    "min_ic_dates": 60,
-                    "min_valid_signals": 3,
+                    "min_series_length": 160,
+                    "max_steps": 200,
                 },
             )()
+            forecast_result = cli.cmd_build_forecasts(fc_args)
+            forecast_rows_written = int(getattr(forecast_result, "rows_written", 0) or 0)
+
+            logger.info("[bold cyan]Shared prep: build-opportunity-ranker (final)[/bold cyan]")
             ranker_result = cli.cmd_build_opportunity_ranker(ranker_args)
             ranker_scores_written = int(getattr(ranker_result, "scores_written", 0) or 0)
             ranker_status = str(getattr(ranker_result, "status", "") or "").strip().lower()

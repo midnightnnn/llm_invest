@@ -49,6 +49,14 @@ def test_load_settings_provider_models_default_empty(monkeypatch) -> None:
     assert settings.anthropic_model == ""
 
 
+def test_load_settings_defaults_usd_krw_fx_symbol(monkeypatch) -> None:
+    monkeypatch.delenv("ARENA_USD_KRW_FX_SYMBOL", raising=False)
+
+    settings = load_settings()
+
+    assert settings.usd_krw_fx_symbol == "USDKRW"
+
+
 def test_validate_settings_requires_model_for_configured_adk_provider(monkeypatch) -> None:
     monkeypatch.setenv("ARENA_MODE", "local")
     settings = load_settings()

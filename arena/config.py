@@ -668,7 +668,7 @@ def load_settings() -> Settings:
         forecast_table=os.getenv("ARENA_FORECAST_TABLE", "").strip(),
         fred_api_key=os.getenv("FRED_API_KEY", "").strip(),
         ecos_api_key=os.getenv("ECOS_API_KEY", "").strip(),
-        usd_krw_fx_symbol=os.getenv("ARENA_USD_KRW_FX_SYMBOL", "").strip().upper(),
+        usd_krw_fx_symbol=os.getenv("ARENA_USD_KRW_FX_SYMBOL", "USDKRW").strip().upper(),
         usd_krw_fx_market_div_code=(os.getenv("ARENA_USD_KRW_FX_MARKET_DIV_CODE", "X").strip().upper() or "X"),
         dividend_sync_enabled=_to_bool(os.getenv("ARENA_DIVIDEND_SYNC_ENABLED"), True),
         dividend_lookback_days=_to_int(os.getenv("ARENA_DIVIDEND_LOOKBACK_DAYS"), 90),

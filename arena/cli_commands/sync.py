@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import replace
+from datetime import timedelta
 from math import ceil
 from typing import Any
 
@@ -18,6 +19,7 @@ from arena.market_feature_normalization import (
     normalize_market_feature_rows_from_closes,
 )
 from arena.market_sources import live_market_sources_for_markets, parse_markets
+from arena.models import utc_now
 from arena.runtime_universe import resolve_runtime_universe
 from arena.tools.screening import DISCOVERY_BUCKETS, build_discovery_rows, momentum_scores
 
@@ -336,6 +338,174 @@ def _forecast_settings_for_tickers(settings: Settings, tickers: list[str]) -> Se
     return settings
 
 
+def _daily_source_for_forecast_ticker(ticker: str) -> str:
+    token = str(ticker or "").strip().upper()
+    if token.isdigit() and len(token) == 6:
+        return "open_trading_kospi"
+    return "open_trading_us"
+
+
+def _forecast_history_shortfall_tickers(
+    repo,
+    settings: Settings,
+    *,
+    tickers: list[str],
+    lookback_days: int,
+    min_series_length: int,
+) -> list[str]:
+    threshold = max(1, int(min_series_length or 1))
+    clean_tickers = list(dict.fromkeys(str(t or "").strip().upper() for t in tickers if str(t or "").strip()))
+
+    close_loader = getattr(repo, "get_daily_close_frame", None)
+    if callable(close_loader) and clean_tickers:
+        end_d = utc_now().date()
+        start_d = end_d - timedelta(days=max(int(lookback_days or 360) * 2, 365))
+        sources = daily_history_sources(
+            live_market_sources_for_markets(parse_markets(settings.kis_target_market)) or None
+        )
+        try:
+            prices = close_loader(
+                tickers=clean_tickers,
+                start=start_d,
+                end=end_d,
+                sources=sources,
+            )
+        except Exception as exc:
+            logger.warning(
+                "[yellow]Forecast close history coverage lookup failed[/yellow] tickers=%d err=%s",
+                len(clean_tickers),
+                str(exc)[:160],
+            )
+        else:
+            if getattr(prices, "empty", True):
+                return clean_tickers
+            columns_by_ticker = {str(col).strip().upper(): col for col in getattr(prices, "columns", [])}
+            shortfalls: list[str] = []
+            for ticker in clean_tickers:
+                column = columns_by_ticker.get(ticker)
+                if column is None:
+                    shortfalls.append(ticker)
+                    continue
+                try:
+                    close_count = int(prices[column].dropna().shape[0])
+                except Exception:
+                    close_count = 0
+                if close_count <= threshold:
+                    shortfalls.append(ticker)
+            return shortfalls
+
+    span_loader = getattr(repo, "feature_date_spans", None)
+    if not callable(span_loader):
+        logger.info("[cyan]Forecast market history coverage skipped[/cyan] reason=span_loader_unavailable")
+        return []
+
+    by_source: dict[str, list[str]] = {}
+    for raw in tickers:
+        ticker = str(raw or "").strip().upper()
+        if not ticker:
+            continue
+        by_source.setdefault(_daily_source_for_forecast_ticker(ticker), []).append(ticker)
+
+    shortfalls: list[str] = []
+    for source, source_tickers in by_source.items():
+        deduped = list(dict.fromkeys(source_tickers))
+        try:
+            spans = span_loader(deduped, source) or {}
+        except Exception as exc:
+            logger.warning(
+                "[yellow]Forecast market history coverage lookup failed[/yellow] source=%s tickers=%d err=%s",
+                source,
+                len(deduped),
+                str(exc)[:160],
+            )
+            continue
+        for ticker in deduped:
+            span = spans.get(ticker) or {}
+            try:
+                row_count = int(span.get("row_count") or 0)
+            except (TypeError, ValueError):
+                row_count = 0
+            if not span or row_count < threshold:
+                shortfalls.append(ticker)
+
+    return list(dict.fromkeys(shortfalls))
+
+
+def _ensure_forecast_market_history(
+    repo,
+    settings: Settings,
+    *,
+    tickers: list[str],
+    lookback_days: int,
+    min_series_length: int,
+) -> object | None:
+    if not tickers:
+        return None
+
+    shortfalls = _forecast_history_shortfall_tickers(
+        repo,
+        settings,
+        tickers=tickers,
+        lookback_days=lookback_days,
+        min_series_length=min_series_length,
+    )
+    if not shortfalls:
+        logger.info(
+            "[cyan]Forecast market history coverage[/cyan] status=ok tickers=%d min_series_length=%d",
+            len(tickers),
+            max(1, int(min_series_length or 1)),
+        )
+        return None
+
+    cli = _cli()
+    history_settings = replace(
+        _forecast_settings_for_tickers(settings, shortfalls),
+        market_sync_history_days=max(int(getattr(settings, "market_sync_history_days", 0) or 0), 400),
+    )
+    tenant_id = ""
+    try:
+        tenant_id = str(cli._tenant_id() or "").strip().lower()
+    except Exception:
+        tenant_id = ""
+    if tenant_id:
+        try:
+            cli._apply_tenant_runtime_credentials(history_settings, repo, tenant_id=tenant_id)
+        except Exception as exc:
+            logger.warning(
+                "[yellow]Forecast market history credential hydration skipped[/yellow] tenant=%s err=%s",
+                tenant_id,
+                str(exc)[:160],
+            )
+
+    try:
+        service = cli.MarketDataSyncService(settings=history_settings, repo=repo)
+        syncer = getattr(service, "sync_market_features_for_tickers", None)
+        if not callable(syncer):
+            logger.warning("[yellow]Forecast market history backfill skipped[/yellow] reason=syncer_unavailable")
+            return None
+        result = syncer(shortfalls, min_daily_rows=max(1, int(min_series_length or 1)))
+    except Exception as exc:
+        logger.warning(
+            "[yellow]Forecast market history backfill failed; continuing with existing data[/yellow] tickers=%d err=%s",
+            len(shortfalls),
+            str(exc)[:160],
+            exc_info=True,
+        )
+        return None
+
+    logger.info(
+        "[cyan]Forecast market history backfill[/cyan] market=%s requested=%d inserted=%d attempted=%d failed=%d min_series_length=%d tickers=%s",
+        history_settings.kis_target_market,
+        len(shortfalls),
+        int(getattr(result, "inserted_rows", 0) or 0),
+        int(getattr(result, "attempted_tickers", 0) or 0),
+        len(getattr(result, "failed_tickers", []) or []),
+        max(1, int(min_series_length or 1)),
+        ",".join(shortfalls[:40]),
+    )
+    return result
+
+
 def _ranker_forecast_tickers(repo, settings: Settings, *, universe: list[str]) -> list[str]:
     loader = getattr(repo, "latest_opportunity_ranker_scores", None)
     if not callable(loader):
@@ -356,6 +526,7 @@ def _ranker_forecast_tickers(repo, settings: Settings, *, universe: list[str]) -
             rows = loader(
                 limit=top_per_bucket,
                 max_age_hours=max_age_hours,
+                tickers=universe or None,
                 buckets=[bucket],
                 markets=row_markets or None,
             ) or []
@@ -375,6 +546,7 @@ def _ranker_forecast_tickers(repo, settings: Settings, *, universe: list[str]) -
             rows = loader(
                 limit=top_per_bucket,
                 max_age_hours=max_age_hours,
+                tickers=universe or None,
                 profiles=[profile],
                 markets=row_markets or None,
             ) or []
@@ -411,15 +583,24 @@ def cmd_build_forecasts(args: object) -> Any:
     top_n = max(10, int(getattr(args, "top_n", 50)))
     forecast_tickers = _build_forecast_tickers(repo, settings, top_n=top_n)
     forecast_settings = _forecast_settings_for_tickers(settings, forecast_tickers)
+    lookback_days = max(180, int(getattr(args, "lookback_days", 360)))
+    min_series_length = max(80, int(getattr(args, "min_series_length", 160)))
+    _ensure_forecast_market_history(
+        repo,
+        forecast_settings,
+        tickers=forecast_tickers,
+        lookback_days=lookback_days,
+        min_series_length=min_series_length,
+    )
 
     from arena.forecasting import build_and_store_stacked_forecasts
 
     result = build_and_store_stacked_forecasts(
         repo,
         forecast_settings,
-        lookback_days=max(180, int(getattr(args, "lookback_days", 360))),
+        lookback_days=lookback_days,
         horizon=max(5, int(getattr(args, "horizon", 20))),
-        min_series_length=max(80, int(getattr(args, "min_series_length", 160))),
+        min_series_length=min_series_length,
         max_steps=max(50, int(getattr(args, "max_steps", 200))),
         tickers=forecast_tickers or None,
     )

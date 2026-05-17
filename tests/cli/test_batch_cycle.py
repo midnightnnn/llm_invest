@@ -284,6 +284,68 @@ def test_post_cycle_maintenance_runs_relation_extraction_after_compaction(monkey
     assert calls == ["compaction", "relations", "relation_tuner", "forgetting"]
 
 
+def test_post_cycle_maintenance_logs_each_stage_progress(monkeypatch, caplog) -> None:
+    settings = load_settings()
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        cli,
+        "_run_memory_compaction",
+        lambda **kwargs: calls.append("memory_compaction"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_memory_relation_extraction_post_cycle",
+        lambda **kwargs: calls.append("memory_relation_extraction"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_memory_relation_tuner_post_cycle",
+        lambda **kwargs: calls.append("memory_relation_tuner"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_memory_forgetting_tuner_post_cycle",
+        lambda **kwargs: calls.append("memory_forgetting_tuner"),
+    )
+
+    with caplog.at_level(logging.INFO, logger="arena.cli_commands.run_agent"):
+        cli._run_post_cycle_maintenance(
+            cli,
+            settings=settings,
+            repo=_FakeRepo(),
+            orchestrator=SimpleNamespace(),
+            tenant="tenant-a",
+        )
+
+    expected_stages = [
+        "memory_compaction",
+        "memory_relation_extraction",
+        "memory_relation_tuner",
+        "memory_forgetting_tuner",
+    ]
+    assert calls == expected_stages
+
+    assert any(getattr(record, "event", "") == "post_cycle_maintenance_start" for record in caplog.records)
+    assert any(getattr(record, "event", "") == "post_cycle_maintenance_finish" for record in caplog.records)
+
+    starts = [
+        getattr(record, "stage", "")
+        for record in caplog.records
+        if getattr(record, "event", "") == "post_cycle_maintenance_stage_start"
+    ]
+    finishes = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", "") == "post_cycle_maintenance_stage_finish"
+    ]
+
+    assert starts == expected_stages
+    assert [getattr(record, "stage", "") for record in finishes] == expected_stages
+    assert all(getattr(record, "status", "") == "ok" for record in finishes)
+    assert all(isinstance(getattr(record, "elapsed_ms", None), int) for record in finishes)
+
+
 def test_cmd_run_agent_cycle_multi_tenant_applies_task_shard_before_building(monkeypatch) -> None:
     settings = load_settings()
     settings.kis_target_market = "us"

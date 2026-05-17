@@ -39,6 +39,7 @@ def test_split_deploy_manages_slow_and_fast_prep_jobs() -> None:
     assert 'SCHEDULER_KR_SLOW_CRON="${SCHEDULER_KR_SLOW_CRON:-30 13 * * 1-5}"' in script
     assert 'SLOW_PREP_US_JOB="${JOB_NAME}-prep-slow-us"' in script
     assert 'SLOW_PREP_KR_JOB="${JOB_NAME}-prep-slow-kospi"' in script
+    assert "ARENA_SHARED_PREP_FORCE_MARKET_CLOSED=true" in script
     assert '"${PREP_RUN_ARGS},--market,us,--stage,slow"' in script
     assert '"${PREP_RUN_ARGS},--market,kospi,--stage,slow"' in script
     assert '"${PREP_RUN_ARGS},--market,us,--stage,fast,--dispatch-job,${AGENT_US_JOB}"' in script

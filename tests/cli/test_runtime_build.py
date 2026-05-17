@@ -6,6 +6,7 @@ from datetime import date, datetime, timezone
 from types import SimpleNamespace
 
 import arena.cli as cli
+import pandas as pd
 import pytest
 from arena.config import load_settings
 
@@ -301,6 +302,102 @@ def test_cmd_build_forecasts_broadens_sources_for_account_wide_holdings(monkeypa
     assert captured["tickers"] == ["AAPL", "053580"]
 
 
+def test_cmd_build_forecasts_backfills_only_short_forecast_history(monkeypatch) -> None:
+    settings = load_settings()
+    settings.google_cloud_project = "proj-x"
+    settings.bq_dataset = "ds"
+    settings.bq_location = "asia-northeast3"
+    settings.kis_target_market = "us"
+    settings.default_universe = ["AAPL", "MSFT", "NEW"]
+
+    class _Repo:
+        def ensure_dataset(self):
+            return None
+
+        def ensure_tables(self):
+            return None
+
+        def latest_universe_candidate_tickers(self, *, limit=200, markets=None):
+            _ = (limit, markets)
+            return list(settings.default_universe)
+
+        def latest_market_features(self, *, tickers, limit, sources=None):
+            _ = (tickers, limit, sources)
+            return []
+
+        def get_latest_position_tickers(self, *, market="", all_tenants=False):
+            _ = (market, all_tenants)
+            return ["AAPL", "MSFT", "NEW"]
+
+        def feature_date_spans(self, tickers, source):
+            assert source == "open_trading_us"
+            assert tickers == ["AAPL", "MSFT", "NEW"]
+            return {
+                "AAPL": {"min_d": date(2025, 1, 1), "max_d": date(2026, 5, 1), "row_count": 220},
+                "MSFT": {"min_d": date(2025, 1, 1), "max_d": date(2026, 5, 1), "row_count": 220},
+            }
+
+        def get_daily_close_frame(self, *, tickers, start, end, sources=None):
+            _ = (tickers, start, end, sources)
+            idx = pd.date_range(end=datetime(2026, 5, 17, tzinfo=timezone.utc), periods=221, freq="D")
+            return pd.DataFrame(
+                {
+                    "AAPL": [100.0 + idx for idx in range(221)],
+                    "MSFT": ([None] * 120) + [200.0 + idx for idx in range(101)],
+                },
+                index=idx,
+            )
+
+    repo = _Repo()
+    history_calls: list[tuple[str, tuple[str, ...], int]] = []
+    captured: dict[str, object] = {}
+
+    def _fake_market_service_factory(**kwargs):
+        service_settings = kwargs["settings"]
+
+        class _S:
+            def sync_market_features_for_tickers(self_inner, tickers, *, min_daily_rows=0):
+                history_calls.append((
+                    service_settings.kis_target_market,
+                    tuple(tickers),
+                    int(min_daily_rows),
+                ))
+                return SimpleNamespace(
+                    inserted_rows=5,
+                    attempted_tickers=len(tickers),
+                    failed_tickers=[],
+                )
+
+        return _S()
+
+    def _fake_build(repo_arg, build_settings, **kwargs):
+        _ = (repo_arg, build_settings)
+        captured["tickers"] = kwargs.get("tickers")
+        return SimpleNamespace(
+            run_date="2026-05-17",
+            rows_written=2,
+            tickers_used=2,
+            used_neuralforecast=True,
+            model_names=["nbeatsx"],
+            note="",
+        )
+
+    import arena.forecasting as forecasting_mod
+
+    monkeypatch.setattr(cli, "load_settings", lambda: settings)
+    monkeypatch.setattr(cli, "configure_logging", lambda *args, **kwargs: None)
+    monkeypatch.setattr(cli, "_validate_or_exit", lambda *args, **kwargs: None)
+    monkeypatch.setattr(cli, "_repo_or_exit", lambda settings: repo)
+    monkeypatch.setattr(cli, "MarketDataSyncService", _fake_market_service_factory)
+    monkeypatch.setattr(forecasting_mod, "build_and_store_stacked_forecasts", _fake_build)
+
+    args = SimpleNamespace(top_n=10, lookback_days=360, horizon=20, min_series_length=160, max_steps=200)
+    cli.cmd_build_forecasts(args)
+
+    assert history_calls == [("us", ("MSFT", "NEW"), 160)]
+    assert captured["tickers"] == ["AAPL", "MSFT", "NEW"]
+
+
 def test_build_forecast_tickers_prefers_ranker_bucket_basket_plus_holdings() -> None:
     settings = load_settings()
     settings.kis_target_market = "us"
@@ -428,6 +525,51 @@ def test_build_forecast_tickers_prefers_ranker_bucket_basket_plus_holdings() -> 
         + [f"D{i:02d}" for i in range(10)]
     )
     assert not ({f"X{i:02d}" for i in range(10)} & set(out))
+
+
+def test_build_forecast_tickers_queries_ranker_with_runtime_universe() -> None:
+    settings = load_settings()
+    settings.kis_target_market = "us"
+    settings.default_universe = ["HOLD"] + [f"IN{i:02d}" for i in range(12)]
+    settings.forecast_ranker_top_per_bucket = 10
+    settings.forecast_max_tickers = 20
+
+    class _Repo:
+        def __init__(self) -> None:
+            self.ranker_calls: list[dict] = []
+
+        def latest_universe_candidate_tickers(self, *, limit=200, markets=None):
+            _ = (limit, markets)
+            return list(settings.default_universe)
+
+        def latest_opportunity_ranker_scores(self, **kwargs):
+            self.ranker_calls.append(dict(kwargs))
+            assert kwargs.get("tickers") == list(settings.default_universe)
+            requested = list(kwargs.get("tickers") or [])
+            return [
+                {
+                    "ticker": ticker,
+                    "market": "us",
+                    "bucket": "momentum",
+                    "profile": "aggressive",
+                    "recommendation_rank": idx + 1,
+                    "recommendation_score": 1.0 - idx / 100.0,
+                }
+                for idx, ticker in enumerate(requested)
+                if ticker != "HOLD"
+            ]
+
+        def get_latest_position_tickers(self, *, market="", all_tenants=False):
+            assert all_tenants is True
+            assert market in {"us", "us,kospi,kosdaq"}
+            return ["HOLD"]
+
+    repo = _Repo()
+
+    out = cli._build_forecast_tickers(repo, settings, top_n=20)
+
+    assert out[:2] == ["HOLD", "IN00"]
+    assert all(call.get("tickers") == list(settings.default_universe) for call in repo.ranker_calls)
 
 
 def test_batch_phase_uses_daily_sources_for_live_us_seed_probe(monkeypatch) -> None:

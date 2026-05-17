@@ -92,7 +92,7 @@ Some of the best trading decisions are to do nothing. The hard part is how diffi
 ### Local Quickstart (No GCP)
 
 - Python 3.12+
-- At least 1 LLM API key
+- At least 1 LLM API key, entered in the UI setup flow after launch
 
 ```bash
 git clone https://github.com/midnightnnn/llm_invest.git
@@ -107,7 +107,7 @@ ARENA_MODE=local llm-arena serve-ui
 
 Open http://localhost:8080.
 
-This path creates `./data/arena.duckdb`, seeds deterministic demo market data, and runs the UI without BigQuery, Firestore, Secret Manager, or Cloud Run. For local vector search, install `pip install -e ".[local,local-vector]"`; without it, memory vector search falls back gracefully.
+This path creates `./data/arena.duckdb`, seeds deterministic demo market data, and runs the UI without BigQuery, Firestore, Secret Manager, or Cloud Run. Local model/KIS credentials saved in chat/settings are written to `~/.llm-arena/credentials.json`; `FRED_API_KEY` and `ECOS_API_KEY` stay as process-level `.env` values. For local vector search, install `pip install -e ".[local,local-vector]"`; without it, memory vector search falls back gracefully.
 
 To pull real market history into DuckDB using the existing KIS/OpenTrading sync path:
 
@@ -128,7 +128,7 @@ Prerequisites:
 
 - Python 3.12+
 - GCP project ([BigQuery](https://console.cloud.google.com/bigquery) + [Firestore](https://console.cloud.google.com/firestore) APIs enabled)
-- At least 1 LLM API key
+- At least 1 LLM API key, stored through tenant runtime credentials/settings
 
 ### 1. GCP Authentication
 
@@ -160,20 +160,12 @@ Fill in the following fields in `.env` to get started:
 # ── Required ─────────────────────────────────
 GOOGLE_CLOUD_PROJECT=your-gcp-project   # GCP project ID
 
-# Enter keys only for the agents you want to use (at least 1)
-OPENAI_API_KEY=sk-...                   # → GPT agent
-GEMINI_API_KEY=AI...                    # → Gemini agent
-ANTHROPIC_API_KEY=sk-ant-...            # → Claude agent
-
 # ── Optional ─────────────────────────────────
-# Only agents with keys are automatically activated.
-# e.g., if you only have a Gemini key → set ARENA_AGENT_IDS=gemini
-ARENA_AGENT_IDS=gemini,gpt,claude       # Default: all 3
+# Process-level macro keys used by prep/deploy jobs
+FRED_API_KEY=...
+ECOS_API_KEY=...
 
-# KIS Brokerage — runs in paper trading mode if not provided
-# KIS_API_KEY=...
-# KIS_API_SECRET=...
-# KIS_ACCOUNT_NO=...
+# LLM models/API keys and KIS credentials are configured per tenant in settings/chat.
 ```
 
 ### 4. Run

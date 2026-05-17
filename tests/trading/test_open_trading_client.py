@@ -296,6 +296,46 @@ def test_get_domestic_daily_price_pages_backward_by_end_date(monkeypatch) -> Non
     assert seen_end_dates == ["20260306", "20251126"]
 
 
+def test_get_overseas_daily_price_pages_backward_by_bymd(monkeypatch) -> None:
+    client = OpenTradingClient(_settings())
+
+    def _row(day: str) -> dict[str, str]:
+        return {"xymd": day, "clos": "100"}
+
+    page1 = []
+    cur = datetime(2026, 3, 6, tzinfo=timezone.utc)
+    for _ in range(100):
+        page1.append(_row(cur.strftime("%Y%m%d")))
+        cur -= timedelta(days=1)
+
+    page2 = []
+    cur = datetime(2025, 11, 26, tzinfo=timezone.utc)
+    for _ in range(70):
+        page2.append(_row(cur.strftime("%Y%m%d")))
+        cur -= timedelta(days=1)
+
+    seen_bymd: list[str] = []
+
+    def _fake_request(*, method, path, tr_id, params=None, tr_cont="", retry_on_401=True):
+        _ = (method, tr_id, tr_cont, retry_on_401)
+        assert path == "/uapi/overseas-price/v1/quotations/dailyprice"
+        assert params is not None
+        seen_bymd.append(str(params["BYMD"]))
+        if params["BYMD"] == "":
+            return {"rt_cd": "0", "output2": page1}, {"tr_cont": "M"}
+        if params["BYMD"] == "20251126":
+            return {"rt_cd": "0", "output2": page2}, {"tr_cont": ""}
+        return {"rt_cd": "0", "output2": []}, {}
+
+    monkeypatch.setattr(client, "_request", _fake_request)
+    rows = client.get_overseas_daily_price(ticker="AAPL", excd="NAS", max_pages=5)
+
+    assert len(rows) == 170
+    assert rows[0]["xymd"] == "20260306"
+    assert rows[-1]["xymd"] == "20250918"
+    assert seen_bymd == ["", "20251126", "20250917"]
+
+
 def test_search_overseas_stocks_returns_rows(monkeypatch) -> None:
     client = OpenTradingClient(_settings())
 

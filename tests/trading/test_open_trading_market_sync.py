@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 import pytest
 
@@ -532,6 +532,26 @@ def test_market_sync_for_tickers_syncs_account_held_us_and_domestic_only() -> No
     assert {row["ticker"] for row in repo.rows} == {"AAPL", "053580"}
     assert client.overseas_daily_requests
     assert client.domestic_daily_requests
+
+
+def test_market_sync_for_tickers_forces_backfill_when_min_daily_rows_not_met() -> None:
+    repo = FakeRepo()
+    repo._latest_dates = {"AAPL": date(2026, 1, 5)}
+    repo._spans = {
+        "AAPL": {
+            "min_d": date(2025, 1, 1),
+            "max_d": date(2026, 1, 5),
+            "row_count": 100,
+        }
+    }
+    settings = _settings("us", [])
+    settings.usd_krw_fx_symbol = "USDKRW"
+    service = MarketDataSyncService(settings=settings, repo=repo, client=FakeClient())
+
+    result = service.sync_market_features_for_tickers(["AAPL"], min_daily_rows=160)
+
+    assert result.attempted_tickers == 1
+    assert result.inserted_rows == 6
 
 
 def test_quote_sync_us_rows_include_native_price_and_fx() -> None:

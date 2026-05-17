@@ -125,12 +125,22 @@ class _FakePolicyRepo(_FakeICRepo):
         policy_rows: list[dict],
         regime_rows: list[dict],
         scoring_rows: list[dict],
+        forecast_rows: list[dict] | None = None,
     ) -> None:
         super().__init__(ic_rows=[], regime_rows=regime_rows, scoring_rows=scoring_rows)
         self._policy_rows = list(policy_rows)
+        self._forecast_rows = list(forecast_rows or [])
 
     def load_signal_policy_training_rows(self, **_: object) -> list[dict]:
         return [dict(row) for row in self._policy_rows]
+
+    def get_predicted_returns(self, *, tickers=None, **_: object) -> list[dict]:
+        tokens = {str(t or "").strip().upper() for t in (tickers or []) if str(t or "").strip()}
+        return [
+            dict(row)
+            for row in self._forecast_rows
+            if not tokens or str(row.get("ticker") or "").strip().upper() in tokens
+        ]
 
 
 def _synthetic_ic_rows(days: int = 120) -> tuple[list[dict], list[dict], list[dict]]:
@@ -315,6 +325,8 @@ def _synthetic_policy_rows(days: int = 90) -> tuple[list[dict], list[dict], list
             "signal_lowvol": -0.2,
             "signal_pullback": 0.0,
             "signal_meanrev_5d": 0.0,
+            "signal_forecast_er": 0.03,
+            "signal_forecast_prob": 0.1,
         },
         {
             "as_of_date": scoring_date.isoformat(),
@@ -326,6 +338,8 @@ def _synthetic_policy_rows(days: int = 90) -> tuple[list[dict], list[dict], list
             "signal_lowvol": 0.1,
             "signal_pullback": 0.0,
             "signal_meanrev_5d": 0.0,
+            "signal_forecast_er": -0.02,
+            "signal_forecast_prob": -0.1,
         },
     ]
     return policy_rows, regime_rows, scoring_rows
@@ -426,6 +440,80 @@ def test_build_and_store_opportunity_ranker_writes_joint_policy_scores() -> None
     assert "top_contributions" in explanation
     assert repo.run_rows[-1]["score_source"] == "joint_policy_v1"
     assert "policy_coefficients" in repo.run_rows[-1]["detail_json"]
+
+
+def test_build_and_store_opportunity_ranker_filters_forecast_missing_scoring_rows() -> None:
+    policy_rows, regime_rows, scoring_rows = _synthetic_policy_rows(days=90)
+    missing_forecast = dict(scoring_rows[0])
+    missing_forecast["ticker"] = "NOFC"
+    missing_forecast["signal_momentum_20d"] = 50.0
+    missing_forecast.pop("signal_forecast_er", None)
+    missing_forecast.pop("signal_forecast_prob", None)
+    scoring_rows = [missing_forecast, *scoring_rows]
+    repo = _FakePolicyRepo(policy_rows=policy_rows, regime_rows=regime_rows, scoring_rows=scoring_rows)
+    settings = load_settings()
+    settings.kis_target_market = "us"
+
+    result = build_and_store_opportunity_ranker(
+        repo,
+        settings,
+        lookback_days=120,
+        horizon_days=20,
+        min_ic_dates=30,
+        max_scoring_rows=10,
+    )
+
+    scored_tickers = {row["ticker"] for row in repo.score_rows}
+    assert result.status == "ok"
+    assert result.scores_written == len(scoring_rows) - 1
+    assert "NOFC" not in scored_tickers
+    forecast_filter = repo.run_rows[-1]["detail_json"]["forecast_scoring_filter"]
+    assert forecast_filter["loaded_rows"] == len(scoring_rows)
+    assert forecast_filter["scored_rows"] == len(scoring_rows) - 1
+    assert forecast_filter["dropped_rows"] == 1
+    assert forecast_filter["dropped_tickers_sample"] == ["NOFC"]
+
+
+def test_build_and_store_opportunity_ranker_overlays_latest_forecast_for_scoring_rows() -> None:
+    policy_rows, regime_rows, scoring_rows = _synthetic_policy_rows(days=90)
+    missing_forecast = dict(scoring_rows[0])
+    missing_forecast["ticker"] = "NOFC"
+    missing_forecast["signal_momentum_20d"] = 50.0
+    missing_forecast.pop("signal_forecast_er", None)
+    missing_forecast.pop("signal_forecast_prob", None)
+    scoring_rows = [missing_forecast, *scoring_rows]
+    repo = _FakePolicyRepo(
+        policy_rows=policy_rows,
+        regime_rows=regime_rows,
+        scoring_rows=scoring_rows,
+        forecast_rows=[
+            {
+                "ticker": "NOFC",
+                "exp_return_period": 0.07,
+                "prob_up": 0.8,
+            }
+        ],
+    )
+    settings = load_settings()
+    settings.kis_target_market = "us"
+
+    result = build_and_store_opportunity_ranker(
+        repo,
+        settings,
+        lookback_days=120,
+        horizon_days=20,
+        min_ic_dates=30,
+        max_scoring_rows=10,
+    )
+
+    nofc = next(row for row in repo.score_rows if row["ticker"] == "NOFC")
+    forecast_filter = repo.run_rows[-1]["detail_json"]["forecast_scoring_filter"]
+    assert result.status == "ok"
+    assert result.scores_written == len(scoring_rows)
+    assert nofc["feature_json"]["forecast_er"] == 0.07
+    assert abs(nofc["feature_json"]["forecast_prob"] - 0.3) <= 1e-12
+    assert forecast_filter["latest_forecast_overlay"]["filled_missing_rows"] == 1
+    assert forecast_filter["dropped_rows"] == 0
 
 
 def test_build_and_store_signal_ic_ranker_writes_ic_scores() -> None:

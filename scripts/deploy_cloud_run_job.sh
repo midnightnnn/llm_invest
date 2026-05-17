@@ -363,7 +363,7 @@ if [[ "${DUAL_MARKET,,}" == "true" ]]; then
     _delete_job_if_exists "${JOB_NAME}-us"
     _delete_job_if_exists "${JOB_NAME}-kospi"
 
-    SLOW_PREP_EXTRA_ENVS="ARENA_NASDAQ_DISABLE_SCHEDULE_GUARD=true${ENV_PAIR_DELIM}ARENA_KOSPI_DISABLE_SCHEDULE_GUARD=true"
+    SLOW_PREP_EXTRA_ENVS="ARENA_SHARED_PREP_FORCE_MARKET_CLOSED=true${ENV_PAIR_DELIM}ARENA_NASDAQ_DISABLE_SCHEDULE_GUARD=true${ENV_PAIR_DELIM}ARENA_KOSPI_DISABLE_SCHEDULE_GUARD=true"
     _deploy_job "${SLOW_PREP_US_JOB}" "${PREP_RUN_COMMAND}" "${PREP_RUN_ARGS},--market,us,--stage,slow" "${PREP_CPU}" "${PREP_MEMORY}" "${PREP_TASK_TIMEOUT}" "${PREP_TASKS}" "${PREP_PARALLELISM}" "$(_market_env_vars us "${PREP_JOB_ENV_VARS}" "${SLOW_PREP_EXTRA_ENVS}")"
     _deploy_job "${SLOW_PREP_KR_JOB}" "${PREP_RUN_COMMAND}" "${PREP_RUN_ARGS},--market,kospi,--stage,slow" "${PREP_CPU}" "${PREP_MEMORY}" "${PREP_TASK_TIMEOUT}" "${PREP_TASKS}" "${PREP_PARALLELISM}" "$(_market_env_vars kospi "${PREP_JOB_ENV_VARS}" "${SLOW_PREP_EXTRA_ENVS}")"
     _deploy_job "${PREP_US_JOB}" "${PREP_RUN_COMMAND}" "${PREP_RUN_ARGS},--market,us,--stage,fast,--dispatch-job,${AGENT_US_JOB}" "${PREP_CPU}" "${PREP_MEMORY}" "${PREP_TASK_TIMEOUT}" "${PREP_TASKS}" "${PREP_PARALLELISM}" "$(_market_env_vars us "${PREP_JOB_ENV_VARS}")"

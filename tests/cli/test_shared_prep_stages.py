@@ -115,6 +115,74 @@ def test_cmd_run_shared_prep_slow_runs_only_ml_and_skips_dispatch(monkeypatch) -
     ), "slow stage must record an ok session marker"
 
 
+def test_cmd_run_shared_prep_force_market_closed_bypasses_weekend_skip(monkeypatch) -> None:
+    settings = load_settings()
+    settings.google_cloud_project = "proj-x"
+    settings.bq_dataset = "ds"
+    settings.bq_location = "asia-northeast3"
+    settings.kis_target_market = "us"
+    calls: list[tuple[str, object]] = []
+
+    class _Repo(_FakeRepo):
+        def ensure_dataset(self):
+            calls.append(("dataset", None))
+
+        def ensure_tables(self):
+            calls.append(("tables", None))
+
+    _stub_shared_prep_environment(monkeypatch, settings, _Repo(), calls, phase="closed")
+    monkeypatch.setattr(
+        cli,
+        "nasdaq_window",
+        lambda now=None: SimpleNamespace(
+            now_local=SimpleNamespace(weekday=lambda: 5),
+            trading_date=date(2026, 5, 16),
+        ),
+    )
+    monkeypatch.setattr(cli, "is_nasdaq_holiday", lambda d: True)
+
+    cli.cmd_run_shared_prep(
+        live=True,
+        market_override="us",
+        dispatch_job="",
+        stage="slow",
+        force_market_closed=True,
+    )
+
+    stages = [c[0] for c in calls]
+    assert "forecast" in stages
+    assert "ranker" in stages
+
+
+def test_cmd_run_shared_prep_slow_builds_forecasts_from_current_ranker_seed(monkeypatch) -> None:
+    settings = load_settings()
+    settings.google_cloud_project = "proj-x"
+    settings.bq_dataset = "ds"
+    settings.bq_location = "asia-northeast3"
+    settings.kis_target_market = "us"
+    calls: list[tuple[str, object]] = []
+
+    class _Repo(_FakeRepo):
+        def ensure_dataset(self):
+            calls.append(("dataset", None))
+
+        def ensure_tables(self):
+            calls.append(("tables", None))
+
+    _stub_shared_prep_environment(monkeypatch, settings, _Repo(), calls)
+
+    cli.cmd_run_shared_prep(
+        live=True, market_override="us", dispatch_job="", stage="slow"
+    )
+
+    stages = [c[0] for c in calls]
+    ranker_indexes = [idx for idx, stage in enumerate(stages) if stage == "ranker"]
+    forecast_idx = stages.index("forecast")
+
+    assert len(ranker_indexes) == 2
+    assert ranker_indexes[0] < forecast_idx < ranker_indexes[1]
+
+
 def test_cmd_run_shared_prep_local_simulated_reuses_existing_market_data(monkeypatch) -> None:
     settings = load_settings()
     settings.google_cloud_project = "local"
