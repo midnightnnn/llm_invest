@@ -550,11 +550,10 @@ def build_and_store_joint_policy_ranker(
                 note=note,
             )
         if not scoring_rows:
-            note = (
-                "no forecast-complete scoring rows after latest refresh"
-                if loaded_scoring_rows
-                else "no scoring rows after latest refresh"
-            )
+            if loaded_scoring_rows:
+                note = "no forecast-complete scoring rows after latest refresh"
+            else:
+                note = "no scoring rows after latest refresh"
             _append_run(
                 repo,
                 run_id,

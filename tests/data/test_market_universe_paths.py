@@ -199,6 +199,43 @@ def test_rebuild_universe_candidates_uses_discovery_rank_over_return_momentum() 
     assert "market_cap_rank=1" in payloads[0]["reasons"]
 
 
+def test_rebuild_universe_candidates_can_exclude_maintenance_sources() -> None:
+    def row(ticker: str) -> dict[str, object]:
+        return {
+            "as_of_ts": "2026-01-01T00:00:00+00:00",
+            "ticker": ticker,
+            "exchange_code": "NASD",
+            "instrument_id": f"NASD:{ticker}",
+            "ret_20d": 0.05,
+            "ret_5d": 0.02,
+            "volatility_20d": 0.12,
+            "sentiment_score": 0.0,
+        }
+
+    session = _FakeSession(
+        responses=[
+            [row("MSFT"), row("OLD")],
+            [],
+        ],
+        client=_InsertClient(),
+    )
+    store = MarketStore(session)
+
+    out = store.rebuild_universe_candidates(
+        top_n=2,
+        per_exchange_cap=2,
+        allowed_tickers=["MSFT", "OLD"],
+        eligible_sources=["market_cap"],
+        universe_rank_metadata={
+            "MSFT": {"source": "market_cap", "market_cap_rank": 1, "market_cap_value": 3_000_000.0},
+            "OLD": {"source": "missing_daily_feature", "fallback_rank": 2},
+        },
+    )
+
+    assert out["count"] == 1
+    assert [row["ticker"] for row in session.client.payloads] == ["MSFT"]
+
+
 def test_rebuild_universe_candidates_prioritizes_benchmark_core_tickers() -> None:
     def row(ticker: str) -> dict[str, object]:
         return {
@@ -293,6 +330,41 @@ def test_latest_universe_candidate_tickers_scopes_latest_run_by_market() -> None
     assert "IN UNNEST(@markets)" in sql
     assert params["markets"] == ["us"]
     assert params["limit"] == 10
+
+
+def test_latest_universe_candidate_tickers_unions_latest_run_per_market() -> None:
+    session = _FakeSession(
+        responses=[
+            [
+                {"ticker": "AAPL"},
+                {"ticker": "005930"},
+            ]
+        ]
+    )
+    store = MarketStore(session)
+
+    out = store.latest_universe_candidate_tickers(limit=20, markets=["us", "kosdaq"])
+
+    assert out == ["AAPL", "005930"]
+    sql, params = session.call_pairs[0]
+    assert "PARTITION BY market_key" in sql
+    assert "JOIN latest_runs USING (market_key, run_id)" in sql
+    assert params["markets"] == ["us", "kospi"]
+    assert params["limit"] == 20
+
+
+def test_load_signal_scoring_rows_joins_latest_universe_candidates() -> None:
+    session = _FakeSession(responses=[[{"ticker": "MSFT"}]])
+    store = MarketStore(session)
+
+    out = store.load_signal_scoring_rows(limit=10, market="us")
+
+    assert out == [{"ticker": "MSFT"}]
+    sql, params = session.call_pairs[0]
+    assert "universe_candidates" in sql
+    assert "JOIN universe" in sql
+    assert "universe_rank" in sql
+    assert params == {"limit": 10, "market": "us"}
 
 
 # ---------------------------------------------------------------------------

@@ -1026,6 +1026,8 @@ class OpenTradingClient:
         excd: str | None = None,
         price_min: float | None = None,
         price_max: float | None = None,
+        market_cap_min: float | None = None,
+        market_cap_max: float | None = None,
         per_min: float | None = None,
         per_max: float | None = None,
         eps_min: float | None = None,
@@ -1035,7 +1037,7 @@ class OpenTradingClient:
         """Screens overseas stocks by basic conditions (price/PER/EPS)."""
 
         def _fmt_num(value: float) -> str:
-            return f"{float(value):g}"
+            return f"{float(value):.10f}".rstrip("0").rstrip(".")
 
         def _range_params(start: float | None, end: float | None) -> tuple[str, str, str]:
             if start is None and end is None:
@@ -1052,6 +1054,7 @@ class OpenTradingClient:
             raise ValueError("max_pages must be positive")
 
         co_yn_pricecur, co_st_pricecur, co_en_pricecur = _range_params(price_min, price_max)
+        co_yn_valx, co_st_valx, co_en_valx = _range_params(market_cap_min, market_cap_max)
         co_yn_per, co_st_per, co_en_per = _range_params(per_min, per_max)
         co_yn_eps, co_st_eps, co_en_eps = _range_params(eps_min, eps_max)
 
@@ -1075,9 +1078,9 @@ class OpenTradingClient:
                     "CO_YN_RATE": "",
                     "CO_ST_RATE": "",
                     "CO_EN_RATE": "",
-                    "CO_YN_VALX": "",
-                    "CO_ST_VALX": "",
-                    "CO_EN_VALX": "",
+                    "CO_YN_VALX": co_yn_valx,
+                    "CO_ST_VALX": co_st_valx,
+                    "CO_EN_VALX": co_en_valx,
                     "CO_YN_SHAR": "",
                     "CO_ST_SHAR": "",
                     "CO_EN_SHAR": "",

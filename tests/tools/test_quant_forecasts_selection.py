@@ -20,6 +20,68 @@ def test_forecast_returns_reads_predictions() -> None:
     assert repo.last_forecast_mode == "all"
 
 
+def test_forecast_returns_market_scope_kr_uses_domestic_ranker_basket_only() -> None:
+    class _Repo(FakeRepo):
+        def __init__(self) -> None:
+            super().__init__()
+            self._preds.extend(
+                [
+                    {"run_date": "2026-01-02", "ticker": "005930", "exp_return_period": 0.04, "forecast_horizon": 20},
+                    {"run_date": "2026-01-02", "ticker": "000660", "exp_return_period": 0.03, "forecast_horizon": 20},
+                ]
+            )
+            self.ranker_calls = []
+            self.last_forecast_tickers = None
+
+        def latest_opportunity_ranker_scores(self, **kwargs):
+            self.ranker_calls.append(dict(kwargs))
+            rows = [
+                {"ticker": "AAPL", "market": "us", "bucket": "momentum", "profile": "aggressive", "recommendation_rank": 1, "recommendation_score": 0.9},
+                {"ticker": "005930", "market": "kospi", "bucket": "momentum", "profile": "aggressive", "recommendation_rank": 1, "recommendation_score": 0.95},
+                {"ticker": "000660", "market": "kospi", "bucket": "pullback", "profile": "balanced", "recommendation_rank": 2, "recommendation_score": 0.85},
+            ]
+            markets = kwargs.get("markets") or []
+            if markets:
+                allow_markets = {str(m).strip().lower() for m in markets}
+                rows = [row for row in rows if str(row["market"]).lower() in allow_markets]
+            tickers = kwargs.get("tickers") or []
+            if tickers:
+                allow_tickers = {str(t).strip().upper() for t in tickers}
+                rows = [row for row in rows if str(row["ticker"]).upper() in allow_tickers]
+            buckets = kwargs.get("buckets") or []
+            if buckets:
+                allow_buckets = {str(b).strip().lower() for b in buckets}
+                rows = [row for row in rows if str(row["bucket"]).lower() in allow_buckets]
+            profiles = kwargs.get("profiles") or []
+            if profiles:
+                allow_profiles = {str(p).strip().lower() for p in profiles}
+                rows = [row for row in rows if str(row["profile"]).lower() in allow_profiles]
+            return rows
+
+        def get_predicted_returns(self, tickers=None, limit=50, mode="stacked", table_id=None, staleness_days=None):
+            self.last_forecast_tickers = list(tickers) if tickers is not None else None
+            return super().get_predicted_returns(
+                tickers=tickers,
+                limit=limit,
+                mode=mode,
+                table_id=table_id,
+                staleness_days=staleness_days,
+            )
+
+    settings = _settings()
+    settings.kis_target_market = "us,kospi,kosdaq"
+    settings.default_universe = ["AAPL", "MSFT", "005930", "000660"]
+    qt = QuantTools(repo=_Repo(), settings=settings)
+
+    rows = qt.forecast_returns(market_scope="kr")
+
+    repo = qt.repo
+    assert {call["markets"][0] for call in repo.ranker_calls if call.get("markets")} == {"kospi"}
+    assert all(call.get("tickers") == ["005930", "000660"] for call in repo.ranker_calls)
+    assert set(repo.last_forecast_tickers) == {"005930", "000660"}
+    assert {row["ticker"] for row in rows} == {"005930", "000660"}
+
+
 def test_forecast_returns_prefers_dynamic_candidate_tickers_from_context() -> None:
     class _Repo(FakeRepo):
         def get_predicted_returns(self, tickers=None, limit=50, mode="stacked", table_id=None, staleness_days=None):

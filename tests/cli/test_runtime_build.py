@@ -527,6 +527,69 @@ def test_build_forecast_tickers_prefers_ranker_bucket_basket_plus_holdings() -> 
     assert not ({f"X{i:02d}" for i in range(10)} & set(out))
 
 
+def test_build_forecast_tickers_merges_discovery_fallback_when_ranker_exists(monkeypatch) -> None:
+    import arena.cli_commands.sync as sync_mod
+
+    settings = load_settings()
+    settings.kis_target_market = "us"
+    settings.default_universe = []
+    settings.universe_run_top_n = 10
+    settings.forecast_ranker_top_per_bucket = 2
+    settings.forecast_max_tickers = 10
+
+    discovery_calls: list[str] = []
+
+    def _fake_build_discovery_rows(latest_rows, *, bucket=None, **kwargs):
+        _ = (latest_rows, kwargs)
+        bucket_name = str(bucket or "").strip().lower()
+        discovery_calls.append(bucket_name)
+        if bucket_name == "value":
+            return [{"ticker": "DISC"}]
+        return []
+
+    monkeypatch.setattr(sync_mod, "build_discovery_rows", _fake_build_discovery_rows)
+
+    class _Repo:
+        def latest_universe_candidate_tickers(self, *, limit=200, markets=None):
+            _ = (limit, markets)
+            return ["HOLD", "RANK", "DISC"]
+
+        def latest_opportunity_ranker_scores(self, **kwargs):
+            _ = kwargs
+            return [
+                {
+                    "ticker": "RANK",
+                    "market": "us",
+                    "bucket": "momentum",
+                    "profile": "aggressive",
+                    "recommendation_rank": 1,
+                    "recommendation_score": 1.0,
+                }
+            ]
+
+        def latest_market_features(self, *, tickers, limit, sources=None):
+            _ = (limit, sources)
+            assert tickers == ["HOLD", "RANK", "DISC"]
+            return [
+                {
+                    "ticker": "DISC",
+                    "ret_20d": 0.12,
+                    "ret_5d": 0.03,
+                    "volatility_20d": 0.18,
+                }
+            ]
+
+        def get_latest_position_tickers(self, *, market="", all_tenants=False):
+            assert all_tenants is True
+            assert market in {"us", "us,kospi,kosdaq"}
+            return ["HOLD"]
+
+    out = cli._build_forecast_tickers(_Repo(), settings, top_n=5)
+
+    assert discovery_calls == ["momentum", "pullback", "recovery", "defensive", "value"]
+    assert out == ["HOLD", "RANK", "DISC"]
+
+
 def test_build_forecast_tickers_queries_ranker_with_runtime_universe() -> None:
     settings = load_settings()
     settings.kis_target_market = "us"

@@ -103,8 +103,24 @@ def test_batch_default_tool_schema_preserves_required_fields_and_enums() -> None
         )
         return FunctionTool(wrapped)._get_declaration()
 
+    def enum_values(prop: dict) -> list[str]:
+        if "enum" in prop:
+            return prop["enum"]
+        for option in prop.get("any_of") or []:
+            if isinstance(option, dict) and "enum" in option:
+                return option["enum"]
+        raise AssertionError(f"missing enum in schema property: {prop}")
+
+    def item_enum_values(prop: dict) -> list[str]:
+        if isinstance(prop.get("items"), dict) and "enum" in prop["items"]:
+            return prop["items"]["enum"]
+        for option in prop.get("any_of") or []:
+            if isinstance(option, dict) and isinstance(option.get("items"), dict) and "enum" in option["items"]:
+                return option["items"]["enum"]
+        raise AssertionError(f"missing item enum in schema property: {prop}")
+
     screen_params = declaration("screen_market").parameters.model_dump(mode="json", exclude_none=True)
-    assert screen_params["properties"]["bucket"]["enum"] == [
+    assert enum_values(screen_params["properties"]["bucket"]) == [
         "auto",
         "balanced",
         "momentum",
@@ -113,7 +129,7 @@ def test_batch_default_tool_schema_preserves_required_fields_and_enums() -> None
         "defensive",
         "value",
     ]
-    assert screen_params["properties"]["sort_by"]["enum"] == [
+    assert enum_values(screen_params["properties"]["sort_by"]) == [
         "none",
         "as_of_ts",
         "ret_20d",
@@ -122,12 +138,13 @@ def test_batch_default_tool_schema_preserves_required_fields_and_enums() -> None
         "sentiment_score",
         "close_price_krw",
     ]
-    assert screen_params["properties"]["order"]["enum"] == ["asc", "desc"]
+    assert enum_values(screen_params["properties"]["order"]) == ["asc", "desc"]
+    assert enum_values(screen_params["properties"]["market_scope"]) == ["us", "kr"]
 
     optimize_params = declaration("optimize_portfolio").parameters.model_dump(mode="json", exclude_none=True)
     assert "tickers" in optimize_params["required"]
-    assert optimize_params["properties"]["strategy"]["enum"] == ["sharpe", "risk_parity", "forecast"]
-    assert optimize_params["properties"]["forecast_mode"]["enum"] == [
+    assert enum_values(optimize_params["properties"]["strategy"]) == ["sharpe", "risk_parity", "forecast"]
+    assert enum_values(optimize_params["properties"]["forecast_mode"]) == [
         "default",
         "all",
         "stacked",
@@ -139,8 +156,9 @@ def test_batch_default_tool_schema_preserves_required_fields_and_enums() -> None
     ]
 
     opportunity_params = declaration("recommend_opportunities").parameters.model_dump(mode="json", exclude_none=True)
-    assert opportunity_params["properties"]["buckets"]["items"]["enum"] == ["momentum", "pullback", "recovery"]
-    assert opportunity_params["properties"]["profiles"]["items"]["enum"] == [
+    assert item_enum_values(opportunity_params["properties"]["buckets"]) == ["momentum", "pullback", "recovery"]
+    assert enum_values(opportunity_params["properties"]["market_scope"]) == ["us", "kr"]
+    assert item_enum_values(opportunity_params["properties"]["profiles"]) == [
         "aggressive",
         "balanced",
         "defensive",
@@ -150,6 +168,12 @@ def test_batch_default_tool_schema_preserves_required_fields_and_enums() -> None
         "tactical_inverse",
         "tactical_hedge",
     ]
+
+    forecast_params = declaration("forecast_returns").parameters.model_dump(mode="json", exclude_none=True)
+    assert enum_values(forecast_params["properties"]["market_scope"]) == ["us", "kr"]
+
+    sector_params = declaration("sector_summary").parameters.model_dump(mode="json", exclude_none=True)
+    assert enum_values(sector_params["properties"]["market_scope"]) == ["us", "kr"]
 
     scratch_params = declaration("scratch_run_python").parameters.model_dump(mode="json", exclude_none=True)
     assert "code" in scratch_params["required"]

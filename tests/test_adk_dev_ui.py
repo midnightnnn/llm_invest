@@ -113,6 +113,7 @@ def test_provider_package_imports_when_adk_loads_agent_dir_as_top_level(monkeypa
             "PYTHONPATH": str(dev_ui_dir),
             "ARENA_DEV_UI_ENSURE_TABLES": "0",
             "ARENA_LOCAL_DB_PATH": "/tmp/arena-adk-dev-ui-import-test.duckdb",
+            "GEMINI_MODEL": "gemini-3-flash-preview",
             "PYTHONDONTWRITEBYTECODE": "1",
             "TMPDIR": "/tmp",
         }

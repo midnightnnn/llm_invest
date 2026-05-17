@@ -124,6 +124,7 @@ def test_credential_draft_api_deletes_provider_key(monkeypatch, tmp_path) -> Non
 
 def test_credential_draft_api_lists_and_applies_kis_account(monkeypatch, tmp_path) -> None:
     from arena.agents.investment_chat.credential_tools import build_credential_tool_entries
+    from arena.open_trading import sync as open_trading_sync
 
     repo = _ChatOrderRepo()
     client = _build_chat_client(monkeypatch, repo, tmp_path)
@@ -134,6 +135,16 @@ def test_credential_draft_api_lists_and_applies_kis_account(monkeypatch, tmp_pat
     )
     draft = tool(action="upsert", env="demo")
     token = draft["approval_token"]
+    sync_calls: list[dict[str, object]] = []
+
+    class _FakeAccountSyncService:
+        def __init__(self, *, settings, repo):
+            sync_calls.append({"market": settings.kis_target_market, "repo": repo})
+
+        def sync_account_snapshot(self):
+            return repo.account_snapshot
+
+    monkeypatch.setattr(open_trading_sync, "AccountSyncService", _FakeAccountSyncService)
 
     listing = client.get("/investment-chat/credential-drafts", params={"tenant_id": "local"})
 
@@ -163,6 +174,7 @@ def test_credential_draft_api_lists_and_applies_kis_account(monkeypatch, tmp_pat
     assert body["reload_url"] == "/investment-chat?tenant_id=local"
     assert repo.runtime_credentials["local"]["kis_env"] == "demo"
     assert repo.runtime_credentials["local"]["kis_account_no_masked"]
+    assert sync_calls[-1]["market"] == "us,kospi,kosdaq"
 
 
 def test_credential_draft_api_deletes_kis_account(monkeypatch, tmp_path) -> None:

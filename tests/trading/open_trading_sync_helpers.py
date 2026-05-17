@@ -74,6 +74,7 @@ class FakeRepo:
         sources=None,
         allowed_tickers=None,
         ticker_names=None,
+        eligible_sources=None,
         universe_rank_metadata=None,
     ):
         self.rebuild_universe_calls.append(
@@ -83,6 +84,7 @@ class FakeRepo:
                 "sources": list(sources or []),
                 "allowed_tickers": list(allowed_tickers or []),
                 "ticker_names": dict(ticker_names or {}),
+                "eligible_sources": list(eligible_sources or []),
                 "universe_rank_metadata": dict(universe_rank_metadata or {}),
             }
         )

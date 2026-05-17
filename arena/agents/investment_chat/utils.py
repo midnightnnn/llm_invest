@@ -41,7 +41,9 @@ def latest_account_snapshot(repo: Any, *, tenant_id: str, market_scope: str | No
         return None
     if str(market_scope or "").strip():
         try:
-            return loader(tenant_id=tenant_id, market_scope=market_scope)
+            snapshot = loader(tenant_id=tenant_id, market_scope=market_scope)
+            if snapshot is not None:
+                return snapshot
         except TypeError:
             pass
     return call_with_optional_tenant(loader, tenant_id=tenant_id)

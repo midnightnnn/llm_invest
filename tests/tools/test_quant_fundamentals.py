@@ -26,6 +26,48 @@ def test_sector_summary_groups() -> None:
     assert "avg_ret" in rows[0]
 
 
+def test_sector_summary_market_scope_us_narrows_multi_market_agent() -> None:
+    class _Repo(FakeRepo):
+        def __init__(self):
+            super().__init__()
+            self._features.extend(
+                [
+                    {
+                        "as_of_ts": "2026-01-01T00:00:00+00:00",
+                        "ticker": "005930",
+                        "ret_20d": 0.18,
+                        "ret_5d": 0.04,
+                        "volatility_20d": 0.09,
+                        "sentiment_score": 0.3,
+                        "close_price_krw": 75000.0,
+                        "source": "open_trading_kospi_quote",
+                    },
+                    {
+                        "as_of_ts": "2026-01-01T00:00:00+00:00",
+                        "ticker": "000660",
+                        "ret_20d": 0.12,
+                        "ret_5d": 0.03,
+                        "volatility_20d": 0.11,
+                        "sentiment_score": 0.2,
+                        "close_price_krw": 190000.0,
+                        "source": "open_trading_kospi_quote",
+                    },
+                ]
+            )
+
+    settings = _settings()
+    settings.kis_target_market = "us,kospi,kosdaq"
+    settings.default_universe = ["AAPL", "MSFT", "005930", "000660"]
+    repo = _Repo()
+    qt = QuantTools(repo=repo, settings=settings)
+
+    rows = qt.sector_summary("20d", market_scope="us")
+
+    assert rows
+    assert repo.last_screen_kwargs["tickers"] == ["AAPL", "MSFT"]
+    assert all(not str(ticker).isdigit() for row in rows for ticker in row["tickers"])
+
+
 def test_get_fundamentals_filters_to_target_universe() -> None:
     qt = QuantTools(repo=FakeRepo(), settings=_settings(), ot_client=FakeOpenTradingClient())
     out = qt.get_fundamentals(["AAPL", "XYZ"], excd="NAS", max_items=10)

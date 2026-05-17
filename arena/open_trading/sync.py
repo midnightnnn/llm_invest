@@ -375,12 +375,14 @@ class MarketDataSyncService:
             ),
         )
         exchanges = [("NAS", "NAS"), ("NYS", "NYS")]
-        # Price bands (USD) — disjoint ranges to maximise unique tickers.
-        _PRICE_BANDS: list[tuple[float | None, float | None]] = [
-            (None, None),       # unconstrained (top ~100 by default)
-            (100.0, 99999.0),   # mid-to-large cap
-            (30.0, 99.99),      # mid cap
-            (10.0, 29.99),      # small-to-mid cap
+        max_market_cap_value = 9_999_999_999.0
+        # KIS `valx` is the overseas screener market-cap value. Cap bands
+        # widen coverage without using share price as a proxy for investability.
+        _MARKET_CAP_BANDS: list[tuple[float, float]] = [
+            (100_000_000.0, max_market_cap_value),
+            (10_000_000.0, 99_999_999.0),
+            (1_000_000.0, 9_999_999.0),
+            (0.0, 999_999.0),
         ]
         all_rows: list[dict[str, str]] = []
         existing: set[str] = set()
@@ -419,26 +421,28 @@ class MarketDataSyncService:
         for excd, quote_excd in exchanges:
             excd_seen: set[str] = set()
             excd_raw_total = 0
-            for price_min, price_max in _PRICE_BANDS:
+            for market_cap_min, market_cap_max in _MARKET_CAP_BANDS:
                 if len(excd_seen) >= cap:
                     break
+                if market_cap_max < market_cap_min:
+                    continue
                 try:
                     raw = self.client.search_overseas_stocks(
                         excd=excd,
-                        price_min=price_min,
-                        price_max=price_max,
+                        market_cap_min=market_cap_min,
+                        market_cap_max=market_cap_max,
                         max_pages=20,
                     )
                 except Exception as exc:
                     logger.warning(
-                        "[yellow]US discovery band failed[/yellow] excd=%s band=(%s,%s) err=%s",
-                        excd, str(price_min), str(price_max), str(exc),
+                        "[yellow]US discovery market-cap band failed[/yellow] excd=%s band=(%s,%s) err=%s",
+                        excd, str(market_cap_min), str(market_cap_max), str(exc),
                         extra=failure_extra(
                             "us_discovery_band_failed",
                             exc,
                             excd=excd,
-                            price_min=price_min,
-                            price_max=price_max,
+                            market_cap_min=market_cap_min,
+                            market_cap_max=market_cap_max,
                         ),
                     )
                     raw = []
@@ -454,12 +458,17 @@ class MarketDataSyncService:
                     ticker = str(row.get("symb") or row.get("rsym") or "").strip().upper()
                     if not ticker or ticker in excd_seen or ticker in existing:
                         continue
+                    market_cap_value = _finite_float_or_none(row.get("valx"))
+                    if market_cap_value is None:
+                        continue
+                    if market_cap_value < market_cap_min or market_cap_value > market_cap_max:
+                        continue
                     add_symbol(
                         ticker,
                         quote_excd=quote_excd,
                         source="market_cap",
                         market_cap_rank=len(excd_seen) + 1,
-                        market_cap_value=_finite_float_or_none(row.get("valx")),
+                        market_cap_value=market_cap_value,
                     )
                     excd_seen.add(ticker)
             logger.info(
@@ -1522,6 +1531,7 @@ class MarketDataSyncService:
         instrument_rows: list[dict[str, Any]],
         tickers: list[str],
         symbols: list[dict[str, str]] | None = None,
+        refresh_universe: bool = True,
     ) -> None:
         """Best-effort refresh for latest snapshots and candidate universe."""
         if rows and hasattr(self.repo, "insert_market_features_latest"):
@@ -1591,7 +1601,7 @@ class MarketDataSyncService:
                     ),
                 )
 
-        if hasattr(self.repo, "rebuild_universe_candidates"):
+        if refresh_universe and hasattr(self.repo, "rebuild_universe_candidates"):
             try:
                 universe_rank_metadata = {
                     ticker: dict(self._universe_rank_metadata.get(ticker) or {})
@@ -1604,6 +1614,15 @@ class MarketDataSyncService:
                     sources=self._all_sources(),
                     allowed_tickers=tickers,
                     ticker_names=getattr(self, "_kospi_ticker_names", {}),
+                    eligible_sources=[
+                        "default",
+                        "held",
+                        "benchmark",
+                        ASSET_BENCHMARK_SOURCE,
+                        "market_cap",
+                        "top_interest",
+                        "volume_rank",
+                    ],
                     universe_rank_metadata=universe_rank_metadata,
                 )
                 exchange_counts = universe_result.get("exchange_counts") or {}
@@ -1803,13 +1822,18 @@ class MarketDataSyncService:
         symbols = self._symbols_for_tickers(tickers)
         for idx, symbol in enumerate(symbols, start=1):
             self._record_universe_rank_metadata(symbol.get("ticker"), "held", core_rank=idx)
-        return self._sync_market_features_for_symbols(symbols, min_daily_rows=min_daily_rows)
+        return self._sync_market_features_for_symbols(
+            symbols,
+            min_daily_rows=min_daily_rows,
+            refresh_universe=False,
+        )
 
     def _sync_market_features_for_symbols(
         self,
         symbols: list[dict[str, str]],
         *,
         min_daily_rows: int = 0,
+        refresh_universe: bool = True,
     ) -> MarketSyncResult:
         """Fetches market data for preselected symbols and writes feature rows."""
         if not symbols:
@@ -1928,7 +1952,13 @@ class MarketDataSyncService:
             try:
                 self.repo.insert_market_features(rows)
                 inserted = len(rows)
-                self._refresh_latest_and_universe(rows=rows, instrument_rows=instrument_rows, tickers=tickers, symbols=symbols)
+                self._refresh_latest_and_universe(
+                    rows=rows,
+                    instrument_rows=instrument_rows,
+                    tickers=tickers,
+                    symbols=symbols,
+                    refresh_universe=refresh_universe,
+                )
                 logger.info(
                     "[green]Market sync done[/green] inserted_rows=%d tickers=%d failed=%d",
                     inserted,
@@ -1979,7 +2009,13 @@ class MarketDataSyncService:
                             ticker_count=len(symbols),
                         ),
                     )
-            self._refresh_latest_and_universe(rows=[], instrument_rows=instrument_rows, tickers=tickers, symbols=symbols)
+            self._refresh_latest_and_universe(
+                rows=[],
+                instrument_rows=instrument_rows,
+                tickers=tickers,
+                symbols=symbols,
+                refresh_universe=refresh_universe,
+            )
             logger.info(
                 "[cyan]Market sync produced zero new rows[/cyan] tickers=%d",
                 len(symbols),

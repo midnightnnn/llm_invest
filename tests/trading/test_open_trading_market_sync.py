@@ -71,6 +71,35 @@ def test_discover_us_symbols_uses_us_specific_cap_override() -> None:
     assert "Y3" not in discovered
 
 
+def test_discover_us_symbols_does_not_apply_us_market_cap_floor() -> None:
+    class MixedCapClient(FakeClient):
+        def __init__(self):
+            super().__init__()
+            self.search_calls: list[dict[str, object]] = []
+
+        def search_overseas_stocks(self, *, excd="NAS", max_pages=1, **kwargs):
+            self.search_calls.append({"excd": excd, "kwargs": dict(kwargs)})
+            if excd == "NAS":
+                return [
+                    {"symb": "MICRO", "valx": "1328"},
+                    {"symb": "MSFT", "valx": "3000000"},
+                ]
+            return []
+
+    repo = FakeRepo()
+    settings = _settings("us", [])
+    service = MarketDataSyncService(settings=settings, repo=repo, client=MixedCapClient())
+
+    symbols = service._discover_us_symbols()
+
+    discovered = [row["ticker"] for row in symbols]
+    assert "MICRO" in discovered
+    assert "MSFT" in discovered
+    rank_meta = service._universe_rank_metadata
+    assert rank_meta["MICRO"]["market_cap_value"] == 1_328.0
+    assert any(call["kwargs"]["market_cap_min"] == 0.0 for call in service.client.search_calls)
+
+
 def test_market_sync_nasdaq_fails_without_live_fx() -> None:
     repo = FakeRepo()
     settings = _settings("nasdaq", ["AAPL"])
@@ -532,6 +561,7 @@ def test_market_sync_for_tickers_syncs_account_held_us_and_domestic_only() -> No
     assert {row["ticker"] for row in repo.rows} == {"AAPL", "053580"}
     assert client.overseas_daily_requests
     assert client.domestic_daily_requests
+    assert repo.rebuild_universe_calls == []
 
 
 def test_market_sync_for_tickers_forces_backfill_when_min_daily_rows_not_met() -> None:

@@ -61,7 +61,19 @@ def resolve_runtime_universe(
 
     try:
         if supports_markets:
-            discovered = loader(limit=limit, markets=market_tokens)
+            has_us = bool(set(market_tokens) & US_MARKETS)
+            has_kospi = bool(set(market_tokens) & KOSPI_MARKETS)
+            if has_us and has_kospi:
+                discovered_rows: list[str] = []
+                for scoped_markets in (["us"], ["kospi"]):
+                    scoped = loader(limit=limit, markets=scoped_markets)
+                    for ticker in scoped or []:
+                        token = str(ticker).strip().upper()
+                        if token and token not in discovered_rows:
+                            discovered_rows.append(token)
+                discovered = discovered_rows
+            else:
+                discovered = loader(limit=limit, markets=market_tokens)
         else:
             discovered = loader(limit=limit)
     except Exception as exc:

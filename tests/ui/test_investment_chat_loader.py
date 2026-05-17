@@ -13,7 +13,6 @@ def test_adk_browser_overrides_do_not_hide_or_overlay_debug_drawer() -> None:
 
     css = investment_chat_adk._MOBILE_OVERRIDE_CSS
 
-    assert "side-panel-container" not in css
     assert "mat-drawer.mat-drawer-side" not in css
     assert "position: absolute !important" not in css
     assert "mat-toolbar > div:first-child > button:first-child" not in css

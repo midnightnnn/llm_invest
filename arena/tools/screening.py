@@ -312,6 +312,8 @@ def build_discovery_rows(
             "exchange_code": feature_row.get("exchange_code"),
             "instrument_id": feature_row.get("instrument_id"),
             "close_price_krw": feature_row.get("close_price_krw"),
+            "close_price_native": feature_row.get("close_price_native"),
+            "quote_currency": feature_row.get("quote_currency"),
             "ret_5d": ret5.get(ticker),
             "ret_20d": ret20.get(ticker),
             "volatility_20d": vol20.get(ticker),

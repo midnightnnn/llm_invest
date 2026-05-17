@@ -21,7 +21,7 @@ from arena.forecast_selection import (
     merge_forecast_tickers,
     ranker_rows_to_tickers,
 )
-from arena.market_sources import live_market_sources_for_markets
+from arena.market_sources import KOSPI_MARKETS, US_MARKETS, live_market_sources_for_markets
 from arena.market_hours import equity_market_window, previous_trading_day
 from arena.tools._market_scope import MarketScope, MarketScopeError
 from arena.market_feature_normalization import (
@@ -65,6 +65,7 @@ OpportunityProfile = Literal[
     "tactical_inverse",
     "tactical_hedge",
 ]
+MarketScopeChoice = Literal["us", "kr"]
 ScreenMarketBucket = Literal["balanced", "momentum", "pullback", "recovery", "defensive", "value"]
 ScreenMarketBucketChoice = Literal["auto", "balanced", "momentum", "pullback", "recovery", "defensive", "value"]
 ScreenMarketSortBy = Literal["as_of_ts", "ret_20d", "ret_5d", "volatility_20d", "sentiment_score", "close_price_krw"]
@@ -425,6 +426,29 @@ def _has_any_value(payload: dict[str, Any], *keys: str) -> bool:
     return False
 
 
+@dataclass(frozen=True, slots=True)
+class _ToolMarketScope:
+    scope: MarketScope | None
+    requested: str
+    effective: str
+    market_filter: list[str]
+    universe: list[str]
+    sources: list[str] | None
+    agent_markets: list[str]
+    error: dict[str, Any] | None = None
+
+    def diagnostics(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "requested_market_scope": self.requested or None,
+            "effective_market_scope": self.effective,
+            "agent_markets": self.agent_markets,
+            "markets": self.market_filter,
+        }
+        if self.error:
+            payload["scope_error"] = str(self.error.get("scope_error") or "market_scope_error")
+        return payload
+
+
 @dataclass(slots=True)
 class QuantTools:
     """BigQuery-backed quant analysis tools."""
@@ -474,6 +498,140 @@ class QuantTools:
 
     def _has_kospi_market(self) -> bool:
         return self._scope().has_kospi
+
+    def _sources_for_scope(self, scope: MarketScope) -> list[str] | None:
+        if self.settings.trading_mode != "live":
+            return None
+        result = live_market_sources_for_markets(scope.as_set())
+        return result or None
+
+    def _target_universe_for_scope(self, scope: MarketScope) -> list[str]:
+        universe = self._target_universe()
+        if scope.has_us and not scope.has_kospi:
+            return [ticker for ticker in universe if not str(ticker or "").strip().upper()[:1].isdigit()]
+        if scope.has_kospi and not scope.has_us:
+            return [
+                ticker
+                for ticker in universe
+                if str(ticker or "").strip().upper().isdigit()
+                and len(str(ticker or "").strip().upper()) == 6
+            ]
+        return universe
+
+    def _resolve_tool_market_scope(self, market_scope: str | None = None) -> _ToolMarketScope:
+        requested = str(market_scope or "").strip().lower()
+        try:
+            base_scope = self._scope()
+        except MarketScopeError as exc:
+            error = {
+                "status": "unusable",
+                "error": str(exc),
+                "scope_error": "agent_scope_missing",
+                "requested_market_scope": requested or None,
+                "agent_markets": [],
+            }
+            return _ToolMarketScope(
+                scope=None,
+                requested=requested,
+                effective="unavailable",
+                market_filter=[],
+                universe=[],
+                sources=None,
+                agent_markets=[],
+                error=error,
+            )
+
+        agent_markets = sorted(base_scope.as_set())
+        if requested in {"", "auto", "all", "account", "none"}:
+            effective_scope = base_scope
+            effective_label = "agent"
+        elif requested == "us":
+            if not base_scope.has_us:
+                error = {
+                    "status": "unusable",
+                    "error": "market_scope='us' is outside this agent's configured market scope",
+                    "scope_error": "out_of_market_scope",
+                    "requested_market_scope": requested,
+                    "agent_markets": agent_markets,
+                }
+                return _ToolMarketScope(
+                    scope=None,
+                    requested=requested,
+                    effective="unavailable",
+                    market_filter=[],
+                    universe=[],
+                    sources=None,
+                    agent_markets=agent_markets,
+                    error=error,
+                )
+            effective_scope = MarketScope(
+                markets=frozenset(token for token in base_scope.markets if token in US_MARKETS)
+            )
+            effective_label = "us"
+        elif requested == "kr":
+            if not base_scope.has_kospi:
+                error = {
+                    "status": "unusable",
+                    "error": "market_scope='kr' is outside this agent's configured market scope",
+                    "scope_error": "out_of_market_scope",
+                    "requested_market_scope": requested,
+                    "agent_markets": agent_markets,
+                }
+                return _ToolMarketScope(
+                    scope=None,
+                    requested=requested,
+                    effective="unavailable",
+                    market_filter=[],
+                    universe=[],
+                    sources=None,
+                    agent_markets=agent_markets,
+                    error=error,
+                )
+            effective_scope = MarketScope(
+                markets=frozenset(token for token in base_scope.markets if token in KOSPI_MARKETS)
+            )
+            effective_label = "kr"
+        else:
+            error = {
+                "status": "unusable",
+                "error": "market_scope must be one of: us, kr",
+                "scope_error": "invalid_market_scope",
+                "requested_market_scope": requested,
+                "agent_markets": agent_markets,
+            }
+            return _ToolMarketScope(
+                scope=None,
+                requested=requested,
+                effective="unavailable",
+                market_filter=[],
+                universe=[],
+                sources=None,
+                agent_markets=agent_markets,
+                error=error,
+            )
+
+        market_filter = effective_scope.row_market_filter()
+        return _ToolMarketScope(
+            scope=effective_scope,
+            requested=requested,
+            effective=effective_label,
+            market_filter=market_filter,
+            universe=self._target_universe_for_scope(effective_scope),
+            sources=self._sources_for_scope(effective_scope),
+            agent_markets=agent_markets,
+        )
+
+    @staticmethod
+    def _market_scope_error_row(selection: _ToolMarketScope) -> dict[str, Any]:
+        error = dict(selection.error or {})
+        return {
+            "status": "unusable",
+            "error": str(error.get("error") or "market_scope is not usable for this agent"),
+            "scope_error": str(error.get("scope_error") or "market_scope_error"),
+            "requested_market_scope": selection.requested or None,
+            "effective_market_scope": selection.effective,
+            "agent_markets": selection.agent_markets,
+        }
 
     def _us_fundamentals_exchange_candidates(self, requested_exchange: object) -> list[str]:
         requested = str(requested_exchange or "").strip().upper()
@@ -633,32 +791,36 @@ class QuantTools:
 
         return self._target_universe()[: max(1, min(int(limit), 50))]
 
-    def _forecast_default_tickers(self) -> list[str]:
+    def _forecast_default_tickers(self, *, scope: MarketScope | None = None) -> list[str]:
         """Builds the default forecast basket from ranker buckets plus holdings."""
+        effective_scope = scope or self._scope()
         context_candidates = (
             self._discovered_candidate_tickers_from_context()
             or self._working_set_tickers_from_context()
             or self._candidate_tickers_from_context()
         )
         held = self._held_tickers_from_context()
-        ranker_tickers = [] if context_candidates else self._ranker_forecast_tickers()
-        fallback = self._normalize_tickers(context_candidates)
+        held_in_scope, _ = effective_scope.filter_tickers(held)
+        candidates_in_scope, _ = effective_scope.filter_tickers(context_candidates)
+        ranker_tickers = [] if candidates_in_scope else self._ranker_forecast_tickers(scope=effective_scope)
+        fallback = self._normalize_tickers(candidates_in_scope)
         return merge_forecast_tickers(
-            held_tickers=self._normalize_tickers(held, restrict_to_universe=False),
+            held_tickers=self._normalize_tickers(held_in_scope, restrict_to_universe=False),
             ranker_tickers=ranker_tickers,
             fallback_tickers=fallback,
             max_tickers=int(getattr(self.settings, "forecast_max_tickers", 80) or 80),
         )
 
-    def _ranker_forecast_tickers(self) -> list[str]:
+    def _ranker_forecast_tickers(self, *, scope: MarketScope | None = None) -> list[str]:
         loader = getattr(self.repo, "latest_opportunity_ranker_scores", None)
         if not callable(loader):
             return []
 
         top_per_bucket = max(1, int(getattr(self.settings, "forecast_ranker_top_per_bucket", 10) or 10))
         max_age_hours = max(1, int(getattr(self.settings, "forecast_ranker_max_age_hours", 24 * 14) or (24 * 14)))
-        market_filter = self._scope().row_market_filter()
-        universe = self._target_universe()
+        effective_scope = scope or self._scope()
+        market_filter = effective_scope.row_market_filter()
+        universe = self._target_universe_for_scope(effective_scope)
         allowed = set(universe)
 
         out: list[str] = []
@@ -836,10 +998,7 @@ class QuantTools:
         return compacted
 
     def _sources(self) -> list[str] | None:
-        if self.settings.trading_mode != "live":
-            return None
-        result = live_market_sources_for_markets(self._effective_markets())
-        return result or None
+        return self._sources_for_scope(self._scope())
 
     def _target_universe(self) -> list[str]:
         """Returns normalized tickers allowed for this arena run."""
@@ -1092,12 +1251,14 @@ class QuantTools:
         include_value: bool,
         min_ret_20d: float | None = None,
         max_volatility: float | None = None,
+        scope: MarketScope | None = None,
     ) -> dict[str, Any]:
-        universe = self._target_universe()
-        sources = self._sources()
+        effective_scope = scope or self._scope()
+        universe = self._target_universe_for_scope(effective_scope)
+        sources = self._sources_for_scope(effective_scope)
         filters_key = (
             tuple(sorted(universe)),
-            tuple(sorted(self._effective_markets())),
+            tuple(sorted(effective_scope.as_set())),
             tuple(int(w) for w in windows),
             bool(vol_adjust),
             bool(include_value),
@@ -1161,6 +1322,7 @@ class QuantTools:
         order: SortOrder = "desc",
         min_ret_20d: Optional[float] = None,
         max_volatility: Optional[float] = None,
+        market_scope: MarketScopeChoice = None,
     ) -> list[dict]:
         """Discovers candidates across multiple styles inside the runtime universe.
 
@@ -1177,6 +1339,9 @@ class QuantTools:
             sort_by = ""
         windows = [int(w) for w in windows if int(w) > 1]
         windows = windows[:6] or [20, 60, 126]
+        selection = self._resolve_tool_market_scope(market_scope)
+        if selection.error:
+            return [self._market_scope_error_row(selection)]
 
         if sort_by and bucket_token and bucket_token not in {"balanced"}:
             logger.warning(
@@ -1197,23 +1362,24 @@ class QuantTools:
             out = self.repo.screen_latest_features(
                 sort_by=sort_by,
                 order=order,
-                tickers=self._target_universe(),
+                tickers=selection.universe,
                 min_ret_20d=min_ret_20d,
                 max_volatility=max_volatility,
                 top_n=top_n,
-                sources=self._sources(),
+                sources=selection.sources,
             )
             self._log_tool_result("screen_market", out, key_fields=["ticker", "ret_20d", "volatility_20d"])
             return out
 
         include_value = bucket_token in {"", "balanced", "value"}
         logger.info(
-            "[cyan]TOOL[/cyan] screen_market bucket=%s top_n=%d per_bucket=%s windows=%s vol_adjust=%s",
+            "[cyan]TOOL[/cyan] screen_market bucket=%s top_n=%d per_bucket=%s windows=%s vol_adjust=%s market_scope=%s",
             bucket_token or "balanced",
             int(top_n),
             str(per_bucket),
             ",".join(str(w) for w in windows),
             str(bool(vol_adjust)).lower(),
+            selection.effective,
         )
         payload = self._discovery_inputs(
             windows=windows,
@@ -1221,6 +1387,7 @@ class QuantTools:
             include_value=include_value,
             min_ret_20d=min_ret_20d,
             max_volatility=max_volatility,
+            scope=selection.scope,
         )
         out = build_discovery_rows(
             payload.get("latest_rows") or [],
@@ -1400,6 +1567,7 @@ class QuantTools:
         max_candidates: Optional[int] = None,
         include_watchlist: bool = True,
         max_score_age_hours: int = _OPPORTUNITY_DEFAULT_MAX_SCORE_AGE_HOURS,
+        market_scope: MarketScopeChoice = None,
     ) -> dict[str, Any]:
         """Returns precomputed regularized joint-policy opportunities from BigQuery.
 
@@ -1426,8 +1594,8 @@ class QuantTools:
             "effective_lookup_max_age_hours": lookup_max_age_hours,
             "warnings": [],
         }
-        scope = self._scope()
-        market_filter = scope.row_market_filter()
+        selection = self._resolve_tool_market_scope(market_scope)
+        market_filter = selection.market_filter
         bucket_tokens, profile_tokens, filter_diagnostics = _normalize_opportunity_filters(
             buckets=buckets,
             profiles=profiles,
@@ -1442,9 +1610,21 @@ class QuantTools:
             "global_limit": global_limit,
             "per_profile_limit": per_profile_limit,
             **filter_diagnostics,
-            "markets": market_filter,
+            **selection.diagnostics(),
         }
-        universe = self._target_universe()
+        if selection.error:
+            diagnostics["warnings"].append(str(selection.error.get("error") or "market_scope is not usable"))
+            return {
+                "status": "unusable",
+                "error": str(selection.error.get("error") or "market_scope is not usable for this agent"),
+                "recommendations": [],
+                "rows": [],
+                "by_profile": {},
+                "optimizer": {},
+                "ranker": {"score_source": "missing"},
+                "diagnostics": diagnostics,
+            }
+        universe = selection.universe
         universe_allowed = set(universe)
         diagnostics["selection_scope"]["universe_size"] = len(universe)
         if not universe:
@@ -1758,6 +1938,7 @@ class QuantTools:
         self,
         tickers: Optional[list[str]] = None,
         forecast_mode: ForecastModeChoice = "default",
+        market_scope: MarketScopeChoice = None,
     ) -> list[dict]:
         """Loads direction forecasts from 7-model ensemble (NBEATSx, NHITS, PatchTST, iTransformer, Chronos, TimesFM, Lag-Llama).
 
@@ -1768,10 +1949,13 @@ class QuantTools:
         _BQ_LIMIT = 500  # upper bound for BQ query; forecast table has ~50-60 rows
         mode = self._forecast_mode(forecast_mode)
         table_id = str(self.settings.forecast_table or "").strip() or None
+        selection = self._resolve_tool_market_scope(market_scope)
+        if selection.error:
+            return [self._market_scope_error_row(selection)]
         filt: list[str] | None = None
         excluded_scope: list[dict[str, str]] = []
         if tickers is not None:
-            in_scope, excluded_scope = self._partition_tickers_by_scope(tickers)
+            in_scope, excluded_scope = selection.scope.filter_tickers(tickers) if selection.scope else ([], [])
             if excluded_scope:
                 logger.warning(
                     "[yellow]forecast_returns dropped out-of-market tickers[/yellow] excluded=%d sample=%s",
@@ -1780,18 +1964,22 @@ class QuantTools:
                 )
             if not in_scope:
                 return []
-            filt = self._normalize_tickers(in_scope)
+            allowed = set(selection.universe)
+            filt = [ticker for ticker in self._normalize_tickers(in_scope) if not allowed or ticker in allowed]
             if not filt:
                 return []
         else:
-            default_tickers = self._forecast_default_tickers()
+            default_tickers = self._forecast_default_tickers(scope=selection.scope)
             if default_tickers:
                 filt = default_tickers
+            elif market_scope:
+                return []
         logger.info(
-            "[cyan]TOOL[/cyan] forecast_returns tickers=%s mode=%s excluded_scope=%d",
+            "[cyan]TOOL[/cyan] forecast_returns tickers=%s mode=%s excluded_scope=%d market_scope=%s",
             str(len(filt)) if filt else "all",
             mode,
             len(excluded_scope),
+            selection.effective,
         )
         rows = self.repo.get_predicted_returns(
             tickers=filt,
@@ -2101,23 +2289,36 @@ class QuantTools:
             result["excluded_from_market_scope"] = excluded
         return result
 
-    def sector_summary(self, period: str = "20d") -> list[dict]:
+    def sector_summary(
+        self,
+        period: str = "20d",
+        *,
+        market_scope: MarketScopeChoice = None,
+    ) -> list[dict]:
         """Summarizes average return/volatility by sector from latest features."""
         period_key = str(period).strip().lower()
         field = "ret_20d" if period_key in {"20d", "1m"} else "ret_5d"
-        logger.info("[cyan]TOOL[/cyan] sector_summary period=%s field=%s", period_key, field)
+        selection = self._resolve_tool_market_scope(market_scope)
+        if selection.error:
+            return [self._market_scope_error_row(selection)]
+        logger.info(
+            "[cyan]TOOL[/cyan] sector_summary period=%s field=%s market_scope=%s",
+            period_key,
+            field,
+            selection.effective,
+        )
 
         rows = self.repo.screen_latest_features(
             sort_by=field,
             order="desc",
-            tickers=self._target_universe(),
+            tickers=selection.universe,
             top_n=200,
-            sources=self._sources(),
+            sources=selection.sources,
         )
         rows = normalize_market_feature_rows(
             rows,
             repo=self.repo,
-            sources=self._sources(),
+            sources=selection.sources,
             lookback_days=22,
         )
 

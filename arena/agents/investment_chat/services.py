@@ -5,8 +5,17 @@ from urllib.parse import unquote, urlparse
 
 from google.adk.cli.service_registry import get_service_registry
 from google.adk.events.event import Event
-from google.adk.integrations.firestore.firestore_session_service import FirestoreSessionService
 from google.adk.sessions.session import Session
+
+try:
+    from google.adk.integrations.firestore.firestore_session_service import FirestoreSessionService
+except ModuleNotFoundError as _firestore_import_error:
+    class FirestoreSessionService:  # type: ignore[no-redef]
+        def __init__(self, *args, **kwargs) -> None:
+            _ = args, kwargs
+            raise ModuleNotFoundError(
+                "google.adk.integrations.firestore is required for firestore:// session storage"
+            ) from _firestore_import_error
 
 DEFAULT_FIRESTORE_SESSION_ROOT = "arena-investment-chat-adk-sessions"
 ADK_RESERVED_SESSION_METADATA_KEY = "__session_metadata__"

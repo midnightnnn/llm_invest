@@ -474,6 +474,41 @@ def test_build_and_store_opportunity_ranker_filters_forecast_missing_scoring_row
     assert forecast_filter["dropped_tickers_sample"] == ["NOFC"]
 
 
+def test_build_and_store_opportunity_ranker_does_not_filter_scoring_rows_by_share_price() -> None:
+    policy_rows, regime_rows, scoring_rows = _synthetic_policy_rows(days=90)
+    low_price_row = dict(scoring_rows[0])
+    low_price_row.update(
+        {
+            "ticker": "LOWP",
+            "market": "us",
+            "close_price_krw": 33.87,
+            "signal_momentum_20d": 50.0,
+            "signal_forecast_er": 0.20,
+            "signal_forecast_prob": 0.35,
+        }
+    )
+    scoring_rows = [low_price_row, *scoring_rows]
+    repo = _FakePolicyRepo(policy_rows=policy_rows, regime_rows=regime_rows, scoring_rows=scoring_rows)
+    settings = load_settings()
+    settings.kis_target_market = "us"
+    settings.usd_krw_rate = 1498.7
+
+    result = build_and_store_opportunity_ranker(
+        repo,
+        settings,
+        lookback_days=120,
+        horizon_days=20,
+        min_ic_dates=30,
+        max_scoring_rows=10,
+    )
+
+    scored_tickers = {row["ticker"] for row in repo.score_rows}
+    assert result.status == "ok"
+    assert result.scores_written == len(scoring_rows)
+    assert "LOWP" in scored_tickers
+    assert "investability_filter" not in repo.run_rows[-1]["detail_json"]
+
+
 def test_build_and_store_opportunity_ranker_overlays_latest_forecast_for_scoring_rows() -> None:
     policy_rows, regime_rows, scoring_rows = _synthetic_policy_rows(days=90)
     missing_forecast = dict(scoring_rows[0])

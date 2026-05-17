@@ -164,7 +164,7 @@ def _normalize_universe_markets(markets: Any) -> list[str]:
         token = str(raw or "").strip().lower()
         if token in {"nasdaq", "nyse", "amex", "us"}:
             token = "us"
-        elif token == "kospi":
+        elif token in {"kospi", "kosdaq", "kr", "kr_stock"}:
             token = "kospi"
         else:
             continue
@@ -806,7 +806,7 @@ class MarketStore:
         filters: list[str] = []
         params: dict[str, Any] = {"limit": limit}
         if filt:
-            filters.append("ticker IN UNNEST(@tickers)")
+            filters.append("r.ticker IN UNNEST(@tickers)")
             params["tickers"] = filt
 
         if mode_norm == "all":
@@ -838,7 +838,37 @@ class MarketStore:
             staleness_clause = "WHERE run_date >= DATE_SUB(CURRENT_DATE(), INTERVAL @staleness_days DAY)"
             params["staleness_days"] = staleness_days
 
-        if "forecast_run_id" in cols:
+        if "forecast_run_id" in cols and filt:
+            sql = f"""
+            WITH latest AS (
+              SELECT MAX(run_date) AS run_date
+              FROM `{table_ref}`
+              {staleness_clause}
+            ),
+            latest_batch AS (
+              SELECT ticker, forecast_run_id, created_at
+              FROM `{table_ref}`
+              WHERE run_date = (SELECT run_date FROM latest)
+                AND ticker IN UNNEST(@tickers)
+              QUALIFY ROW_NUMBER() OVER (
+                PARTITION BY ticker
+                ORDER BY created_at DESC, IFNULL(CAST(forecast_run_id AS STRING), '') DESC
+              ) = 1
+            )
+            SELECT {", ".join(select_cols)}
+            FROM `{table_ref}` r
+            JOIN latest l USING (run_date)
+            JOIN latest_batch b
+              ON r.ticker = b.ticker
+             AND (
+                (b.forecast_run_id IS NOT NULL AND r.forecast_run_id = b.forecast_run_id)
+                OR (b.forecast_run_id IS NULL AND r.forecast_run_id IS NULL AND r.created_at = b.created_at)
+              )
+            {where}
+            ORDER BY r.{ret_col} DESC
+            LIMIT @limit
+            """
+        elif "forecast_run_id" in cols:
             sql = f"""
             WITH latest AS (
               SELECT MAX(run_date) AS run_date
@@ -1505,14 +1535,53 @@ class MarketStore:
         limit: int = 500,
         market: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Returns latest-date signal rows used for today's scoring."""
+        """Returns latest-date signal rows used for today's scoring.
+
+        Scoring rows are constrained to the latest runtime universe so the
+        joint policy ranker scores the same candidate set exposed to chat.
+        """
         dataset = self.session.dataset_fqn
+        market_token = str(market or "").strip().lower() or None
+        if market_token in {"nasdaq", "nyse", "amex"}:
+            market_token = "us"
+        elif market_token == "kosdaq":
+            market_token = "kospi"
         params = {
             "limit": max(1, min(int(limit), 5000)),
-            "market": str(market or "").strip().lower() or None,
+            "market": market_token,
         }
         sql = f"""
-        WITH dedup AS (
+        WITH universe_scoped AS (
+          SELECT
+            run_id,
+            created_at,
+            ticker,
+            rank AS universe_rank,
+            CASE
+              WHEN SAFE_CAST(ticker AS INT64) IS NOT NULL AND LENGTH(ticker) = 6 THEN 'kospi'
+              ELSE 'us'
+            END AS universe_market
+          FROM `{dataset}.universe_candidates`
+          WHERE @market IS NULL
+             OR CASE
+                  WHEN SAFE_CAST(ticker AS INT64) IS NOT NULL AND LENGTH(ticker) = 6 THEN 'kospi'
+                  ELSE 'us'
+                END = @market
+        ),
+        last_universe AS (
+          SELECT run_id, MAX(created_at) AS max_created
+          FROM universe_scoped
+          GROUP BY run_id
+          ORDER BY max_created DESC
+          LIMIT 1
+        ),
+        universe AS (
+          SELECT ticker, MIN(universe_rank) AS universe_rank
+          FROM universe_scoped
+          WHERE run_id = (SELECT run_id FROM last_universe)
+          GROUP BY ticker
+        ),
+        dedup AS (
           SELECT *, ROW_NUMBER() OVER (
             PARTITION BY as_of_date, ticker
             ORDER BY created_at DESC
@@ -1525,11 +1594,12 @@ class MarketStore:
           FROM dedup
           WHERE rn = 1
         )
-        SELECT d.* EXCEPT(rn)
+        SELECT d.* EXCEPT(rn), u.universe_rank
         FROM dedup d
         JOIN latest l USING (as_of_date)
+        JOIN universe u USING (ticker)
         WHERE d.rn = 1
-        ORDER BY d.signal_momentum_20d DESC NULLS LAST, d.ticker
+        ORDER BY u.universe_rank ASC, d.signal_momentum_20d DESC NULLS LAST, d.ticker
         LIMIT @limit
         """
         return self.session.fetch_rows(sql, params)
@@ -2489,20 +2559,53 @@ class MarketStore:
         """Loads the most recent universe candidate run for the requested market scope."""
         lim = max(1, min(int(limit), 2_000))
         market_tokens = _normalize_universe_markets(markets)
+        market_expr = (
+            "CASE "
+            "WHEN SAFE_CAST(ticker AS INT64) IS NOT NULL AND LENGTH(ticker) = 6 THEN 'kospi' "
+            "ELSE 'us' "
+            "END"
+        )
         filters: list[str] = []
         params: dict[str, Any] = {"limit": lim}
-        if market_tokens and set(market_tokens) != {"us", "kospi"}:
-            filters.append(
-                "("
-                "CASE "
-                "WHEN SAFE_CAST(ticker AS INT64) IS NOT NULL AND LENGTH(ticker) = 6 THEN 'kospi' "
-                "ELSE 'us' "
-                "END"
-                ") IN UNNEST(@markets)"
-            )
+        if market_tokens:
+            filters.append(f"({market_expr}) IN UNNEST(@markets)")
             params["markets"] = market_tokens
 
         where = "WHERE " + " AND ".join(filters) if filters else ""
+        if market_tokens:
+            sql = f"""
+            WITH scoped AS (
+              SELECT
+                {market_expr} AS market_key,
+                run_id, created_at, as_of_ts, rank, score, instrument_id, ticker, ticker_name, exchange_code, reasons
+              FROM `{self.session.dataset_fqn}.universe_candidates`
+              {where}
+            ),
+            latest_runs AS (
+              SELECT market_key, run_id
+              FROM (
+                SELECT market_key, run_id, MAX(created_at) AS max_created
+                FROM scoped
+                GROUP BY market_key, run_id
+              )
+              QUALIFY ROW_NUMBER() OVER (
+                PARTITION BY market_key
+                ORDER BY max_created DESC, run_id DESC
+              ) = 1
+            )
+            SELECT run_id, created_at, as_of_ts, rank, score, instrument_id, ticker, ticker_name, exchange_code, reasons
+            FROM scoped
+            JOIN latest_runs USING (market_key, run_id)
+            ORDER BY
+              CASE market_key WHEN 'us' THEN 0 WHEN 'kospi' THEN 1 ELSE 9 END,
+              rank ASC
+            LIMIT @limit
+            """
+            try:
+                return self.session.fetch_rows(sql, params)
+            except Exception:
+                return []
+
         sql = f"""
         WITH scoped AS (
           SELECT run_id, created_at, as_of_ts, rank, score, instrument_id, ticker, ticker_name, exchange_code, reasons
@@ -2578,10 +2681,16 @@ class MarketStore:
         sources: list[str] | None = None,
         allowed_tickers: list[str] | None = None,
         ticker_names: dict[str, str] | None = None,
+        eligible_sources: list[str] | None = None,
         universe_rank_metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Builds a ranked universe from latest snapshots and writes one run."""
         rank_metadata = _normalize_universe_rank_metadata(universe_rank_metadata)
+        eligible_source_set = {
+            str(source or "").strip().lower()
+            for source in (eligible_sources or [])
+            if str(source or "").strip()
+        }
         lim = max(50, min(max(top_n * 6, 600), 8_000))
         rows = self.latest_market_features(
             tickers=allowed_tickers or [],
@@ -2611,6 +2720,10 @@ class MarketStore:
             if sentiment is None:
                 sentiment = 0.0
             meta = rank_metadata.get(ticker) or {"source": "fallback", "fallback_rank": fallback_rank}
+            exchange_code = str(row.get("exchange_code", "")).strip().upper()
+            source = str(meta.get("source") or "").strip().lower()
+            if eligible_source_set and source not in eligible_source_set:
+                continue
             rank_key = _universe_rank_key(meta, fallback_rank=fallback_rank)
             score = _universe_priority_score(rank_key)
 
@@ -2619,7 +2732,7 @@ class MarketStore:
                 {
                     "ticker": ticker,
                     "ticker_name": name_map.get(ticker, ""),
-                    "exchange_code": str(row.get("exchange_code", "")).strip().upper(),
+                    "exchange_code": exchange_code,
                     "instrument_id": str(row.get("instrument_id", "")).strip(),
                     "as_of_ts": row.get("as_of_ts"),
                     "score": float(score),

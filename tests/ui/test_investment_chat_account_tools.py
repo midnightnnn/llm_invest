@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -69,6 +70,38 @@ def test_investment_chat_account_snapshot_reads_scoped_total_account_snapshot() 
     assert repo.latest_calls[-1]["market_scope"] == "us,kospi,kosdaq"
 
 
+def test_investment_chat_account_snapshot_falls_back_to_latest_stored_snapshot() -> None:
+    from arena.agents.investment_chat.account_tools import build_account_tool_entries
+
+    settings = load_settings()
+
+    class _FallbackRepo(_ChatOrderRepo):
+        def __init__(self):
+            super().__init__()
+            self.latest_calls: list[dict[str, object]] = []
+
+        def latest_account_snapshot(self, *, tenant_id: str | None = None, market_scope: str | None = None):
+            self.latest_calls.append({"tenant_id": tenant_id, "market_scope": market_scope})
+            if market_scope:
+                return None
+            return self.account_snapshot
+
+    repo = _FallbackRepo()
+    tools = {
+        entry.name: entry.callable
+        for entry in build_account_tool_entries(repo=repo, settings=settings, tenant_id="local")
+    }
+
+    payload = tools["get_account_snapshot"]()
+
+    assert payload["status"] == "ok"
+    assert payload["total_equity_krw"] == 10_000_000.0
+    assert repo.latest_calls == [
+        {"tenant_id": "local", "market_scope": "us,kospi,kosdaq"},
+        {"tenant_id": "local", "market_scope": None},
+    ]
+
+
 def test_investment_chat_sleeve_tool_normalizes_model_aliases_to_agent_ids() -> None:
     from arena.agents.investment_chat.account_tools import build_account_tool_entries
 
@@ -130,7 +163,7 @@ def test_refresh_account_snapshot_tool_calls_sync_service(monkeypatch) -> None:
 
     monkeypatch.setattr(account_tools, "AccountSyncService", _FakeAccountSyncService)
 
-    result = tools["refresh_account_snapshot"]()
+    result = asyncio.run(tools["refresh_account_snapshot"]())
 
     assert result["status"] == "ok"
     assert result["total_equity_krw"] == 2.0
@@ -155,7 +188,7 @@ def test_refresh_account_snapshot_logs_unexpected_sync_failure(monkeypatch, capl
     monkeypatch.setattr(account_tools, "AccountSyncService", _FailingAccountSyncService)
 
     with caplog.at_level(logging.WARNING):
-        result = tools["refresh_account_snapshot"]()
+        result = asyncio.run(tools["refresh_account_snapshot"]())
 
     assert result["status"] == "error"
     failure_record = next(
@@ -185,7 +218,7 @@ def test_refresh_account_snapshot_defaults_to_total_account_markets(monkeypatch)
 
     monkeypatch.setattr(account_tools, "AccountSyncService", _FakeAccountSyncService)
 
-    result = tools["refresh_account_snapshot"]()
+    result = asyncio.run(tools["refresh_account_snapshot"]())
 
     assert result["status"] == "ok"
     assert calls["market"] == "us,kospi,kosdaq"
@@ -212,7 +245,7 @@ def test_refresh_account_snapshot_ignores_legacy_single_market_chat_scope(monkey
 
     monkeypatch.setattr(account_tools, "AccountSyncService", _FakeAccountSyncService)
 
-    result = tools["refresh_account_snapshot"]()
+    result = asyncio.run(tools["refresh_account_snapshot"]())
 
     assert result["status"] == "ok"
     assert calls["market"] == "us,kospi,kosdaq"
@@ -254,7 +287,7 @@ def test_refresh_account_snapshot_blocks_server_fallback_credentials(monkeypatch
     )
     tools = {getattr(tool, "__name__", ""): tool for tool in _chat_advisor_agent(agent).tools}
 
-    result = tools["refresh_account_snapshot"]()
+    result = asyncio.run(tools["refresh_account_snapshot"]())
 
     assert result["status"] == "blocked"
     assert result["tenant_id"] == "czxnms"

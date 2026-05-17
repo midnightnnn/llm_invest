@@ -198,20 +198,6 @@ def _build_forecast_tickers(repo, settings: Settings, top_n: int) -> list[str]:
     universe = resolve_runtime_universe(settings, repo=repo)
     held_tickers = _latest_position_tickers(repo, settings)
     ranker_tickers = _ranker_forecast_tickers(repo, settings, universe=universe)
-    if ranker_tickers:
-        combined = merge_forecast_tickers(
-            held_tickers=held_tickers,
-            ranker_tickers=ranker_tickers,
-            max_tickers=int(getattr(settings, "forecast_max_tickers", 80) or 80),
-        )
-        logger.info(
-            "[cyan]Forecast ticker selection[/cyan] source=ranker_baskets held=%d ranker=%d combined=%d top_per_bucket=%d",
-            len(held_tickers),
-            len(ranker_tickers),
-            len(combined),
-            max(1, int(getattr(settings, "forecast_ranker_top_per_bucket", 10) or 10)),
-        )
-        return combined
 
     latest_rows: list[dict] = []
     latest_loader = getattr(repo, "latest_market_features", None)
@@ -267,6 +253,24 @@ def _build_forecast_tickers(repo, settings: Settings, top_n: int) -> list[str]:
         for ticker in bucket_tokens:
             if ticker not in discovery_tickers:
                 discovery_tickers.append(ticker)
+
+    if ranker_tickers:
+        combined = merge_forecast_tickers(
+            held_tickers=held_tickers,
+            ranker_tickers=ranker_tickers,
+            fallback_tickers=discovery_tickers,
+            max_tickers=int(getattr(settings, "forecast_max_tickers", 80) or 80),
+        )
+        logger.info(
+            "[cyan]Forecast ticker selection[/cyan] source=ranker_baskets_plus_discovery held=%d ranker=%d discovery=%d combined=%d top_per_bucket=%d buckets=%s",
+            len(held_tickers),
+            len(ranker_tickers),
+            len(discovery_tickers),
+            len(combined),
+            max(1, int(getattr(settings, "forecast_ranker_top_per_bucket", 10) or 10)),
+            ",".join(f"{name}:{bucket_counts.get(name, 0)}" for name in DISCOVERY_BUCKETS),
+        )
+        return combined
 
     combined = list(dict.fromkeys(discovery_tickers + held_tickers))
     logger.info(

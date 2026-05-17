@@ -424,6 +424,33 @@ def test_get_predicted_returns_prefers_latest_forecast_batch_when_run_id_exists(
     assert params["tickers"] == ["AAPL"]
 
 
+def test_get_predicted_returns_scopes_latest_forecast_batch_per_requested_ticker() -> None:
+    store = _make_forecast_query_store(
+        [
+            {"ticker": "AAPL", "exp_return_period": 0.12},
+            {"ticker": "005930", "exp_return_period": 0.08},
+        ],
+        columns=[
+            "run_date",
+            "forecast_run_id",
+            "ticker",
+            "exp_return_period",
+            "forecast_model",
+            "is_stacked",
+            "created_at",
+        ],
+    )
+
+    rows = store.get_predicted_returns(tickers=["AAPL", "005930"], limit=5, mode="stacked")
+
+    assert [row["ticker"] for row in rows] == ["AAPL", "005930"]
+    sql, params = store.session.call_pairs[-1]
+    assert "PARTITION BY ticker" in sql
+    assert "ON r.ticker = b.ticker" in sql
+    assert "r.ticker IN UNNEST(@tickers)" in sql
+    assert params["tickers"] == ["AAPL", "005930"]
+
+
 # ===================================================================
 # Tests — Sleeve Store: build_agent_sleeve_snapshot
 # ===================================================================

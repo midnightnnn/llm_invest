@@ -24,6 +24,7 @@ from arena.ui.routes.settings_render import (
     build_tab_script,
 )
 from arena.ui.routes.settings_render_capital import build_capital_panel
+from arena.ui.account_onboarding import sync_account_snapshot_after_kis_save
 from arena.ui.templating import render_ui_template
 
 
@@ -427,9 +428,21 @@ def register_settings_page_routes(app: FastAPI, *, deps: SettingsPageRouteDeps) 
                 accounts=accounts,
                 notes=notes,
             )
+            _invalidate_tenant_runtime_cache(tenant)
             if next_distribution_mode != distribution_mode:
                 repo.set_config(tenant, "distribution_mode", next_distribution_mode, user_email or updated_by)
                 _invalidate_tenant_runtime_cache(tenant)
+            snapshot_sync = (
+                sync_account_snapshot_after_kis_save(
+                    repo=repo,
+                    settings=tenant_settings,
+                    tenant_id=tenant,
+                    settings_for_tenant=_settings_for_tenant,
+                    updated_by=user_email or updated_by,
+                )
+                if accounts
+                else {"status": "skipped"}
+            )
             repo.append_runtime_audit_log(
                 action="settings_save",
                 status="ok",
@@ -439,6 +452,7 @@ def register_settings_page_routes(app: FastAPI, *, deps: SettingsPageRouteDeps) 
                     "kis_secret_name": refs.kis_secret_name,
                     "num_accounts": len(accounts),
                     "distribution_mode": next_distribution_mode,
+                    "account_snapshot_sync": snapshot_sync.get("status"),
                 },
             )
             msg = (

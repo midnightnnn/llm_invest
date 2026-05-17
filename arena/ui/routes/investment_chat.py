@@ -50,6 +50,7 @@ from arena.providers.model_discovery import (
     model_option_sets,
     save_model_options_catalog,
 )
+from arena.ui.account_onboarding import sync_account_snapshot_after_kis_save
 from arena.ui.investment_chat_adk import _chat_app_name
 from arena.ui.investment_chat_providers import tenant_available_provider_specs
 from arena.ui.routes.viewer import ViewerRouteDeps
@@ -837,6 +838,17 @@ def register_investment_chat_routes(app: FastAPI, *, deps: ViewerRouteDeps) -> N
                 )
                 if distribution_mode == "simulated_only":
                     deps.repo.set_config(tenant, "distribution_mode", "paper_only", updated_by=updated_by)
+                try:
+                    deps.invalidate_tenant_cache(tenant, "runtime", "memory", "portfolio")
+                except TypeError:
+                    deps.invalidate_tenant_cache(tenant)
+                draft["account_snapshot_sync"] = sync_account_snapshot_after_kis_save(
+                    repo=deps.repo,
+                    settings=tenant_settings,
+                    tenant_id=tenant,
+                    settings_for_tenant=deps.settings_for_tenant,
+                    updated_by=updated_by,
+                )
                 draft["status"] = "applied"
             reload_url = _next_path(tenant)
         else:

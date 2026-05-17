@@ -358,6 +358,29 @@ def test_search_overseas_stocks_returns_rows(monkeypatch) -> None:
     assert rows[0]["symb"] == "AAPL"
 
 
+def test_search_overseas_stocks_sends_market_cap_range(monkeypatch) -> None:
+    client = OpenTradingClient(_settings())
+
+    def _fake_request(*, method, path, tr_id, params=None, tr_cont="", retry_on_401=True):
+        _ = (method, path, tr_id, tr_cont, retry_on_401)
+        assert params is not None
+        assert params["CO_YN_VALX"] == "1"
+        assert params["CO_ST_VALX"] == "100000"
+        assert params["CO_EN_VALX"] == "9999999999"
+        return {"rt_cd": "0", "output2": [{"symb": "MSFT", "valx": "3000000"}]}, {"tr_cont": ""}
+
+    monkeypatch.setattr(client, "_request", _fake_request)
+
+    rows = client.search_overseas_stocks(
+        excd="NAS",
+        market_cap_min=100_000.0,
+        market_cap_max=9_999_999_999.0,
+        max_pages=1,
+    )
+
+    assert rows == [{"symb": "MSFT", "valx": "3000000"}]
+
+
 def test_domestic_market_cap_ranking_follows_tr_cont_pagination(monkeypatch) -> None:
     client = OpenTradingClient(_settings())
     calls: list[str] = []

@@ -30,6 +30,48 @@ def test_screen_market_returns_rows() -> None:
     assert rows[0]["evidence_level"] == "screened_only"
 
 
+def test_screen_market_market_scope_kr_narrows_multi_market_agent() -> None:
+    class _Repo(FakeRepo):
+        def __init__(self):
+            super().__init__()
+            self._features.extend(
+                [
+                    {
+                        "as_of_ts": "2026-01-01T00:00:00+00:00",
+                        "ticker": "005930",
+                        "ret_20d": 0.18,
+                        "ret_5d": 0.04,
+                        "volatility_20d": 0.09,
+                        "sentiment_score": 0.3,
+                        "close_price_krw": 75000.0,
+                        "source": "open_trading_kospi_quote",
+                    },
+                    {
+                        "as_of_ts": "2026-01-01T00:00:00+00:00",
+                        "ticker": "000660",
+                        "ret_20d": 0.12,
+                        "ret_5d": 0.03,
+                        "volatility_20d": 0.11,
+                        "sentiment_score": 0.2,
+                        "close_price_krw": 190000.0,
+                        "source": "open_trading_kospi_quote",
+                    },
+                ]
+            )
+
+    settings = _settings()
+    settings.kis_target_market = "us,kospi,kosdaq"
+    settings.default_universe = ["AAPL", "MSFT", "005930", "000660"]
+    repo = _Repo()
+    qt = QuantTools(repo=repo, settings=settings)
+
+    rows = qt.screen_market(bucket="momentum", top_n=5, market_scope="kr")
+
+    assert rows
+    assert {row["ticker"] for row in rows} <= {"005930", "000660"}
+    assert repo.last_market_kwargs["tickers"] == ["005930", "000660"]
+
+
 def test_screen_market_excludes_quote_only_rows_without_history_features() -> None:
     class _SparseRepo(FakeRepo):
         def __init__(self):
@@ -72,6 +114,52 @@ def test_screen_market_excludes_quote_only_rows_without_history_features() -> No
     assert {row["ticker"] for row in rows} == {"ZERO"}
 
 
+def test_screen_market_does_not_exclude_low_price_rows_when_universe_allows_them() -> None:
+    class _LowPriceRepo(FakeRepo):
+        def __init__(self):
+            super().__init__()
+            self._features = [
+                {
+                    "as_of_ts": "2026-01-01T00:00:00+00:00",
+                    "ticker": "LOWP",
+                    "exchange_code": "NASD",
+                    "ret_20d": 0.80,
+                    "ret_5d": 0.30,
+                    "volatility_20d": 0.04,
+                    "sentiment_score": 0.5,
+                    "close_price_krw": 33.87,
+                    "close_price_native": 0.0226,
+                    "quote_currency": "USD",
+                    "source": "open_trading_us_quote",
+                },
+                {
+                    "as_of_ts": "2026-01-01T00:00:00+00:00",
+                    "ticker": "MSFT",
+                    "exchange_code": "NASD",
+                    "ret_20d": 0.05,
+                    "ret_5d": 0.01,
+                    "volatility_20d": 0.10,
+                    "sentiment_score": 0.1,
+                    "close_price_krw": 552_500.0,
+                    "close_price_native": 425.0,
+                    "quote_currency": "USD",
+                    "source": "open_trading_us_quote",
+                },
+            ]
+            self.universe_rows = ["LOWP", "MSFT"]
+
+    settings = _settings()
+    settings.kis_target_market = "us"
+    settings.default_universe = ["LOWP", "MSFT"]
+    qt = QuantTools(repo=_LowPriceRepo(), settings=settings)
+
+    rows = qt.screen_market(bucket="momentum", top_n=5)
+
+    tickers = {row["ticker"] for row in rows}
+    assert "LOWP" in tickers
+    assert "MSFT" in tickers
+
+
 def test_screen_market_overlays_stored_returns_with_raw_close_features() -> None:
     class _ZeroFeatureRepo(FakeRepo):
         def __init__(self):
@@ -111,6 +199,32 @@ def test_target_universe_loads_latest_universe_candidates_when_default_empty() -
 
     assert qt._target_universe() == ["AAPL", "MSFT"]
     assert repo.last_universe_limit == 3
+
+
+def test_target_universe_unions_multi_market_candidates_per_market() -> None:
+    class _Repo(FakeRepo):
+        def __init__(self):
+            super().__init__()
+            self.universe_calls: list[tuple[int, list[str]]] = []
+
+        def latest_universe_candidate_tickers(self, *, limit=200, markets=None):
+            scoped = list(markets or [])
+            self.universe_calls.append((limit, scoped))
+            if scoped == ["us"]:
+                return ["AAPL", "MSFT"]
+            if scoped == ["kospi"]:
+                return ["005930", "000660"]
+            return []
+
+    settings = _settings()
+    settings.kis_target_market = "us,kospi,kosdaq"
+    settings.default_universe = []
+    settings.universe_run_top_n = 2
+    repo = _Repo()
+    qt = QuantTools(repo=repo, settings=settings)
+
+    assert qt._target_universe() == ["AAPL", "MSFT", "005930", "000660"]
+    assert repo.universe_calls == [(2, ["us"]), (2, ["kospi"])]
 
 
 def test_sources_for_us_include_quote_and_legacy_daily_sources() -> None:
