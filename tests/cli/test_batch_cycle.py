@@ -202,6 +202,46 @@ def test_run_agent_cycle_once_skips_precycle_research_by_default(monkeypatch) ->
     )
 
 
+def test_run_agent_cycle_once_skips_live_batch_when_agent_sleeve_uninitialized(monkeypatch) -> None:
+    settings = load_settings()
+    settings.agent_ids = ["gpt"]
+    settings.agent_configs = {}
+    settings.agent_capitals = {"gpt": 1_000_000.0}
+
+    class _Repo(_FakeRepo):
+        def get_config(self, tenant_id: str, config_key: str):
+            _ = (tenant_id, config_key)
+            return None
+
+        def latest_agent_state_checkpoints(self, *, agent_ids, tenant_id=None):
+            _ = (agent_ids, tenant_id)
+            return {}
+
+    class _Orchestrator:
+        agents = [SimpleNamespace(agent_id="gpt")]
+
+        def run_cycle(self, snapshot=None):
+            raise AssertionError("cycle should not run without initialized agent sleeve")
+
+    monkeypatch.setattr(cli, "_sync_broker_trade_ledger", lambda *args, **kwargs: None)
+    monkeypatch.setattr(cli, "_sync_broker_cash_ledger", lambda *args, **kwargs: None)
+
+    repo = _Repo()
+    cli._run_agent_cycle_once(
+        True,
+        settings=settings,
+        repo=repo,
+        orchestrator=_Orchestrator(),
+        tenant="tenant-a",
+        run_id="run-1",
+        require_initialized_sleeves=True,
+    )
+
+    assert repo.run_status_rows[-1]["status"] == "skipped"
+    assert repo.run_status_rows[-1]["reason_code"] == "agent_sleeve_uninitialized"
+    assert repo.run_status_rows[-1]["stage"] == "sleeve_guard"
+
+
 def test_run_agent_cycle_once_research_uses_account_wide_holdings(monkeypatch) -> None:
     settings = load_settings()
     settings.research_precycle_enabled = True

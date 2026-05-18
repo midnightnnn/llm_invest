@@ -1003,7 +1003,7 @@ class StateReconciliationService:
             elif unallocated_cash < 0:
                 issues.append(
                     ReconciliationIssue(
-                        severity="warning",
+                        severity="error",
                         issue_type="broker_cash_overallocated",
                         entity_type="cash",
                         entity_key="broker_cash",

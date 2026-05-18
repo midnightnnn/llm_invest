@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import time
@@ -81,6 +82,132 @@ def _research_held_tickers(repo: BigQueryRepository | None, settings: Settings) 
 
 def _elapsed_ms(started_at: float) -> int:
     return max(0, int((time.perf_counter() - started_at) * 1000))
+
+
+def _active_agent_ids(settings: Settings, orchestrator: ArenaOrchestrator) -> list[str]:
+    ids = [
+        str(getattr(agent, "agent_id", "") or "").strip()
+        for agent in getattr(orchestrator, "agents", [])
+        if str(getattr(agent, "agent_id", "") or "").strip()
+    ]
+    if not ids:
+        ids = [str(agent_id or "").strip() for agent_id in settings.agent_ids if str(agent_id or "").strip()]
+    return list(dict.fromkeys(ids))
+
+
+def _configured_agent_capitals(repo: BigQueryRepository, *, tenant: str) -> dict[str, float] | None:
+    """Returns explicit per-agent capital config when the repository can expose it."""
+    get_config = getattr(repo, "get_config", None)
+    if not callable(get_config):
+        return None
+
+    raw = str(get_config(tenant, "agents_config") or "").strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    if not isinstance(parsed, list):
+        return {}
+
+    capitals: dict[str, float] = {}
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        agent_id = str(item.get("id") or item.get("agent_id") or "").strip().lower()
+        if not agent_id:
+            continue
+        try:
+            capital = float(item.get("capital_krw"))
+        except (TypeError, ValueError):
+            continue
+        if capital > 0:
+            capitals[agent_id] = capital
+    return capitals
+
+
+def _uninitialized_sleeve_agents(
+    repo: BigQueryRepository,
+    *,
+    settings: Settings,
+    orchestrator: ArenaOrchestrator,
+    tenant: str,
+) -> list[str]:
+    agent_ids = _active_agent_ids(settings, orchestrator)
+    missing: list[str] = []
+
+    configured_capitals = _configured_agent_capitals(repo, tenant=tenant)
+    if configured_capitals is not None:
+        missing.extend(agent_id for agent_id in agent_ids if agent_id.lower() not in configured_capitals)
+
+    checkpoint_loader = getattr(repo, "latest_agent_state_checkpoints", None)
+    if callable(checkpoint_loader):
+        checkpoints = checkpoint_loader(agent_ids=agent_ids, tenant_id=tenant) or {}
+        missing.extend(agent_id for agent_id in agent_ids if agent_id not in checkpoints)
+    else:
+        legacy_loader = getattr(repo, "latest_agent_sleeves", None)
+        if callable(legacy_loader):
+            sleeves = legacy_loader(agent_ids=agent_ids, tenant_id=tenant) or {}
+            missing.extend(agent_id for agent_id in agent_ids if agent_id not in sleeves)
+
+    return list(dict.fromkeys(missing))
+
+
+def _skip_if_agent_sleeves_uninitialized(
+    *,
+    live: bool,
+    require_initialized_sleeves: bool,
+    settings: Settings,
+    repo: BigQueryRepository,
+    orchestrator: ArenaOrchestrator,
+    tenant: str,
+    run_id: str,
+    started_at,
+) -> bool:
+    if not live or not require_initialized_sleeves:
+        return False
+
+    missing_agents = _uninitialized_sleeve_agents(
+        repo,
+        settings=settings,
+        orchestrator=orchestrator,
+        tenant=tenant,
+    )
+    if not missing_agents:
+        return False
+
+    cli = _cli()
+    now = cli.utc_now()
+    logger.warning(
+        "[yellow]Agent cycle skipped: sleeve uninitialized[/yellow] tenant=%s agents=%s",
+        tenant,
+        ",".join(missing_agents),
+        extra=event_extra(
+            "agent_sleeve_uninitialized",
+            tenant_id=tenant,
+            run_id=run_id,
+            missing_agents=missing_agents,
+        ),
+    )
+    cli._append_tenant_run_status(
+        repo,
+        settings,
+        tenant=tenant,
+        run_id=run_id,
+        run_type="agent_cycle",
+        status="skipped",
+        reason_code="agent_sleeve_uninitialized",
+        stage="sleeve_guard",
+        started_at=started_at,
+        finished_at=now,
+        message="에이전트 sleeve 초기 설정이 없어 자동 batch agent 실행을 건너뛰었습니다.",
+        detail={
+            "live": bool(live),
+            "missing_agents": missing_agents,
+        },
+    )
+    return True
 
 
 def _run_post_cycle_maintenance_stage(
@@ -226,6 +353,7 @@ def _run_agent_cycle_once_guarded(
     tenant: str,
     run_id: str | None = None,
     market_override: str = "",
+    require_initialized_sleeves: bool = False,
 ) -> None:
     """Runs one tenant cycle with an optional per-market execution lease."""
     cli = _cli()
@@ -308,6 +436,7 @@ def _run_agent_cycle_once_guarded(
             orchestrator=orchestrator,
             tenant=tenant,
             run_id=run_token,
+            require_initialized_sleeves=require_initialized_sleeves,
         )
     except BaseException as exc:
         if lease_store is not None and lease_id:
@@ -366,6 +495,7 @@ def _run_agent_cycle_once(
     orchestrator: ArenaOrchestrator,
     tenant: str,
     run_id: str | None = None,
+    require_initialized_sleeves: bool = False,
 ) -> None:
     """Runs one tenant-scoped agent cycle (no sync, no forecast)."""
     cli = _cli()
@@ -388,6 +518,18 @@ def _run_agent_cycle_once(
 
     snapshot = None
     try:
+        if _skip_if_agent_sleeves_uninitialized(
+            live=live,
+            require_initialized_sleeves=require_initialized_sleeves,
+            settings=settings,
+            repo=repo,
+            orchestrator=orchestrator,
+            tenant=tenant,
+            run_id=run_token,
+            started_at=started_at,
+        ):
+            return
+
         if live:
             current_stage = "sync"
             account_service = cli.AccountSyncService(settings=settings, repo=repo)
@@ -757,6 +899,7 @@ def cmd_run_agent_cycle(live: bool, *, all_tenants: bool = False, market_overrid
                 tenant=tenant,
                 run_id=run_ids.get(tenant) or cli._new_run_id("agent_cycle"),
                 market_override=market_override,
+                require_initialized_sleeves=True,
             ): tenant
             for tenant, settings, repo, orchestrator in runtimes
         }

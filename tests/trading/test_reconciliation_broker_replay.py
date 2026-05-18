@@ -506,7 +506,7 @@ def test_reconciliation_reports_broker_cash_unallocated_as_warning() -> None:
     assert result.summary["unallocated_cash_krw"] == pytest.approx(200_000.0)
 
 
-def test_reconciliation_warns_when_agent_cash_exceeds_broker_cash() -> None:
+def test_reconciliation_fails_when_agent_cash_exceeds_broker_cash_beyond_tolerance() -> None:
     repo = _FakeRepo()
     repo.snapshot = AccountSnapshot(
         cash_krw=100_000.0,
@@ -532,9 +532,9 @@ def test_reconciliation_warns_when_agent_cash_exceeds_broker_cash() -> None:
         tenant_id="midnightnnn",
     )
 
-    assert result.ok is True
+    assert result.ok is False
     issue = next(issue for issue in result.issues if issue.issue_type == "broker_cash_overallocated")
-    assert issue.severity == "warning"
+    assert issue.severity == "error"
 
 
 def test_reconciliation_allows_small_cash_overallocation_within_tolerance() -> None:
