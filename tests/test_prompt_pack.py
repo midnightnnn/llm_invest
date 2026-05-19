@@ -75,6 +75,37 @@ def test_decision_payload_includes_runtime_clock_when_present() -> None:
     assert "deadline" not in str(payload).lower()
 
 
+def test_execution_payload_omits_empty_context_fields() -> None:
+    payload = PromptPack.decision_payload(
+        {
+            "cycle_phase": "execution",
+            "performance_context": "",
+            "active_thesis_context": "",
+            "memory_context": "",
+            "board_context": "",
+            "market_context": [],
+            "research_context": "",
+            "portfolio": {},
+            "ticker_names": {},
+            "risk_policy": {},
+            "order_budget": {},
+            "analysis_funnel": {},
+            "candidate_cases": [],
+            "decision_frame": "",
+            "investment_style_context": "",
+        },
+        max_tool_calls=10,
+    )
+
+    assert payload == {
+        "cycle_phase": "execution",
+        "tool_budget": {
+            "max_tool_calls": 10,
+            "final_json_before_exhaustion": True,
+        },
+    }
+
+
 def test_prompt_pack_uses_phase_specific_active_thesis_projection() -> None:
     context = {
         "active_thesis_context": "Active Thesis:\n- full projection",
@@ -303,15 +334,18 @@ def test_prompt_pack_renders_resume_and_board_prompts() -> None:
     assert resume.startswith("cycle_phase: execution")
     assert "이전 explore 단계의 분석" in resume
     assert "## 주문 규칙" in resume
-    assert '"max_tool_calls": 5' in resume
+    assert '"max_tool_calls": 5' not in resume
+    assert '"order_budget"' not in resume
+    assert '"risk_policy"' not in resume
     assert board.startswith("cycle_phase: board")
     assert "주문 없음" in board
 
 
-def test_resume_prompt_uses_compact_budget_policy_funnel_and_tool_budget() -> None:
+def test_resume_prompt_omits_phase_duplicate_payload_and_keeps_runtime_clock() -> None:
     resume = PromptPack.render_resume_prompt(
         {
             "board_context": "",
+            "_runtime_clock": {"now_kst": "2026-05-15T15:26:18+09:00"},
             "order_budget": {
                 "display_currency": "KRW",
                 "cash": 749_133.5890466672,
@@ -352,29 +386,24 @@ def test_resume_prompt_uses_compact_budget_policy_funnel_and_tool_budget() -> No
 
     payload = _json_suffix_from_text(resume)
 
-    assert payload["analysis_funnel"] == {"status": "none"}
-    assert payload["tool_budget"] == {"max_tool_calls": 5, "final_json_before_exhaustion": True}
-    assert payload["risk_policy"] == {
-        "max_position_ratio": 1.0,
-        "min_cash_buffer_ratio": 0.1,
-        "ticker_cooldown_seconds": 120,
-        "single_share_buy_exception_enabled": True,
-    }
-    assert payload["order_budget"] == {
-        "cash_krw": 749_134,
-        "min_cash_required_krw": 484_889,
-        "max_buy_notional_krw": 264_245,
-        "buy_caps_krw": {
-            "cash": 264_245,
-            "sleeve": 264_245,
-            "turnover": 48_200_987,
-            "order": 100_000_000,
-        },
-        "today_intents": 1,
-        "daily_orders": "unlimited",
-    }
-    assert "candidate_cases" not in payload
-    assert "decision_frame" not in payload
+    assert payload == {"_runtime_clock": {"now_kst": "2026-05-15T15:26:18+09:00"}}
+    assert '"analysis_funnel"' not in resume
+    assert '"tool_budget"' not in resume
+    assert '"risk_policy"' not in resume
+    assert '"order_budget"' not in resume
+    assert '"candidate_cases"' not in resume
+    assert '"decision_frame"' not in resume
+
+
+def test_board_prompt_includes_runtime_clock_when_present() -> None:
+    prompt = PromptPack.render_board_prompt(
+        "주문 없음",
+        runtime_clock={"now_kst": "2026-05-15T15:26:18+09:00"},
+    )
+
+    assert prompt.startswith("cycle_phase: board")
+    assert '"_runtime_clock": {"now_kst": "2026-05-15T15:26:18+09:00"}' in prompt
+    assert "주문 없음" in prompt
 
 
 def test_execution_prompt_describes_ontology_friendly_order_rationale() -> None:

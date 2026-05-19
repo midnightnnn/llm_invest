@@ -351,11 +351,11 @@ def test_compact_portfolio_diagnosis_no_hrp_allocation() -> None:
     )
 
     assert "hrp_allocation" not in out
-    assert "alpha_vs_benchmark" not in out["benchmark"]
-    assert out["benchmark"]["excess_return_vs_benchmark"] == -0.06
+    assert "benchmark" not in out
+    assert out["primary_benchmark_scope"] == "current_sleeve"
     assert out["joint_policy"]["weighted_score"] == 0.032102
     assert out["joint_policy"]["holdings"][0] == {"ticker": "AAPL", "weight": 0.35, "score": 0.12, "rank": 4}
-    assert "not risk-adjusted alpha" in out["benchmark"]["alpha_definition"]
     assert "alpha_vs_benchmark" not in out["benchmarks"]["current_sleeve"]
     assert "alpha_vs_benchmark" not in out["benchmarks"]["cumulative"]
     assert out["benchmarks"]["current_sleeve"]["excess_return_vs_benchmark"] == -0.06
+    assert "not risk-adjusted alpha" in out["benchmarks"]["current_sleeve"]["alpha_definition"]

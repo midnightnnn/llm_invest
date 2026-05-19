@@ -130,9 +130,9 @@ def build_tool_summary_memory_record(
     return summary, payload
 
 
-def build_board_prompt(orders_summary: str) -> str:
+def build_board_prompt(orders_summary: str, *, runtime_clock: dict[str, Any] | None = None) -> str:
     """Builds the board-generation follow-up prompt."""
-    return PromptPack.render_board_prompt(orders_summary)
+    return PromptPack.render_board_prompt(orders_summary, runtime_clock=runtime_clock)
 
 
 def parse_board_response(text: str) -> dict[str, Any]:

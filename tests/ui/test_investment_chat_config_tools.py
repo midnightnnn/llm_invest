@@ -301,6 +301,33 @@ def test_chat_config_tool_adds_krw_to_existing_agent_capital(monkeypatch) -> Non
     assert repo.capital_sync_calls[-1]["target_capitals"]["gpt"] == 6_000_000
 
 
+def test_chat_config_tool_rejects_fixed_capital_when_rationale_is_additive(monkeypatch) -> None:
+    repo = _ChatOrderRepo()
+    repo.set_config(
+        "local",
+        "agents_config",
+        json.dumps(
+            [
+                {"id": "gpt", "provider": "gpt", "model": "gpt-5.5", "capital_krw": 5_000_000},
+            ]
+        ),
+        "seed",
+    )
+    tools = _build_raw_chat_tools(monkeypatch, repo, include_internal_bridge=True)
+
+    proposed = tools["propose_agent_config_change"](
+        agent_id="gpt",
+        action="update",
+        capital_allocation_mode="fixed_krw",
+        capital_allocation_amount_krw=6_200_000,
+        rationale="사용자가 gpt sleeve에 100만원 추가 배분을 요청함",
+    )
+
+    assert proposed["status"] == "error"
+    assert "add_krw" in proposed["error"]
+    assert repo.get_config("local", "agents_config")
+
+
 def test_chat_config_adk_confirmation_invalidates_runtime_cache(monkeypatch) -> None:
     from arena.agents.investment_chat.config_tools import build_config_tool_entries
     from arena.config import load_settings

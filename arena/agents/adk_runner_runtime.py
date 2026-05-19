@@ -121,6 +121,13 @@ def replace_last_tool_event_result(tool_events: list[dict[str, Any]], result: An
     tool_events[-1]["result"] = _safe_json(truncate_tool_result(result))
 
 
+def set_last_tool_event_model_visible_result(tool_events: list[dict[str, Any]], result: Any) -> None:
+    """Stores the exact model-visible result for audit/UI without changing compact summaries."""
+    if not tool_events:
+        return
+    tool_events[-1]["model_visible_result"] = _safe_json(truncate_tool_result(result))
+
+
 def append_mcp_tool_event(
     tool_events: list[dict[str, Any]],
     wrapped_tool_names: set[str],

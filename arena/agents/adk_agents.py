@@ -84,7 +84,7 @@ from arena.agents.adk_runner_state import (
     unresolved_candidates,
     update_candidate_ledger,
 )
-from arena.agents.runtime_clock import with_runtime_clock
+from arena.agents.runtime_clock import build_runtime_clock, with_runtime_clock
 from arena.agents.adk_tool_compaction import _compact_tool_result_for_prompt
 from arena.agents.adk_tool_config import (
     _load_disabled_tool_ids,
@@ -351,6 +351,7 @@ class _ADKDecisionRunner:
         )
         self._disabled_tool_ids = set(tool_resolution.disabled_tool_ids)
         self._mcp_toolset_count = int(tool_resolution.mcp_toolset_count)
+        self._tool_schema_payload = list(tool_resolution.tool_schemas)
         self._wrapped_tool_names = tool_resolution.wrapped_tool_names
         self._agent = build_agent(
             agent_id=self.agent_id,
@@ -581,7 +582,10 @@ class _ADKDecisionRunner:
         return None
 
     def _available_tools_payload(self) -> list[dict[str, Any]]:
-        """Returns the built-in tool catalog visible to the model for prompt inspection."""
+        """Returns the ADK tool declarations visible to the model for prompt inspection."""
+        tool_schemas = getattr(self, "_tool_schema_payload", None)
+        if isinstance(tool_schemas, list) and tool_schemas:
+            return _safe_json([item for item in tool_schemas if isinstance(item, dict)])
         return PromptPack.tool_catalog_payload(
             self._registry,
             disabled_tool_ids=self._disabled_tool_ids,
@@ -791,7 +795,14 @@ class _ADKDecisionRunner:
                     created_at = datetime.fromtimestamp(float(started_at) / 1000.0, tz=timezone.utc)
             except (TypeError, ValueError, OSError):
                 created_at = default_created_at
-            result = event.get("result") if event.get("result") is not None else event.get("result_preview")
+            model_visible_result = event.get("model_visible_result")
+            result = (
+                model_visible_result
+                if model_visible_result is not None
+                else event.get("result")
+                if event.get("result") is not None
+                else event.get("result_preview")
+            )
             tool_event_id = "tool_" + _short_hash(
                 {
                     "llm_call_id": llm_call_id,
@@ -1459,7 +1470,7 @@ class _ADKDecisionRunner:
         """Step 2: 주문 내역 기반 게시글 작성. 같은 세션 컨텍스트 활용."""
         phase = "board"
         phase_start_idx = len(self._tool_events)
-        board_prompt = build_board_prompt(orders_summary)
+        board_prompt = build_board_prompt(orders_summary, runtime_clock=build_runtime_clock())
         audit_context = dict(self._current_context or {})
         if cycle_id and not str(audit_context.get("cycle_id") or "").strip():
             audit_context["cycle_id"] = str(cycle_id or "").strip()

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Literal, Optional
 from uuid import uuid4
@@ -57,6 +58,11 @@ _CHAT_AGENT_ALLOWED_FIELDS = {
 }
 ConfigChangeAction = Literal["update", "upsert", "add", "remove"]
 CapitalAllocationMode = Literal["unchanged", "fixed_krw", "add_krw", "account_percent", "whole_account"]
+
+_ADDITIVE_CAPITAL_RE = re.compile(
+    r"(추가|증액|더\s*(?:넣|늘|올|배정|추가)|add(?:ed|ing)?|increment|increase\s+by|raise\s+by|more|extra)",
+    re.IGNORECASE,
+)
 
 
 def _confirmation_state_key(tool_context: ToolContext) -> str:
@@ -305,6 +311,10 @@ def _resolve_capital_allocation(
         raise ValueError("resolved capital allocation must be > 0")
     fields["capital_krw"] = float(amount)
     return {"mode": mode, "resolved_capital_krw": float(amount), **dict(raw)}
+
+
+def _looks_like_additive_capital_request(text: object) -> bool:
+    return bool(_ADDITIVE_CAPITAL_RE.search(str(text or "")))
 
 
 def _entry_summary(before: dict[str, Any] | None, after: dict[str, Any]) -> list[dict[str, Any]]:
@@ -861,6 +871,15 @@ def _build_config_tool_entries(
         allocation_mode = str(capital_allocation_mode or "").strip().lower()
         if allocation_mode in {"unchanged", "default", "none"}:
             allocation_mode = ""
+        if _looks_like_additive_capital_request(rationale) and allocation_mode in {"", "fixed", "fixed_krw", "amount"}:
+            return {
+                "status": "error",
+                "tenant_id": tenant,
+                "error": (
+                    "capital increase requests must use capital_allocation_mode=\"add_krw\" "
+                    "with capital_allocation_amount_krw set to the increment, not fixed_krw/current NAV."
+                ),
+            }
         if allocation_mode:
             allocation: dict[str, Any] = {"mode": allocation_mode}
             if capital_allocation_percent is not None:

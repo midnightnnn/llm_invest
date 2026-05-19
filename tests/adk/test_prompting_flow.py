@@ -52,7 +52,7 @@ def test_system_prompt_uses_agent_config_override() -> None:
     assert "Global prompt from DB." not in out
 
 
-def test_prepare_decision_prompt_resume_reuses_session_and_includes_board_context() -> None:
+def test_prepare_decision_prompt_resume_reuses_session_and_omits_phase_duplicate_payload() -> None:
     session_id, prompt, needs_new_session = prepare_decision_prompt(
         {
             "board_context": "peer conviction is rising",
@@ -72,9 +72,16 @@ def test_prepare_decision_prompt_resume_reuses_session_and_includes_board_contex
     assert session_id == "resume_1"
     assert needs_new_session is False
     assert "peer conviction is rising" in prompt
-    assert "Compare opportunities against weakest holding." in prompt
-    assert "screened candidate" in prompt
-    assert '"max_tool_calls": 12' in prompt
+    assert "## 주문 규칙" in prompt
+    assert "Compare opportunities against weakest holding." not in prompt
+    assert "screened candidate" not in prompt
+    assert '"order_budget"' not in prompt
+    assert '"risk_policy"' not in prompt
+    assert '"analysis_funnel"' not in prompt
+    assert '"candidate_cases"' not in prompt
+    assert '"decision_frame"' not in prompt
+    assert '"tool_budget"' not in prompt
+    assert '"max_tool_calls": 12' not in prompt
 
 
 def test_build_tool_summary_memory_record_keeps_token_usage_even_without_events() -> None:
@@ -142,7 +149,7 @@ def test_user_prompt_omits_sleeve_state_payload() -> None:
     assert payload["analysis_funnel"]["screened_only_candidates"] == 2
     assert "pending_nonheld" not in payload["analysis_funnel"]
     assert "opportunity_working_set" not in payload
-    assert payload["candidate_cases"] == []
+    assert "candidate_cases" not in payload
     assert payload["decision_frame"] == "Compare self-discovered opportunities against cash first."
     assert payload["market_context"] == [{"ticker": "AAPL", "close": 123.45}]
     assert payload["research_context"] == "- [AAPL] New product cycle - Demand watchlist."

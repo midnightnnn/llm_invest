@@ -99,6 +99,49 @@ def _compaction_meta(
     }
 
 
+def _maybe_add_truncation_meta(
+    payload: dict[str, Any],
+    *,
+    requested_count: int | None,
+    returned_count: int,
+    visible_count: int,
+    visible_limit: int,
+) -> None:
+    if returned_count > visible_count:
+        payload["compaction"] = _compaction_meta(
+            requested_count=requested_count,
+            returned_count=returned_count,
+            visible_count=visible_count,
+            visible_limit=visible_limit,
+        )
+
+
+def _drop_derived_count(payload: dict[str, Any], *, row_key: str = "rows", count_key: str = "count") -> None:
+    rows = payload.get(row_key)
+    if isinstance(rows, list) and payload.get(count_key) == len(rows):
+        payload.pop(count_key, None)
+
+
+def _drop_if_row_field_mirror(
+    payload: dict[str, Any],
+    *,
+    list_key: str,
+    row_key: str,
+    row_field: str,
+) -> None:
+    rows = payload.get(row_key)
+    mirror = payload.get(list_key)
+    if not isinstance(rows, list) or not isinstance(mirror, list) or not rows:
+        return
+    values: list[Any] = []
+    for row in rows:
+        if not isinstance(row, dict) or row.get(row_field) is None:
+            return
+        values.append(row.get(row_field))
+    if values == mirror:
+        payload.pop(list_key, None)
+
+
 def _compact_memory_context_rows(rows: Any) -> list[dict[str, Any]]:
     return model_memory_context_rows(rows, limit=3)
 
@@ -162,13 +205,20 @@ def _compact_tool_result_for_prompt(
                 max_text=160,
             ),
         }
+        for row in compacted.get("recommendations") or []:
+            if not isinstance(row, dict):
+                continue
+            if row.get("confidence") is not None and row.get("confidence") == row.get("model_confidence"):
+                row.pop("confidence", None)
         optimizer = core.get("optimizer")
         if isinstance(optimizer, dict):
-            compacted["optimizer"] = {
+            optimizer_payload = {
                 key: optimizer.get(key)
                 for key in ("status", "strategy", "strategy_requested", "weights", "raw_weights", "tactical_caps", "forecast_coverage", "degraded_reasons")
                 if optimizer.get(key) is not None
             }
+            if optimizer_payload:
+                compacted["optimizer"] = optimizer_payload
         diagnostics = core.get("diagnostics")
         if isinstance(diagnostics, dict) and isinstance(diagnostics.get("score_policy"), dict):
             policy = diagnostics.get("score_policy") or {}
@@ -303,13 +353,20 @@ def _compact_tool_result_for_prompt(
                 "tickers": list(core.get("tickers") or [])[:visible_limit],
                 "count": len(rows),
                 "rows": rows,
-                "compaction": _compaction_meta(
-                    requested_count=_requested_count(tool_args, core),
-                    returned_count=len(raw_rows),
-                    visible_count=len(rows),
-                    visible_limit=visible_limit,
-                ),
             }
+            excluded = [str(t).strip().upper() for t in list(core.get("excluded_from_market_scope") or []) if str(t).strip()]
+            if excluded:
+                compacted["excluded_from_market_scope"] = excluded[:10]
+            _maybe_add_truncation_meta(
+                compacted,
+                requested_count=_requested_count(tool_args, core),
+                returned_count=len(raw_rows),
+                visible_count=len(rows),
+                visible_limit=visible_limit,
+            )
+            if "compaction" not in compacted:
+                _drop_derived_count(compacted)
+                _drop_if_row_field_mirror(compacted, list_key="tickers", row_key="rows", row_field="ticker")
         elif isinstance(core, dict) and "error" not in core:
             ma = core.get("moving_averages") or {}
             bb = core.get("bollinger_20_2") or {}
@@ -391,6 +448,11 @@ def _compact_tool_result_for_prompt(
             compacted["excluded"] = excluded[:5]
         if errors:
             compacted["errors"] = errors
+        if compacted.get("eligible_count") == len(rows):
+            compacted.pop("eligible_count", None)
+        visible_excluded = compacted.get("excluded") if isinstance(compacted.get("excluded"), list) else []
+        if compacted.get("excluded_count") == len(visible_excluded):
+            compacted.pop("excluded_count", None)
     elif token == "index_snapshot" and isinstance(core, dict):
         rows: list[dict[str, Any]] = []
         for row in list(core.get("indices") or [])[:12]:
@@ -427,13 +489,17 @@ def _compact_tool_result_for_prompt(
                 "tickers": list(core.get("tickers") or []),
                 "count": core.get("count", len(raw_rows)),
                 "rows": rows,
-                "compaction": _compaction_meta(
-                    requested_count=_requested_count(tool_args, core),
-                    returned_count=len(raw_rows),
-                    visible_count=len(rows),
-                    visible_limit=visible_limit,
-                ),
             }
+            _maybe_add_truncation_meta(
+                compacted,
+                requested_count=_requested_count(tool_args, core),
+                returned_count=len(raw_rows),
+                visible_count=len(rows),
+                visible_limit=visible_limit,
+            )
+            if "compaction" not in compacted:
+                _drop_derived_count(compacted)
+                _drop_if_row_field_mirror(compacted, list_key="tickers", row_key="rows", row_field="ticker")
             errors = _compact_rows(core.get("errors"), fields=("ticker", "error"), limit=5, text_fields=("error",), max_text=140)
             if errors:
                 compacted["errors"] = errors
@@ -461,13 +527,17 @@ def _compact_tool_result_for_prompt(
                 "filing_type": core.get("filing_type"),
                 "count": core.get("count", len(raw_rows)),
                 "rows": rows,
-                "compaction": _compaction_meta(
-                    requested_count=_requested_count(tool_args, core),
-                    returned_count=len(raw_rows),
-                    visible_count=len(rows),
-                    visible_limit=visible_limit,
-                ),
             }
+            _maybe_add_truncation_meta(
+                compacted,
+                requested_count=_requested_count(tool_args, core),
+                returned_count=len(raw_rows),
+                visible_count=len(rows),
+                visible_limit=visible_limit,
+            )
+            if "compaction" not in compacted:
+                _drop_derived_count(compacted)
+                _drop_if_row_field_mirror(compacted, list_key="tickers", row_key="rows", row_field="ticker")
             errors = _compact_rows(core.get("errors"), fields=("ticker", "error"), limit=5, text_fields=("error",), max_text=140)
             if errors:
                 compacted["errors"] = errors
@@ -495,15 +565,19 @@ def _compact_tool_result_for_prompt(
             "days_ahead": core.get("days_ahead"),
             "count": core.get("count"),
             "rows": rows,
-            "compaction": _compaction_meta(
-                requested_count=_requested_count(tool_args, core),
-                returned_count=len(raw_rows),
-                visible_count=len(rows),
-                visible_limit=visible_limit,
-            ),
         }
         if core.get("tickers") is not None:
             compacted["tickers"] = core.get("tickers")
+        _maybe_add_truncation_meta(
+            compacted,
+            requested_count=_requested_count(tool_args, core),
+            returned_count=len(raw_rows),
+            visible_count=len(rows),
+            visible_limit=visible_limit,
+        )
+        if "compaction" not in compacted:
+            _drop_derived_count(compacted)
+            _drop_if_row_field_mirror(compacted, list_key="tickers", row_key="rows", row_field="symbol")
         if core.get("error") is not None:
             compacted["error"] = core.get("error")
     elif token == "macro_snapshot" and isinstance(core, dict):
@@ -591,7 +665,18 @@ def _compact_tool_result_for_prompt(
                 if isinstance(benchmark, dict)
             }
         if core.get("benchmark") is not None:
-            compacted["benchmark"] = _benchmark_for_prompt(core.get("benchmark"))
+            primary_benchmark = _benchmark_for_prompt(core.get("benchmark"))
+            matched_scope = None
+            benchmarks = compacted.get("benchmarks")
+            if isinstance(benchmarks, dict):
+                for scope, benchmark in benchmarks.items():
+                    if benchmark == primary_benchmark:
+                        matched_scope = str(scope)
+                        break
+            if matched_scope:
+                compacted["primary_benchmark_scope"] = matched_scope
+            else:
+                compacted["benchmark"] = primary_benchmark
         if core.get("error") is not None:
             compacted["error"] = core.get("error")
     elif token == "trade_performance" and isinstance(core, dict):

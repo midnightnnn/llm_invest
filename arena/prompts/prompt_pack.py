@@ -298,10 +298,6 @@ class PromptPack:
         if not isinstance(analysis_funnel, dict):
             analysis_funnel = model_facing_funnel_metrics(context.get("analysis_funnel", {}))
 
-        tool_budget = {
-            "max_tool_calls": max_tool_calls,
-            "note": f"You have up to {max_tool_calls} tool calls. Plan accordingly and always output final JSON before exhausting your budget.",
-        }
         if phase == "explore":
             payload = {
                 "cycle_phase": phase,
@@ -357,22 +353,32 @@ class PromptPack:
         else:
             payload = {
                 "cycle_phase": phase,
-                "performance_context": context.get("performance_context", ""),
-                "active_thesis_context": active_thesis_context,
-                "memory_context": context.get("memory_context", ""),
-                "board_context": context.get("board_context", ""),
-                "market_context": context.get("market_context", context.get("market_features", [])),
-                "research_context": context.get("research_context", ""),
-                "portfolio": context.get("portfolio", {}),
-                "ticker_names": context.get("ticker_names", {}),
-                "risk_policy": context.get("risk_policy", {}),
-                "order_budget": context.get("order_budget", {}),
-                "analysis_funnel": analysis_funnel,
-                "candidate_cases": context.get("candidate_cases", []),
-                "decision_frame": context.get("decision_frame", ""),
-                "investment_style_context": context.get("investment_style_context", ""),
-                "tool_budget": tool_budget,
+                "tool_budget": PromptPack._compact_explore_tool_budget(max_tool_calls),
             }
+            for key in (
+                "performance_context",
+                "active_thesis_context",
+                "memory_context",
+                "board_context",
+                "market_context",
+                "research_context",
+                "portfolio",
+                "ticker_names",
+                "risk_policy",
+                "order_budget",
+                "candidate_cases",
+                "decision_frame",
+                "investment_style_context",
+            ):
+                value = active_thesis_context if key == "active_thesis_context" else context.get(
+                    key,
+                    context.get("market_features", []) if key == "market_context" else None,
+                )
+                if value:
+                    payload[key] = value
+            compact_funnel = PromptPack._compact_explore_analysis_funnel(analysis_funnel)
+            if compact_funnel != {"status": "none"}:
+                payload["analysis_funnel"] = compact_funnel
         relation_context = str(context.get("relation_context") or "").strip()
         if relation_context:
             payload["relation_context"] = relation_context
@@ -406,6 +412,7 @@ class PromptPack:
         analysis_funnel: dict[str, Any],
         max_tool_events: int,
     ) -> str:
+        _ = analysis_funnel, max_tool_events
         board_ctx = str(context.get("board_context") or "").strip()
         parts = [
             "cycle_phase: execution",
@@ -415,31 +422,29 @@ class PromptPack:
         ]
         if board_ctx:
             parts += ["", "[다른 에이전트 의견]", board_ctx]
-        payload = {
-            "order_budget": PromptPack._compact_explore_order_budget(context.get("order_budget", {})),
-            "risk_policy": PromptPack._compact_explore_risk_policy(context.get("risk_policy", {})),
-            "analysis_funnel": PromptPack._compact_explore_analysis_funnel(
-                model_facing_funnel_metrics(analysis_funnel)
-            ),
-            "tool_budget": PromptPack._compact_explore_tool_budget(max_tool_events),
-        }
-        candidate_cases = context.get("candidate_cases", [])
-        if candidate_cases:
-            payload["candidate_cases"] = candidate_cases
-        decision_frame = str(context.get("decision_frame") or "").strip()
-        if decision_frame:
-            payload["decision_frame"] = decision_frame
+        payload: dict[str, Any] = {}
+        runtime_clock = context.get("_runtime_clock")
+        if isinstance(runtime_clock, dict) and runtime_clock:
+            payload["_runtime_clock"] = runtime_clock
         parts += [
             "",
             EXECUTION_FORMAT,
-            "",
-            json.dumps(safe_json(payload), ensure_ascii=False),
         ]
+        if payload:
+            parts += ["", json.dumps(safe_json(payload), ensure_ascii=False)]
         return "\n".join(parts)
 
     @staticmethod
-    def render_board_prompt(orders_summary: str) -> str:
-        return "\n".join([BOARD_FORMAT, "", str(orders_summary or "")])
+    def render_board_prompt(
+        orders_summary: str,
+        *,
+        runtime_clock: dict[str, Any] | None = None,
+    ) -> str:
+        parts = [BOARD_FORMAT]
+        if isinstance(runtime_clock, dict) and runtime_clock:
+            parts += ["", "Runtime clock JSON:", json.dumps({"_runtime_clock": runtime_clock}, ensure_ascii=False)]
+        parts += ["", str(orders_summary or "")]
+        return "\n".join(parts)
 
     @staticmethod
     def tool_catalog_payload(

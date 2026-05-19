@@ -1034,6 +1034,7 @@ class SleeveStore:
                         "cash_krw": self._safe_float(checkpoint.get("cash_krw")),
                         "positions_payload": positions_payload,
                         "positions_error": None,
+                        "detail_json": self._normalize_detail_json(checkpoint.get("detail_json")),
                     }
                 logger.warning(
                     "[yellow]Agent checkpoint seed parse failed; falling back to sleeve[/yellow] agent=%s err=%s",
@@ -1064,6 +1065,7 @@ class SleeveStore:
             "cash_krw": self._safe_float(cfg.get("initial_cash_krw")),
             "positions_payload": positions_payload,
             "positions_error": error,
+            "detail_json": {},
         }
 
     def _first_agent_state_checkpoint(
@@ -2176,6 +2178,13 @@ class SleeveStore:
             opened_at[t] = init_opened_at
             seed_positions_cost += qty * avg
             baseline_equity += qty * avg
+
+        seed_detail = self._normalize_detail_json(seed_state.get("detail_json"))
+        if seed_source == "capital_events.retarget":
+            basis_before = seed_detail.get("baseline_equity_krw_before_adjustment")
+            flow = seed_detail.get("capital_flow_krw")
+            if basis_before is not None and flow is not None:
+                baseline_equity = self._safe_float(basis_before) + self._safe_float(flow)
 
         cash = init_cash
         realized_total = 0.0

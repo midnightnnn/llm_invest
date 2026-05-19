@@ -42,6 +42,38 @@ def test_build_agent_sleeve_snapshot_replays_capital_events_from_checkpoint_seed
     assert meta["capital_flow_krw"] == pytest.approx(250_000.0)
 
 
+def test_build_agent_sleeve_snapshot_uses_retarget_checkpoint_capital_basis() -> None:
+    store = _make_capital_replay_store(
+        checkpoint={
+            "event_id": "chk_retarget",
+            "checkpoint_at": datetime(2026, 3, 1, tzinfo=timezone.utc),
+            "cash_krw": 1_100_000.0,
+            "positions_json": [
+                {
+                    "ticker": "AAPL",
+                    "exchange_code": "NASD",
+                    "instrument_id": "NASD:AAPL",
+                    "quantity": 1.0,
+                    "avg_price_krw": 300_000.0,
+                }
+            ],
+            "source": "capital_events.retarget",
+            "detail_json": {
+                "baseline_equity_krw_before_adjustment": 1_000_000.0,
+                "capital_flow_krw": 200_000.0,
+            },
+        },
+        capital_events=[],
+    )
+
+    snapshot, baseline, meta = store.build_agent_sleeve_snapshot(agent_id="gpt")
+
+    assert snapshot.cash_krw == pytest.approx(1_100_000.0)
+    assert snapshot.total_equity_krw == pytest.approx(1_400_000.0)
+    assert baseline == pytest.approx(1_200_000.0)
+    assert meta["baseline_equity_krw"] == pytest.approx(1_200_000.0)
+
+
 def test_build_agent_sleeve_snapshot_replays_manual_cash_adjustments() -> None:
     store = _make_capital_replay_store(
         checkpoint={

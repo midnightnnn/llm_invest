@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 
+from arena.agents.adk_agents import _ADKDecisionRunner
 from arena.agents.adk_runner_bootstrap import build_tool_wrapper, resolve_max_tool_events, runner_identity
 from arena.config import load_settings
 from arena.tools.registry import ToolEntry
@@ -51,3 +53,30 @@ def test_tool_wrapper_returns_runtime_clock_without_polluting_tool_event() -> No
     assert "_runtime_clock" in result
     assert "now_kst" in result["_runtime_clock"]
     assert "_runtime_clock" not in tool_events[-1]["result"]
+    assert tool_events[-1]["model_visible_result"]["_runtime_clock"] == result["_runtime_clock"]
+
+
+def test_tool_event_audit_persists_model_visible_result_when_present() -> None:
+    runner = _ADKDecisionRunner.__new__(_ADKDecisionRunner)
+    runner.agent_id = "gpt"
+    clock = {"now_kst": "2026-05-15T15:26:18+09:00"}
+
+    rows = runner._tool_event_rows_for_audit(
+        llm_call_id="llm_1",
+        events=[
+            {
+                "tool": "sample_tool",
+                "args": {"ticker": "005930"},
+                "result": {"ticker": "005930"},
+                "model_visible_result": {"ticker": "005930", "_runtime_clock": clock},
+            }
+        ],
+        phase="explore",
+        cycle_id="cycle_1",
+        default_created_at=datetime(2026, 5, 15, tzinfo=timezone.utc),
+    )
+
+    assert rows[0]["model_visible_result_json"] == {
+        "ticker": "005930",
+        "_runtime_clock": clock,
+    }

@@ -143,13 +143,30 @@ function stringifyTranscriptValue(value){
   try{return JSON.stringify(value,null,2);}
   catch(_e){return String(value);}
 }
+function hasToolSchemaPayload(tool){
+  if(!tool||typeof tool!=="object")return false;
+  return !!(tool.parameters||tool.parameters_json_schema||tool.function_declarations||tool.schema||tool.declaration||tool.source==="mcp_toolset");
+}
+function toolSchemaPayload(tool){
+  if(!tool||typeof tool!=="object")return tool;
+  if(tool.schema&&typeof tool.schema==="object")return tool.schema;
+  if(tool.declaration&&typeof tool.declaration==="object")return tool.declaration;
+  return tool;
+}
 function buildAvailableToolsTranscriptText(bundle){
   var tools=Array.isArray(bundle.available_tools)?bundle.available_tools:[];
   if(!tools.length)return "";
   var lines=[];
-  lines.push("===== AVAILABLE TOOLS =====");
-  tools.forEach(function(tool){
+  var hasSchemas=tools.some(hasToolSchemaPayload);
+  lines.push(hasSchemas?"===== AVAILABLE TOOL SCHEMAS =====":"===== AVAILABLE TOOLS =====");
+  tools.forEach(function(tool,index){
     if(!tool||typeof tool!=="object")return;
+    if(hasToolSchemaPayload(tool)){
+      var name=String(tool.name||tool.tool_id||("tool_"+(index+1)));
+      lines.push("----- TOOL SCHEMA "+(index+1)+": "+name+" -----");
+      lines.push(stringifyTranscriptValue(toolSchemaPayload(tool)));
+      return;
+    }
     var id=String(tool.tool_id||tool.name||"tool");
     var cat=tool.category?" ["+String(tool.category)+"]":"";
     var desc=tool.description?": "+String(tool.description):"";

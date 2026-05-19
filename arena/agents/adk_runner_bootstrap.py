@@ -11,6 +11,7 @@ from google.adk import Agent, Runner
 from google.adk.agents.context_cache_config import ContextCacheConfig
 from google.adk.agents.run_config import RunConfig
 from google.adk.apps.app import App
+from google.adk.tools.function_tool import FunctionTool
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
@@ -19,6 +20,7 @@ from arena.agents.adk_prompting import _safe_json, _system_prompt
 from arena.agents.adk_runner_runtime import (
     append_builtin_tool_event,
     replace_last_tool_event_result,
+    set_last_tool_event_model_visible_result,
 )
 from arena.agents.adk_tool_compaction import _compact_tool_result_for_prompt
 from arena.agents.adk_tool_config import _load_mcp_toolsets, _resolve_disabled_tool_ids
@@ -42,6 +44,7 @@ class RunnerIdentity:
 @dataclass(frozen=True)
 class ToolResolution:
     adk_tools: list[Any]
+    tool_schemas: list[dict[str, Any]]
     wrapped_tool_names: set[str]
     disabled_tool_ids: set[str]
     builtin_count: int
@@ -165,9 +168,37 @@ def build_tool_wrapper(
             )
 
         replace_last_tool_event_result(tool_events, compact_res)
+        set_last_tool_event_model_visible_result(tool_events, model_res)
         return model_res
 
     return apply_tool_schema_metadata(wrapper, entry=entry, sig=sig)
+
+
+def _tool_schema_payload(tool: Any) -> dict[str, Any] | None:
+    try:
+        declaration = FunctionTool(tool)._get_declaration()
+        payload = declaration.model_dump(mode="json", exclude_none=True)
+    except Exception as exc:
+        name = str(getattr(tool, "__name__", "") or "").strip()
+        if not name:
+            return None
+        payload = {
+            "name": name,
+            "description": str(getattr(tool, "__doc__", "") or "").strip(),
+            "schema_error": str(exc)[:240],
+        }
+    if not isinstance(payload, dict):
+        return None
+    return _safe_json(payload)
+
+
+def _tool_schema_payloads(tools: list[Any]) -> list[dict[str, Any]]:
+    payloads: list[dict[str, Any]] = []
+    for tool in tools:
+        payload = _tool_schema_payload(tool)
+        if payload:
+            payloads.append(payload)
+    return payloads
 
 
 def resolve_adk_tools(
@@ -207,6 +238,19 @@ def resolve_adk_tools(
         if str(getattr(tool, "__name__", "")).strip()
     }
     mcp_toolsets = _load_mcp_toolsets(repo, tenant_id)
+    tool_schemas = _tool_schema_payloads(all_tools)
+    if mcp_toolsets:
+        tool_schemas.append(
+            {
+                "name": "mcp_toolsets",
+                "description": (
+                    f"{len(mcp_toolsets)} configured MCP toolset(s) exposed through ADK. "
+                    "Concrete function declarations are resolved by the MCP toolset at request time."
+                ),
+                "source": "mcp_toolset",
+                "count": len(mcp_toolsets),
+            }
+        )
     logger.info(
         "[cyan]ADK tools resolved[/cyan] agent=%s tenant=%s builtin=%d disabled_total=%d mcp_toolsets=%d",
         agent_id,
@@ -217,6 +261,7 @@ def resolve_adk_tools(
     )
     return ToolResolution(
         adk_tools=[*all_tools, *mcp_toolsets],
+        tool_schemas=tool_schemas,
         wrapped_tool_names=wrapped_tool_names,
         disabled_tool_ids=disabled_tool_ids,
         builtin_count=len(all_tools),

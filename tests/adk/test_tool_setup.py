@@ -3,12 +3,13 @@ from __future__ import annotations
 import asyncio
 import inspect
 from types import SimpleNamespace
+from typing import Literal
 
 from arena.agents.adk_agents import _apply_tool_schema_metadata, _load_disabled_tool_ids
-from arena.agents.adk_runner_bootstrap import build_tool_wrapper
+from arena.agents.adk_runner_bootstrap import build_tool_wrapper, resolve_adk_tools
 from arena.config import load_settings
 from arena.tools.default_registry import build_default_registry
-from arena.tools.registry import ToolEntry
+from arena.tools.registry import ToolEntry, ToolRegistry
 from arena.tools.scratch_workspace import ScratchWorkspace
 
 
@@ -179,6 +180,49 @@ def test_batch_default_tool_schema_preserves_required_fields_and_enums() -> None
     assert "code" in scratch_params["required"]
     assert scratch_params["properties"]["inputs"]["type"] == "OBJECT"
     assert scratch_params["properties"]["inputs"]["nullable"] is True
+
+
+def test_resolve_adk_tools_exposes_model_visible_function_declarations() -> None:
+    from arena.agents.adk_tool_helpers import noop_search_tool_memories, noop_update_candidate_ledger
+
+    def sample_schema_tool(ticker: str, side: Literal["BUY", "SELL"] = "BUY") -> dict[str, str]:
+        return {"ticker": ticker, "side": side}
+
+    settings = load_settings()
+    repo = SimpleNamespace(get_config=lambda *args, **kwargs: "")
+    registry = ToolRegistry(
+        [
+            ToolEntry(
+                tool_id="sample_schema_tool",
+                name="sample_schema_tool",
+                description="Canonical schema description visible to the model.",
+                category="test",
+                callable=sample_schema_tool,
+            )
+        ]
+    )
+
+    resolution = resolve_adk_tools(
+        repo=repo,
+        tenant_id="local",
+        agent_config=None,
+        registry=registry,
+        settings=settings,
+        agent_id="gpt",
+        tool_events=[],
+        update_candidate_ledger=noop_update_candidate_ledger,
+        search_tool_memories=noop_search_tool_memories,
+        apply_tool_schema_metadata=_apply_tool_schema_metadata,
+    )
+
+    assert len(resolution.tool_schemas) == 1
+    schema = resolution.tool_schemas[0]
+    assert schema["name"] == "sample_schema_tool"
+    assert schema["description"] == "Canonical schema description visible to the model."
+    params = schema["parameters"]
+    assert "ticker" in params["required"]
+    assert params["properties"]["ticker"]["type"] == "STRING"
+    assert params["properties"]["side"]["enum"] == ["BUY", "SELL"]
 
 
 def test_load_disabled_tool_ids_uses_tool_id_tokens() -> None:

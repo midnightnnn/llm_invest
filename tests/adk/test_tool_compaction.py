@@ -76,12 +76,24 @@ def test_compact_tool_result_technical_signals_multi_returns_summary_rows() -> N
                     "moving_averages": {"sma_20": 98.0, "sma_50": 95.0, "price_vs_sma20": 0.0204},
                     "bollinger_20_2": {"upper": 102.0, "mid": 98.0, "lower": 94.0, "state": "inside_bands"},
                     "trend_state": "uptrend",
-                }
+                },
+                {
+                    "ticker": "MSFT",
+                    "price": 250.0,
+                    "rsi_14": 48.0,
+                    "rsi_state": "neutral",
+                    "macd": {"line": 0.1, "signal": 0.1, "hist": 0.0, "state": "neutral"},
+                    "moving_averages": {"sma_20": 252.0, "sma_50": 248.0, "price_vs_sma20": -0.0079},
+                    "bollinger_20_2": {"upper": 260.0, "mid": 252.0, "lower": 244.0, "state": "inside_bands"},
+                    "trend_state": "sideways",
+                },
             ],
         },
     )
 
-    assert out["count"] == 1
+    assert "count" not in out
+    assert "tickers" not in out
+    assert "compaction" not in out
     assert out["rows"][0]["ticker"] == "AAPL"
     assert out["rows"][0]["macd_state"] == "bullish"
     assert "macd" not in out["rows"][0]
@@ -135,6 +147,42 @@ def test_compact_tool_result_earnings_calendar_reports_truncation() -> None:
     assert out["compaction"]["returned_count"] == 11
     assert out["compaction"]["visible_limit"] == 10
     assert out["compaction"]["truncated"] is True
+
+
+def test_compact_tool_result_earnings_calendar_omits_untruncated_derived_meta() -> None:
+    out = _compact_tool_result_for_prompt(
+        "earnings_calendar",
+        {
+            "ticker": None,
+            "tickers": ["AAPL", "MSFT"],
+            "start_date": "2026-05-19",
+            "days_ahead": 14,
+            "count": 2,
+            "rows": [
+                {"date": "2026-05-20", "symbol": "AAPL", "name": "Apple", "time": "AMC", "eps_forecast": "1.60"},
+                {"date": "2026-05-21", "symbol": "MSFT", "name": "Microsoft", "time": "BMO", "eps_forecast": "3.10"},
+            ],
+        },
+        args={"tickers": ["AAPL", "MSFT"]},
+    )
+
+    assert "compaction" not in out
+    assert "count" not in out
+    assert "tickers" not in out
+    assert [row["symbol"] for row in out["rows"]] == ["AAPL", "MSFT"]
+
+
+def test_compact_tool_result_reddit_keeps_requested_tickers_when_no_rows() -> None:
+    out = _compact_tool_result_for_prompt(
+        "fetch_reddit_sentiment",
+        {"tickers": ["AAPL", "MSFT"], "count": 0, "rows": []},
+        args={"tickers": ["AAPL", "MSFT"]},
+    )
+
+    assert out["tickers"] == ["AAPL", "MSFT"]
+    assert out["rows"] == []
+    assert "count" not in out
+    assert "compaction" not in out
 
 
 def test_compact_tool_result_screen_market_keeps_bucket_reason_and_value_fields() -> None:
@@ -246,6 +294,41 @@ def test_compact_tool_result_recommend_opportunities_keeps_validation_fields() -
     assert out["selection_scope"]["global_limit"] == 8
     assert out["selection_scope"]["per_profile_limit"] == 8
     assert out["selection_scope"]["loaded_rows"] == 73
+
+
+def test_compact_recommend_opportunities_drops_empty_optimizer_and_duplicate_confidence_alias() -> None:
+    out = _compact_tool_result_for_prompt(
+        "recommend_opportunities",
+        {
+            "status": "ok",
+            "recommendations": [
+                {
+                    "ticker": "AAPL",
+                    "profile": "balanced",
+                    "bucket": "momentum",
+                    "recommendation_rank": 1,
+                    "recommendation_score": 0.81,
+                    "score_source": "learned_ic",
+                    "ranker_version": "v1",
+                    "confidence": "medium",
+                    "model_confidence": "medium",
+                    "action": "candidate",
+                    "evidence_level": "validated",
+                    "reason_for": "strong trend",
+                    "reason_risk": "valuation risk",
+                }
+            ],
+            "optimizer": {},
+        },
+    )
+
+    row = out["recommendations"][0]
+    assert "optimizer" not in out
+    assert "confidence" not in row
+    assert row["model_confidence"] == "medium"
+    assert row["recommendation_score"] == 0.81
+    assert row["reason_for"] == "strong trend"
+    assert row["reason_risk"] == "valuation risk"
 
 
 def test_compact_memory_context_candidate_uses_lean_payload_without_summary_truncation() -> None:
@@ -401,8 +484,34 @@ def test_compact_tool_result_get_fundamentals_reduces_meta_lists() -> None:
     )
 
     assert out["requested_count"] == 3
-    assert out["eligible_count"] == 2
-    assert out["excluded_count"] == 1
+    assert "eligible_count" not in out
+    assert "excluded_count" not in out
     assert out["excluded"] == ["XYZ"]
     assert out["rows"][0]["ticker"] == "AAPL"
     assert out["errors"][0]["ticker"] == "XYZ"
+
+
+def test_compact_portfolio_diagnosis_drops_duplicate_benchmark_alias() -> None:
+    benchmark = {
+        "ticker": "SPY",
+        "return_krw": 0.05,
+        "agent_return": -0.01,
+        "excess_return_vs_benchmark": -0.06,
+    }
+    out = _compact_tool_result_for_prompt(
+        "portfolio_diagnosis",
+        {
+            "risk_contribution": [{"ticker": "AAPL", "rc": 0.6}],
+            "concentration_top3": 0.82,
+            "hhi": 0.34,
+            "momentum_20d_weighted": 0.07,
+            "momentum_5d_weighted": 0.02,
+            "volatility_20d_weighted": 0.18,
+            "benchmark": benchmark,
+            "benchmarks": {"current_sleeve": benchmark},
+        },
+    )
+
+    assert "benchmark" not in out
+    assert out["primary_benchmark_scope"] == "current_sleeve"
+    assert out["benchmarks"]["current_sleeve"]["ticker"] == "SPY"

@@ -212,7 +212,18 @@ def test_api_board_prompt_prefers_llm_audit_tables(monkeypatch) -> None:
                         "resume_session": True,
                         "system_prompt": "system body",
                         "user_prompt": "board body",
-                        "available_tools_json": json.dumps([{"tool_id": "recommend_opportunities"}]),
+                        "available_tools_json": json.dumps(
+                            [
+                                {
+                                    "name": "recommend_opportunities",
+                                    "description": "Recommend opportunities.",
+                                    "parameters": {
+                                        "type": "OBJECT",
+                                        "properties": {"top_n": {"type": "INTEGER"}},
+                                    },
+                                }
+                            ]
+                        ),
                         "context_payload_json": json.dumps({"analysis_funnel": {"fully_analyzed_candidates": 1}}),
                         "context_sections_json": json.dumps({"memory_context": "Memory"}),
                         "token_usage_json": json.dumps({"prompt_tokens": 100}),
@@ -230,7 +241,18 @@ def test_api_board_prompt_prefers_llm_audit_tables(monkeypatch) -> None:
                         "resume_session": False,
                         "system_prompt": "system body",
                         "user_prompt": "explore body",
-                        "available_tools_json": json.dumps([{"tool_id": "recommend_opportunities"}]),
+                        "available_tools_json": json.dumps(
+                            [
+                                {
+                                    "name": "recommend_opportunities",
+                                    "description": "Recommend opportunities.",
+                                    "parameters": {
+                                        "type": "OBJECT",
+                                        "properties": {"top_n": {"type": "INTEGER"}},
+                                    },
+                                }
+                            ]
+                        ),
                         "context_payload_json": json.dumps({"analysis_funnel": {"screened_only_candidates": 1}}),
                         "context_sections_json": json.dumps({"market_context": [{"ticker": "AAPL"}]}),
                         "token_usage_json": json.dumps({"prompt_tokens": 80}),
@@ -245,7 +267,18 @@ def test_api_board_prompt_prefers_llm_audit_tables(monkeypatch) -> None:
                         "resume_session": True,
                         "system_prompt": "system body",
                         "user_prompt": "board body",
-                        "available_tools_json": json.dumps([{"tool_id": "recommend_opportunities"}]),
+                        "available_tools_json": json.dumps(
+                            [
+                                {
+                                    "name": "recommend_opportunities",
+                                    "description": "Recommend opportunities.",
+                                    "parameters": {
+                                        "type": "OBJECT",
+                                        "properties": {"top_n": {"type": "INTEGER"}},
+                                    },
+                                }
+                            ]
+                        ),
                         "context_payload_json": json.dumps({"analysis_funnel": {"fully_analyzed_candidates": 1}}),
                         "context_sections_json": json.dumps({"memory_context": "Memory"}),
                         "token_usage_json": json.dumps({"prompt_tokens": 100}),
@@ -288,6 +321,7 @@ def test_api_board_prompt_prefers_llm_audit_tables(monkeypatch) -> None:
     assert payload["prompt_bundle"]["system_prompt"] == "system body"
     assert [row["phase"] for row in payload["prompt_bundle"]["phases"]] == ["explore", "board"]
     assert payload["prompt_bundle"]["phases"][0]["context_sections"]["market_context"][0]["ticker"] == "AAPL"
+    assert payload["prompt_bundle"]["available_tools"][0]["parameters"]["properties"]["top_n"]["type"] == "INTEGER"
     assert payload["tool_events"][0]["tool"] == "recommend_opportunities"
     assert payload["analysis_funnel"]["screened_only_candidates"] == 1
     assert not any("react_tools_summary" in sql for sql, _ in repo.fetch_calls)
@@ -324,6 +358,7 @@ def test_board_page_includes_prompt_and_memory_panels(monkeypatch) -> None:
     assert "/api/board/prompt" in response.text
     assert "/api/board/theses" in response.text
     assert "Prompt Details" in response.text
+    assert "AVAILABLE TOOL SCHEMAS" in response.text
     assert "Captured Model I/O" in response.text
     assert "CONTEXT DETAILS" not in response.text
     assert "Compacted Tool Transcript" not in response.text
