@@ -55,6 +55,9 @@ llm-arena = "arena.cli:main"
 include = ["arena*"]
 exclude = ["data*", "logs*", "tests*"]
 
+[tool.setuptools.package-data]
+"arena.providers" = ["llm_pricing_catalog.json"]
+
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]

@@ -1,0 +1,162 @@
+{
+  "version": 1,
+  "rules": [
+    {
+      "provider": "openai",
+      "model_id": "gpt-5.5",
+      "pricing_model": "gpt-5.5",
+      "input_usd_per_mtok": 5.0,
+      "cache_read_usd_per_mtok": 0.5,
+      "output_usd_per_mtok": 30.0,
+      "pricing_status": "estimated"
+    },
+    {
+      "provider": "openai",
+      "model_id": "gpt-5.4",
+      "pricing_model": "gpt-5.4",
+      "input_usd_per_mtok": 2.5,
+      "cache_read_usd_per_mtok": 0.25,
+      "output_usd_per_mtok": 15.0,
+      "pricing_status": "estimated"
+    },
+    {
+      "provider": "openai",
+      "model_id": "gpt-5.4-pro",
+      "pricing_model": "gpt-5.4-pro",
+      "input_usd_per_mtok": 30.0,
+      "output_usd_per_mtok": 180.0,
+      "pricing_status": "estimated"
+    },
+    {
+      "provider": "openai",
+      "model_id": "gpt-5.4-mini",
+      "pricing_model": "gpt-5.4-mini",
+      "input_usd_per_mtok": 0.75,
+      "cache_read_usd_per_mtok": 0.075,
+      "output_usd_per_mtok": 4.5,
+      "pricing_status": "estimated"
+    },
+    {
+      "provider": "openai",
+      "model_id": "gpt-5.2",
+      "pricing_model": "gpt-5.2",
+      "input_usd_per_mtok": 1.75,
+      "cache_read_usd_per_mtok": 0.175,
+      "output_usd_per_mtok": 14.0,
+      "pricing_status": "estimated"
+    },
+    {
+      "provider": "openai",
+      "model_id": "gpt-5.1",
+      "pricing_model": "gpt-5.1",
+      "input_usd_per_mtok": 1.25,
+      "cache_read_usd_per_mtok": 0.125,
+      "output_usd_per_mtok": 10.0,
+      "pricing_status": "estimated"
+    },
+    {
+      "provider": "openai",
+      "model_pattern": "^gpt-5-(mini|nano)($|-)",
+      "pricing_model": "gpt-5-economy",
+      "input_usd_per_mtok": 0.25,
+      "cache_read_usd_per_mtok": 0.025,
+      "output_usd_per_mtok": 2.0,
+      "pricing_status": "fallback"
+    },
+    {
+      "provider": "openai",
+      "model_id": "gpt-4.1",
+      "pricing_model": "gpt-4.1",
+      "input_usd_per_mtok": 2.0,
+      "cache_read_usd_per_mtok": 0.5,
+      "output_usd_per_mtok": 8.0,
+      "pricing_status": "estimated"
+    },
+    {
+      "provider": "openai",
+      "model_id": "gpt-4o",
+      "pricing_model": "gpt-4o",
+      "input_usd_per_mtok": 2.5,
+      "cache_read_usd_per_mtok": 1.25,
+      "output_usd_per_mtok": 10.0,
+      "pricing_status": "estimated"
+    },
+    {
+      "provider": "anthropic",
+      "model_pattern": "^claude-opus-4-7($|-)",
+      "pricing_model": "claude-opus-4.7",
+      "input_usd_per_mtok": 5.0,
+      "cache_read_usd_per_mtok": 0.5,
+      "cache_write_usd_per_mtok": 6.25,
+      "output_usd_per_mtok": 25.0,
+      "pricing_status": "estimated"
+    },
+    {
+      "provider": "anthropic",
+      "model_pattern": "^claude-opus-4-6($|-)",
+      "pricing_model": "claude-opus-4.6",
+      "input_usd_per_mtok": 5.0,
+      "cache_read_usd_per_mtok": 0.5,
+      "cache_write_usd_per_mtok": 6.25,
+      "output_usd_per_mtok": 25.0,
+      "pricing_status": "estimated"
+    },
+    {
+      "provider": "anthropic",
+      "model_pattern": "^claude-.*opus",
+      "pricing_model": "claude-opus",
+      "input_usd_per_mtok": 15.0,
+      "cache_read_usd_per_mtok": 1.5,
+      "cache_write_usd_per_mtok": 18.75,
+      "output_usd_per_mtok": 75.0,
+      "pricing_status": "family"
+    },
+    {
+      "provider": "anthropic",
+      "model_pattern": "^claude-.*sonnet",
+      "pricing_model": "claude-sonnet",
+      "input_usd_per_mtok": 3.0,
+      "cache_read_usd_per_mtok": 0.3,
+      "cache_write_usd_per_mtok": 3.75,
+      "output_usd_per_mtok": 15.0,
+      "pricing_status": "family"
+    },
+    {
+      "provider": "anthropic",
+      "model_pattern": "^claude-.*haiku",
+      "pricing_model": "claude-haiku",
+      "input_usd_per_mtok": 0.8,
+      "cache_read_usd_per_mtok": 0.08,
+      "cache_write_usd_per_mtok": 1.0,
+      "output_usd_per_mtok": 4.0,
+      "pricing_status": "family"
+    },
+    {
+      "provider": "gemini",
+      "model_pattern": "^gemini-3(\\.1)?-pro",
+      "pricing_model": "gemini-3-pro",
+      "input_usd_per_mtok": 2.0,
+      "cache_read_usd_per_mtok": 0.2,
+      "output_usd_per_mtok": 12.0,
+      "pricing_status": "family"
+    },
+    {
+      "provider": "gemini",
+      "model_pattern": "^gemini-3(\\.1)?-flash",
+      "pricing_model": "gemini-3-flash",
+      "input_usd_per_mtok": 0.5,
+      "cache_read_usd_per_mtok": 0.05,
+      "output_usd_per_mtok": 3.0,
+      "pricing_status": "family"
+    },
+    {
+      "provider": "gemini",
+      "model_pattern": "^gemini-2\\.5-flash-lite",
+      "pricing_model": "gemini-2.5-flash-lite",
+      "input_usd_per_mtok": 0.1,
+      "cache_read_usd_per_mtok": 0.01,
+      "output_usd_per_mtok": 0.4,
+      "pricing_status": "family"
+    }
+  ]
+}

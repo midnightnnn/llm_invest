@@ -259,7 +259,7 @@ def register_nav_routes(app: FastAPI, *, deps: ViewerRouteDeps) -> None:
         )
 
         if not rows:
-            return deps.json_response({"labels": [], "nav": [], "dd": [], "summary": [], "token_daily": {"labels": [], "datasets": []}, "trade_daily": {"labels": [], "datasets": []}}, max_age=60)
+            return deps.json_response({"labels": [], "nav": [], "dd": [], "summary": [], "token_daily": {"labels": [], "datasets": []}, "cost_daily": {"labels": [], "datasets": []}, "trade_daily": {"labels": [], "datasets": []}}, max_age=60)
 
         labels = sorted({deps.to_date(row.get("nav_date")) for row in rows if row.get("nav_date")})
         series_by_agent: dict[str, dict[str, dict[str, float | None]]] = {}
@@ -318,11 +318,26 @@ def register_nav_routes(app: FastAPI, *, deps: ViewerRouteDeps) -> None:
                     "trade_count": deps.safe_int(trade_rows.get(agent), 0),
                     "llm_calls": deps.safe_int(token_usage.get("llm_calls"), 0),
                     "prompt_tokens": deps.safe_int(token_usage.get("prompt_tokens"), 0),
+                    "input_tokens": deps.safe_int(token_usage.get("input_tokens"), 0),
                     "completion_tokens": deps.safe_int(token_usage.get("completion_tokens"), 0),
                     "cached_tokens": deps.safe_int(token_usage.get("cached_tokens"), 0),
+                    "cached_input_tokens": deps.safe_int(token_usage.get("cached_input_tokens"), 0),
+                    "cache_read_input_tokens": deps.safe_int(token_usage.get("cache_read_input_tokens"), 0),
+                    "cache_write_input_tokens": deps.safe_int(token_usage.get("cache_write_input_tokens"), 0),
+                    "uncached_input_tokens": deps.safe_int(token_usage.get("uncached_input_tokens"), 0),
                     "thinking_tokens": deps.safe_int(token_usage.get("thinking_tokens"), 0),
+                    "output_tokens": deps.safe_int(token_usage.get("output_tokens"), 0),
                     "total_tokens": deps.safe_int(token_usage.get("total_tokens"), 0),
+                    "raw_total_tokens": deps.safe_int(token_usage.get("raw_total_tokens"), 0),
                     "cache_ratio": float(token_usage.get("cache_ratio") or 0.0),
+                    "input_cost_usd": float(token_usage.get("input_cost_usd") or 0.0),
+                    "cached_input_cost_usd": float(token_usage.get("cached_input_cost_usd") or 0.0),
+                    "cache_read_cost_usd": float(token_usage.get("cache_read_cost_usd") or 0.0),
+                    "cache_write_cost_usd": float(token_usage.get("cache_write_cost_usd") or 0.0),
+                    "output_cost_usd": float(token_usage.get("output_cost_usd") or 0.0),
+                    "estimated_cost_usd": float(token_usage.get("estimated_cost_usd") or 0.0),
+                    "pricing_status": str(token_usage.get("pricing_status") or "unknown"),
+                    "pricing_model": str(token_usage.get("pricing_model") or ""),
                 }
             )
 
@@ -332,8 +347,8 @@ def register_nav_routes(app: FastAPI, *, deps: ViewerRouteDeps) -> None:
         agent_colors = {"gpt": "#10a37f", "gemini": "#4285f4", "claude": "#d97757"}
         fallback_colors = ["#0ea5e9", "#8b5cf6", "#22c55e", "#f59e0b"]
 
-        def _build_daily_series(raw_rows: list[dict[str, Any]], date_key: str, value_key: str) -> dict[str, Any]:
-            by_date_agent: dict[str, dict[str, int]] = {}
+        def _build_daily_series(raw_rows: list[dict[str, Any]], date_key: str, value_key: str, *, as_float: bool = False) -> dict[str, Any]:
+            by_date_agent: dict[str, dict[str, float]] = {}
             all_agents: set[str] = set()
             for r in raw_rows:
                 d_val = r.get(date_key)
@@ -344,7 +359,8 @@ def register_nav_routes(app: FastAPI, *, deps: ViewerRouteDeps) -> None:
                 if not agent:
                     continue
                 all_agents.add(agent)
-                by_date_agent.setdefault(d_str, {})[agent] = int(r.get(value_key) or 0)
+                value = float(r.get(value_key) or 0.0) if as_float else int(r.get(value_key) or 0)
+                by_date_agent.setdefault(d_str, {})[agent] = round(value, 6) if as_float else value
             d_labels = sorted(by_date_agent.keys())
             s_agents = sorted(all_agents)
             datasets = []
@@ -362,6 +378,7 @@ def register_nav_routes(app: FastAPI, *, deps: ViewerRouteDeps) -> None:
             return {"labels": d_labels, "datasets": datasets}
 
         token_daily = _build_daily_series(token_daily_raw, "usage_date", "total_tokens")
+        cost_daily = _build_daily_series(token_daily_raw, "usage_date", "estimated_cost_usd", as_float=True)
         trade_daily = _build_daily_series(trade_daily_raw, "trade_date", "trade_count")
 
         return deps.json_response({
@@ -370,5 +387,6 @@ def register_nav_routes(app: FastAPI, *, deps: ViewerRouteDeps) -> None:
             "dd": dd_datasets,
             "summary": summary_rows,
             "token_daily": token_daily,
+            "cost_daily": cost_daily,
             "trade_daily": trade_daily,
         }, max_age=60)

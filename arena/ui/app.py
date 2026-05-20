@@ -307,6 +307,14 @@ def _build_app(*, repo: BigQueryRepository, settings: Settings) -> FastAPI:
             return parsed
         return [str(x).strip().lower() for x in settings.agent_ids if str(x).strip()]
 
+    def _default_viewer_tenant() -> str:
+        return (
+            str(os.getenv("ARENA_VIEWER_TENANT_ID") or "").strip().lower()
+            or str(os.getenv("ARENA_TENANT_ID") or "").strip().lower()
+            or str(getattr(repo, "tenant_id", "") or "").strip().lower()
+            or "local"
+        )
+
     def _is_live_mode(active_settings: Settings | None = None) -> bool:
         runtime_settings = active_settings or settings
         trading_mode = str(runtime_settings.trading_mode or "").strip().lower()
@@ -350,7 +358,7 @@ def _build_app(*, repo: BigQueryRepository, settings: Settings) -> FastAPI:
         if auth_enabled:
             tenant = requested if requested and requested in allowed_tenants else (allowed_tenants[0] if allowed_tenants else "local")
         else:
-            tenant = requested or "local"
+            tenant = requested or _default_viewer_tenant()
         scoped_agent_ids = _scoped_agent_ids_for_tenant(tenant)
         if not scoped_agent_ids:
             scoped_agent_ids = [str(x).strip().lower() for x in settings.agent_ids if str(x).strip()]

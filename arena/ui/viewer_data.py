@@ -9,6 +9,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable
 
 from arena.config import Settings
+from arena.llm_pricing import estimate_llm_cost
 from arena.logging_utils import failure_extra
 from arena.ui.viewer_analytics import render_pnl_badge
 
@@ -22,7 +23,7 @@ class ViewerDataHelpers:
     fetch_prompt_bundle_for_post: Callable[..., dict[str, Any]]
     fetch_theses_for_board_post: Callable[..., dict[str, Any]]
     fetch_nav: Callable[..., list[dict[str, Any]]]
-    fetch_token_usage_summary: Callable[..., dict[str, dict[str, int | float]]]
+    fetch_token_usage_summary: Callable[..., dict[str, dict[str, Any]]]
     fetch_trade_count_summary: Callable[..., dict[str, int]]
     fetch_token_usage_daily: Callable[..., list[dict[str, Any]]]
     fetch_trade_count_daily: Callable[..., list[dict[str, Any]]]
@@ -67,12 +68,28 @@ def build_viewer_data_helpers(
         parsed = _json_any(raw)
         return parsed if isinstance(parsed, list) else []
 
+    def _is_local_mode() -> bool:
+        mode = str(getattr(settings, "arena_mode", "") or "").strip().lower()
+        return mode == "local" or not str(getattr(repo, "dataset_fqn", "") or "").strip()
+
     def _iso_ts(value: object) -> str:
         if isinstance(value, datetime):
             if value.tzinfo is None:
                 value = value.replace(tzinfo=timezone.utc)
             return value.isoformat()
         return str(value or "").strip()
+
+    def _date_kst(value: object) -> str:
+        if isinstance(value, datetime):
+            dt = value
+        else:
+            try:
+                dt = datetime.fromisoformat(str(value or "").replace("Z", "+00:00"))
+            except (TypeError, ValueError):
+                return ""
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone(timedelta(hours=9))).date().isoformat()
 
     def fetch_board(
         *,
@@ -622,64 +639,219 @@ def build_viewer_data_helpers(
         """
         return repo.fetch_rows(sql, params)
 
+    def _token_usage_from_row(row: dict[str, Any]) -> dict[str, Any]:
+        usage = _json_dict(row.get("token_usage_json"))
+        return {
+            "llm_calls": safe_int(row.get("llm_calls", usage.get("llm_calls")), 0),
+            "prompt_tokens": safe_int(row.get("prompt_tokens", usage.get("prompt_tokens")), 0),
+            "input_tokens": safe_int(row.get("input_tokens", usage.get("input_tokens")), 0),
+            "completion_tokens": safe_int(row.get("completion_tokens", usage.get("completion_tokens")), 0),
+            "output_tokens": safe_int(row.get("output_tokens", usage.get("output_tokens")), 0),
+            "cached_tokens": safe_int(row.get("cached_tokens", usage.get("cached_tokens")), 0),
+            "cache_read_input_tokens": safe_int(row.get("cache_read_input_tokens", usage.get("cache_read_input_tokens")), 0),
+            "cache_write_input_tokens": safe_int(row.get("cache_write_input_tokens", usage.get("cache_write_input_tokens")), 0),
+            "cache_creation_input_tokens": safe_int(row.get("cache_creation_input_tokens", usage.get("cache_creation_input_tokens")), 0),
+            "thinking_tokens": safe_int(row.get("thinking_tokens", usage.get("thinking_tokens")), 0),
+        }
+
+    def _fetch_token_usage_raw_rows(
+        *,
+        tenant_id: str,
+        days: int,
+        agent_id: str | None = None,
+        agent_ids: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        tenant = str(tenant_id or "").strip().lower() or "local"
+        start = datetime.now(timezone.utc) - timedelta(days=int(days))
+        filters = [
+            "tenant_id = @tenant_id",
+            "created_at >= @start",
+            "token_usage_json IS NOT NULL",
+        ]
+        params: dict[str, Any] = {"tenant_id": tenant, "start": start, "limit": 50000}
+        if agent_ids:
+            filters.append("LOWER(agent_id) IN UNNEST(@agent_ids)")
+            params["agent_ids"] = agent_ids
+        if agent_id:
+            filters.append("LOWER(agent_id) = @agent_id")
+            params["agent_id"] = agent_id
+        where = " AND ".join(filters)
+        return repo.fetch_rows(
+            f"""
+            SELECT created_at, LOWER(agent_id) AS agent_id,
+                   LOWER(COALESCE(NULLIF(provider, ''), agent_id)) AS provider,
+                   COALESCE(NULLIF(model, ''), '') AS model,
+                   token_usage_json
+            FROM `{repo.dataset_fqn}.agent_llm_interactions`
+            WHERE {where}
+            ORDER BY created_at ASC
+            LIMIT @limit
+            """,
+            params,
+        )
+
+    def _merge_pricing_status(current: str, incoming: str) -> str:
+        current = str(current or "").strip().lower()
+        incoming = str(incoming or "").strip().lower()
+        if not current:
+            return incoming or "unknown"
+        if not incoming or current == incoming:
+            return current
+        if "unknown" in {current, incoming} or "partial" in {current, incoming}:
+            return "partial"
+        if "assumed" in {current, incoming}:
+            return "assumed"
+        return "estimated"
+
+    def _new_token_bucket() -> dict[str, Any]:
+        return {
+            "llm_calls": 0,
+            "prompt_tokens": 0,
+            "input_tokens": 0,
+            "completion_tokens": 0,
+            "cached_tokens": 0,
+            "cached_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_write_input_tokens": 0,
+            "thinking_tokens": 0,
+            "output_tokens": 0,
+            "uncached_input_tokens": 0,
+            "total_tokens": 0,
+            "raw_total_tokens": 0,
+            "cache_ratio": 0.0,
+            "input_cost_usd": 0.0,
+            "cached_input_cost_usd": 0.0,
+            "cache_read_cost_usd": 0.0,
+            "cache_write_cost_usd": 0.0,
+            "output_cost_usd": 0.0,
+            "estimated_cost_usd": 0.0,
+            "pricing_status": "",
+            "pricing_model": "",
+            "provider": "",
+            "model": "",
+        }
+
+    def _add_costed_usage(bucket: dict[str, Any], row: dict[str, Any]) -> None:
+        provider = str(row.get("provider") or "").strip().lower()
+        model = str(row.get("model") or "").strip()
+        usage = _token_usage_from_row(row)
+        costed = estimate_llm_cost(provider, model, usage)
+        bucket["llm_calls"] = safe_int(bucket.get("llm_calls"), 0) + safe_int(usage.get("llm_calls"), 0)
+        for key in (
+            "prompt_tokens",
+            "input_tokens",
+            "completion_tokens",
+            "cached_tokens",
+            "cached_input_tokens",
+            "cache_read_input_tokens",
+            "cache_write_input_tokens",
+            "thinking_tokens",
+            "output_tokens",
+            "uncached_input_tokens",
+            "total_tokens",
+            "raw_total_tokens",
+        ):
+            bucket[key] = safe_int(bucket.get(key), 0) + safe_int(costed.get(key), 0)
+        for key in (
+            "input_cost_usd",
+            "cached_input_cost_usd",
+            "cache_read_cost_usd",
+            "cache_write_cost_usd",
+            "output_cost_usd",
+            "estimated_cost_usd",
+        ):
+            bucket[key] = float(bucket.get(key) or 0.0) + float(costed.get(key) or 0.0)
+        bucket["pricing_status"] = _merge_pricing_status(
+            str(bucket.get("pricing_status") or ""),
+            str(costed.get("pricing_status") or "unknown"),
+        )
+        pricing_model = str(costed.get("pricing_model") or "").strip()
+        if pricing_model:
+            bucket["pricing_model"] = pricing_model if not bucket.get("pricing_model") else (
+                str(bucket.get("pricing_model")) if str(bucket.get("pricing_model")) == pricing_model else "mixed"
+            )
+        if provider:
+            bucket["provider"] = provider if not bucket.get("provider") else (
+                str(bucket.get("provider")) if str(bucket.get("provider")) == provider else "mixed"
+            )
+        if model:
+            bucket["model"] = model if not bucket.get("model") else (
+                str(bucket.get("model")) if str(bucket.get("model")) == model else "mixed"
+            )
+
+    def _finalize_token_bucket(bucket: dict[str, Any]) -> dict[str, Any]:
+        input_tokens = safe_int(bucket.get("input_tokens"), 0)
+        cache_read_tokens = safe_int(bucket.get("cache_read_input_tokens"), 0)
+        bucket["cache_ratio"] = round(cache_read_tokens / input_tokens * 100.0, 1) if input_tokens > 0 else 0.0
+        bucket["pricing_status"] = str(bucket.get("pricing_status") or "unknown")
+        return bucket
+
     def fetch_token_usage_summary(
         *,
         tenant_id: str,
         days: int,
         agent_id: str | None = None,
         agent_ids: list[str] | None = None,
-    ) -> dict[str, dict[str, int | float]]:
+    ) -> dict[str, dict[str, Any]]:
         tenant = str(tenant_id or "").strip().lower() or "local"
         start = datetime.now(timezone.utc) - timedelta(days=int(days))
         filters = [
             "tenant_id = @tenant_id",
-            "event_type = 'react_tools_summary'",
             "created_at >= @start",
+            "token_usage_json IS NOT NULL",
         ]
         params: dict[str, Any] = {"tenant_id": tenant, "start": start}
         if agent_ids:
             filters.append("LOWER(agent_id) IN UNNEST(@agent_ids)")
             params["agent_ids"] = agent_ids
         if agent_id:
-            filters.append("agent_id = @agent_id")
+            filters.append("LOWER(agent_id) = @agent_id")
             params["agent_id"] = agent_id
         where = " AND ".join(filters)
+        if _is_local_mode():
+            stats: dict[str, dict[str, Any]] = {}
+            for row in _fetch_token_usage_raw_rows(
+                tenant_id=tenant,
+                days=days,
+                agent_id=agent_id,
+                agent_ids=agent_ids,
+            ):
+                agent = str(row.get("agent_id") or "").strip().lower()
+                if not agent:
+                    continue
+                bucket = stats.setdefault(agent, _new_token_bucket())
+                _add_costed_usage(bucket, row)
+            return {agent: _finalize_token_bucket(bucket) for agent, bucket in stats.items()}
+
         sql = f"""
         SELECT
           LOWER(agent_id) AS agent_id,
-          SUM(COALESCE(SAFE_CAST(JSON_VALUE(payload_json, '$.token_usage.llm_calls') AS INT64), 0)) AS llm_calls,
-          SUM(COALESCE(SAFE_CAST(JSON_VALUE(payload_json, '$.token_usage.prompt_tokens') AS INT64), 0)) AS prompt_tokens,
-          SUM(COALESCE(SAFE_CAST(JSON_VALUE(payload_json, '$.token_usage.completion_tokens') AS INT64), 0)) AS completion_tokens,
-          SUM(COALESCE(SAFE_CAST(JSON_VALUE(payload_json, '$.token_usage.cached_tokens') AS INT64), 0)) AS cached_tokens,
-          SUM(COALESCE(SAFE_CAST(JSON_VALUE(payload_json, '$.token_usage.thinking_tokens') AS INT64), 0)) AS thinking_tokens
-        FROM `{repo.dataset_fqn}.agent_memory_events`
+          LOWER(COALESCE(NULLIF(provider, ''), agent_id)) AS provider,
+          COALESCE(NULLIF(model, ''), '') AS model,
+          SUM(COALESCE(SAFE_CAST(JSON_VALUE(token_usage_json, '$.llm_calls') AS INT64), 1)) AS llm_calls,
+          SUM(COALESCE(SAFE_CAST(JSON_VALUE(token_usage_json, '$.prompt_tokens') AS INT64), SAFE_CAST(JSON_VALUE(token_usage_json, '$.prompt_token_count') AS INT64), 0)) AS prompt_tokens,
+          SUM(COALESCE(SAFE_CAST(JSON_VALUE(token_usage_json, '$.input_tokens') AS INT64), 0)) AS input_tokens,
+          SUM(COALESCE(SAFE_CAST(JSON_VALUE(token_usage_json, '$.completion_tokens') AS INT64), SAFE_CAST(JSON_VALUE(token_usage_json, '$.candidates_token_count') AS INT64), 0)) AS completion_tokens,
+          SUM(COALESCE(SAFE_CAST(JSON_VALUE(token_usage_json, '$.output_tokens') AS INT64), 0)) AS output_tokens,
+          SUM(COALESCE(SAFE_CAST(JSON_VALUE(token_usage_json, '$.cached_tokens') AS INT64), SAFE_CAST(JSON_VALUE(token_usage_json, '$.cached_content_token_count') AS INT64), 0)) AS cached_tokens,
+          SUM(COALESCE(SAFE_CAST(JSON_VALUE(token_usage_json, '$.cache_read_input_tokens') AS INT64), 0)) AS cache_read_input_tokens,
+          SUM(COALESCE(SAFE_CAST(JSON_VALUE(token_usage_json, '$.cache_write_input_tokens') AS INT64), SAFE_CAST(JSON_VALUE(token_usage_json, '$.cache_creation_input_tokens') AS INT64), 0)) AS cache_write_input_tokens,
+          SUM(COALESCE(SAFE_CAST(JSON_VALUE(token_usage_json, '$.cache_creation_input_tokens') AS INT64), 0)) AS cache_creation_input_tokens,
+          SUM(COALESCE(SAFE_CAST(JSON_VALUE(token_usage_json, '$.thinking_tokens') AS INT64), SAFE_CAST(JSON_VALUE(token_usage_json, '$.thoughts_token_count') AS INT64), SAFE_CAST(JSON_VALUE(token_usage_json, '$.reasoning_tokens') AS INT64), 0)) AS thinking_tokens
+        FROM `{repo.dataset_fqn}.agent_llm_interactions`
         WHERE {where}
-        GROUP BY agent_id
+        GROUP BY agent_id, provider, model
         """
         rows = repo.fetch_rows(sql, params)
-        stats: dict[str, dict[str, int | float]] = {}
+        stats: dict[str, dict[str, Any]] = {}
         for row in rows:
             agent = str(row.get("agent_id") or "").strip().lower()
             if not agent:
                 continue
-            stats[agent] = {
-                "llm_calls": safe_int(row.get("llm_calls"), 0),
-                "prompt_tokens": safe_int(row.get("prompt_tokens"), 0),
-                "completion_tokens": safe_int(row.get("completion_tokens"), 0),
-                "cached_tokens": safe_int(row.get("cached_tokens"), 0),
-                "thinking_tokens": safe_int(row.get("thinking_tokens"), 0),
-                "total_tokens": 0,
-                "cache_ratio": 0.0,
-            }
+            bucket = stats.setdefault(agent, _new_token_bucket())
+            _add_costed_usage(bucket, row)
 
-        for bucket in stats.values():
-            prompt_tokens = safe_int(bucket.get("prompt_tokens"), 0)
-            completion_tokens = safe_int(bucket.get("completion_tokens"), 0)
-            thinking_tokens = safe_int(bucket.get("thinking_tokens"), 0)
-            cached_tokens = safe_int(bucket.get("cached_tokens"), 0)
-            bucket["total_tokens"] = prompt_tokens + completion_tokens + thinking_tokens
-            bucket["cache_ratio"] = round(cached_tokens / prompt_tokens * 100.0, 1) if prompt_tokens > 0 else 0.0
-        return stats
+        return {agent: _finalize_token_bucket(bucket) for agent, bucket in stats.items()}
 
     def fetch_trade_count_summary(
         *,
@@ -735,32 +907,77 @@ def build_viewer_data_helpers(
         start = datetime.now(timezone.utc) - timedelta(days=int(days))
         filters = [
             "tenant_id = @tenant_id",
-            "event_type = 'react_tools_summary'",
             "created_at >= @start",
+            "token_usage_json IS NOT NULL",
         ]
         params: dict[str, Any] = {"tenant_id": tenant, "start": start}
         if agent_ids:
             filters.append("LOWER(agent_id) IN UNNEST(@agent_ids)")
             params["agent_ids"] = agent_ids
         if agent_id:
-            filters.append("agent_id = @agent_id")
+            filters.append("LOWER(agent_id) = @agent_id")
             params["agent_id"] = agent_id
         where = " AND ".join(filters)
+        if _is_local_mode():
+            daily: dict[tuple[str, str], dict[str, Any]] = {}
+            for row in _fetch_token_usage_raw_rows(
+                tenant_id=tenant,
+                days=days,
+                agent_id=agent_id,
+                agent_ids=agent_ids,
+            ):
+                usage_date_str = _date_kst(row.get("created_at"))
+                agent = str(row.get("agent_id") or "").strip().lower()
+                if not usage_date_str or not agent:
+                    continue
+                bucket = daily.setdefault(
+                    (usage_date_str, agent),
+                    {"usage_date": usage_date_str, "agent_id": agent, **_new_token_bucket()},
+                )
+                _add_costed_usage(bucket, row)
+            return [
+                _finalize_token_bucket(bucket)
+                for _, bucket in sorted(daily.items(), key=lambda item: (item[0][0], item[0][1]))
+            ]
+
         sql = f"""
         SELECT
           DATE(created_at, 'Asia/Seoul') AS usage_date,
           LOWER(agent_id) AS agent_id,
-          SUM(
-            COALESCE(SAFE_CAST(JSON_VALUE(payload_json, '$.token_usage.prompt_tokens') AS INT64), 0) +
-            COALESCE(SAFE_CAST(JSON_VALUE(payload_json, '$.token_usage.completion_tokens') AS INT64), 0) +
-            COALESCE(SAFE_CAST(JSON_VALUE(payload_json, '$.token_usage.thinking_tokens') AS INT64), 0)
-          ) AS total_tokens
-        FROM `{repo.dataset_fqn}.agent_memory_events`
+          LOWER(COALESCE(NULLIF(provider, ''), agent_id)) AS provider,
+          COALESCE(NULLIF(model, ''), '') AS model,
+          SUM(COALESCE(SAFE_CAST(JSON_VALUE(token_usage_json, '$.llm_calls') AS INT64), 1)) AS llm_calls,
+          SUM(COALESCE(SAFE_CAST(JSON_VALUE(token_usage_json, '$.prompt_tokens') AS INT64), SAFE_CAST(JSON_VALUE(token_usage_json, '$.prompt_token_count') AS INT64), 0)) AS prompt_tokens,
+          SUM(COALESCE(SAFE_CAST(JSON_VALUE(token_usage_json, '$.input_tokens') AS INT64), 0)) AS input_tokens,
+          SUM(COALESCE(SAFE_CAST(JSON_VALUE(token_usage_json, '$.completion_tokens') AS INT64), SAFE_CAST(JSON_VALUE(token_usage_json, '$.candidates_token_count') AS INT64), 0)) AS completion_tokens,
+          SUM(COALESCE(SAFE_CAST(JSON_VALUE(token_usage_json, '$.output_tokens') AS INT64), 0)) AS output_tokens,
+          SUM(COALESCE(SAFE_CAST(JSON_VALUE(token_usage_json, '$.cached_tokens') AS INT64), SAFE_CAST(JSON_VALUE(token_usage_json, '$.cached_content_token_count') AS INT64), 0)) AS cached_tokens,
+          SUM(COALESCE(SAFE_CAST(JSON_VALUE(token_usage_json, '$.cache_read_input_tokens') AS INT64), 0)) AS cache_read_input_tokens,
+          SUM(COALESCE(SAFE_CAST(JSON_VALUE(token_usage_json, '$.cache_write_input_tokens') AS INT64), SAFE_CAST(JSON_VALUE(token_usage_json, '$.cache_creation_input_tokens') AS INT64), 0)) AS cache_write_input_tokens,
+          SUM(COALESCE(SAFE_CAST(JSON_VALUE(token_usage_json, '$.cache_creation_input_tokens') AS INT64), 0)) AS cache_creation_input_tokens,
+          SUM(COALESCE(SAFE_CAST(JSON_VALUE(token_usage_json, '$.thinking_tokens') AS INT64), SAFE_CAST(JSON_VALUE(token_usage_json, '$.thoughts_token_count') AS INT64), SAFE_CAST(JSON_VALUE(token_usage_json, '$.reasoning_tokens') AS INT64), 0)) AS thinking_tokens
+        FROM `{repo.dataset_fqn}.agent_llm_interactions`
         WHERE {where}
-        GROUP BY usage_date, agent_id
+        GROUP BY usage_date, agent_id, provider, model
         ORDER BY usage_date ASC
         """
-        return repo.fetch_rows(sql, params)
+        rows = repo.fetch_rows(sql, params)
+        daily: dict[tuple[str, str], dict[str, Any]] = {}
+        for row in rows:
+            usage_date = row.get("usage_date")
+            usage_date_str = str(usage_date.isoformat() if hasattr(usage_date, "isoformat") else usage_date) if usage_date else ""
+            agent = str(row.get("agent_id") or "").strip().lower()
+            if not usage_date_str or not agent:
+                continue
+            bucket = daily.setdefault(
+                (usage_date_str, agent),
+                {"usage_date": usage_date_str, "agent_id": agent, **_new_token_bucket()},
+            )
+            _add_costed_usage(bucket, row)
+        return [
+            _finalize_token_bucket(bucket)
+            for _, bucket in sorted(daily.items(), key=lambda item: (item[0][0], item[0][1]))
+        ]
 
     def fetch_trade_count_daily(
         *,

@@ -37,6 +37,20 @@ def test_api_nav_uses_tenant_filter(monkeypatch) -> None:
     assert params.get("tenant_id") == "tenant-y"
 
 
+def test_api_nav_defaults_to_env_tenant_when_unauthenticated(monkeypatch) -> None:
+    monkeypatch.setenv("ARENA_TENANT_ID", "midnightnnn")
+    client, repo = _client_with_repo(monkeypatch)
+    repo.fetch_calls.clear()
+
+    response = client.get("/api/nav", params={"days": 10})
+
+    assert response.status_code == 200
+    assert repo.fetch_calls
+    _, params = repo.fetch_calls[-1]
+    assert isinstance(params, dict)
+    assert params.get("tenant_id") == "midnightnnn"
+
+
 def test_nav_page_renders_blocked_status_in_header(monkeypatch) -> None:
     client, repo = _client_with_repo(monkeypatch)
     repo.latest_run_status_row = {
