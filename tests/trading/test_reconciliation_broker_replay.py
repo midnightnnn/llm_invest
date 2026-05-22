@@ -537,6 +537,44 @@ def test_reconciliation_fails_when_agent_cash_exceeds_broker_cash_beyond_toleran
     assert issue.severity == "error"
 
 
+def test_reconciliation_uses_effective_foreign_cash_for_broker_cash() -> None:
+    repo = _FakeRepo()
+    repo.snapshot = AccountSnapshot(
+        cash_krw=14.0,
+        cash_foreign=160.0,
+        cash_foreign_currency="USD",
+        usd_krw_rate=1_500.0,
+        total_equity_krw=240_000.0,
+        positions={},
+    )
+    repo.checkpoint_configs = {
+        "gpt": {
+            "agent_id": "gpt",
+            "event_id": "chk_gpt",
+            "checkpoint_at": repo.snapshot_at,
+            "cash_krw": 0.0,
+            "positions_json": [],
+            "source": "test",
+        },
+    }
+    repo.agent_snapshots = {
+        "gpt": AccountSnapshot(cash_krw=150_000.0, total_equity_krw=650_000.0, positions={}),
+    }
+
+    result = StateReconciliationService(settings=_settings(), repo=repo, cash_reconciliation_enabled=True).reconcile_positions(
+        agent_ids=["gpt"],
+        tenant_id="midnightnnn",
+    )
+
+    assert result.ok is True
+    assert result.summary["broker_cash_krw"] == pytest.approx(240_000.0)
+    assert result.summary["raw_broker_cash_krw"] == pytest.approx(14.0)
+    assert result.summary["broker_cash_basis"] == "total_equity_minus_positions"
+    issue = next(issue for issue in result.issues if issue.issue_type == "broker_cash_unallocated")
+    assert issue.expected == {"broker_cash_krw": pytest.approx(240_000.0)}
+    assert issue.detail["raw_broker_cash_krw"] == pytest.approx(14.0)
+
+
 def test_reconciliation_allows_small_cash_overallocation_within_tolerance() -> None:
     repo = _FakeRepo()
     repo.snapshot = AccountSnapshot(

@@ -124,6 +124,50 @@ class StateReconciliationService:
         per_agent = max(float(self.settings.sleeve_capital_krw), 0.0)
         return per_agent * float(max(len(agent_tokens), 1))
 
+    @staticmethod
+    def _broker_cash_basis(snapshot: AccountSnapshot | None) -> tuple[float, dict[str, Any]]:
+        if snapshot is None:
+            return 0.0, {
+                "broker_cash_basis": "none",
+                "raw_broker_cash_krw": 0.0,
+                "broker_foreign_cash_krw": 0.0,
+                "broker_positions_value_krw": 0.0,
+            }
+
+        raw_cash = _to_float(getattr(snapshot, "cash_krw", 0.0))
+        cash_foreign = _to_float(getattr(snapshot, "cash_foreign", 0.0))
+        fx_rate = _to_float(getattr(snapshot, "usd_krw_rate", 0.0))
+        foreign_cash_krw = cash_foreign * fx_rate if cash_foreign > 0 and fx_rate > 0 else 0.0
+        positions_value = sum(
+            _to_float(pos.market_value_krw())
+            for pos in (getattr(snapshot, "positions", {}) or {}).values()
+        )
+        total_equity = _to_float(getattr(snapshot, "total_equity_krw", 0.0))
+        equity_minus_positions = total_equity - positions_value if total_equity > 0 else None
+
+        basis = "cash_krw"
+        effective_cash = raw_cash
+        if foreign_cash_krw > 0:
+            if equity_minus_positions is not None and equity_minus_positions >= 0:
+                effective_cash = equity_minus_positions
+                basis = "total_equity_minus_positions"
+            else:
+                effective_cash = raw_cash + foreign_cash_krw
+                basis = "cash_krw_plus_foreign_cash"
+
+        return float(effective_cash), {
+            "broker_cash_basis": basis,
+            "raw_broker_cash_krw": float(raw_cash),
+            "broker_cash_foreign": float(cash_foreign),
+            "broker_cash_foreign_currency": str(getattr(snapshot, "cash_foreign_currency", "") or ""),
+            "broker_usd_krw_rate": float(fx_rate),
+            "broker_foreign_cash_krw": float(foreign_cash_krw),
+            "broker_positions_value_krw": float(positions_value),
+            "broker_equity_minus_positions_krw": (
+                float(equity_minus_positions) if equity_minus_positions is not None else None
+            ),
+        }
+
     def _latest_snapshot_at(self, *, tenant_id: str | None = None) -> datetime | None:
         if not hasattr(self.repo, "fetch_rows") or not getattr(self.repo, "dataset_fqn", ""):
             return None
@@ -966,7 +1010,7 @@ class StateReconciliationService:
                 )
             )
 
-        broker_cash = float(getattr(snapshot, "cash_krw", 0.0) or 0.0) if snapshot is not None else 0.0
+        broker_cash, broker_cash_detail = self._broker_cash_basis(snapshot)
         agent_cash_by_agent: dict[str, float] = {}
         derived_agent_cash = 0.0
         unallocated_cash = broker_cash
@@ -997,6 +1041,7 @@ class StateReconciliationService:
                                 "cash_tolerance_krw": self.cash_tolerance_krw,
                                 "cash_event_basis": cash_event_summary["cash_event_basis"],
                                 "inferred_cash_event_count": cash_event_summary["inferred_cash_event_count"],
+                                **broker_cash_detail,
                             },
                         )
                     )
@@ -1015,6 +1060,7 @@ class StateReconciliationService:
                             "cash_tolerance_krw": self.cash_tolerance_krw,
                             "cash_event_basis": cash_event_summary["cash_event_basis"],
                             "inferred_cash_event_count": cash_event_summary["inferred_cash_event_count"],
+                            **broker_cash_detail,
                         },
                     )
                 )
@@ -1033,6 +1079,7 @@ class StateReconciliationService:
                             "cash_tolerance_krw": self.cash_tolerance_krw,
                             "cash_event_basis": cash_event_summary["cash_event_basis"],
                             "inferred_cash_event_count": cash_event_summary["inferred_cash_event_count"],
+                            **broker_cash_detail,
                         },
                     )
                 )
@@ -1070,6 +1117,7 @@ class StateReconciliationService:
             "qty_tolerance": float(self.qty_tolerance),
             "cash_tolerance_krw": float(self.cash_tolerance_krw),
             "broker_cash_krw": float(broker_cash),
+            **broker_cash_detail,
             "derived_agent_cash_krw": float(derived_agent_cash),
             "unallocated_cash_krw": float(unallocated_cash),
             "agent_cash_count": len(agent_cash_by_agent),
