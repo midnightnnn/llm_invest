@@ -725,6 +725,31 @@ def cmd_refresh_regime_features(args: object) -> None:
     logger.info("[bold green]refresh-regime-features done[/bold green] market=%s", market)
 
 
+def cmd_backfill_macro_indicators(args: object) -> None:
+    """Backfills source macro observations from the market_features start date."""
+    from arena.macro_backfill import MacroBackfillService
+
+    _, settings, repo = _signal_refresh_bootstrap()
+    result = MacroBackfillService(settings=settings, repo=repo).backfill(
+        start_date=str(getattr(args, "start_date", "") or "").strip() or None,
+        end_date=str(getattr(args, "end_date", "") or "").strip() or None,
+        dry_run=bool(getattr(args, "dry_run", False)),
+        replace=not bool(getattr(args, "append", False)),
+    )
+    if result.start_date is None:
+        logger.warning("[yellow]macro backfill skipped[/yellow] no market_features rows found")
+        return
+    logger.info(
+        "[bold green]macro backfill done[/bold green] start=%s end=%s discovered=%d inserted=%d dry_run=%s sources=%s",
+        result.start_date.isoformat(),
+        result.end_date.isoformat(),
+        result.discovered,
+        result.inserted,
+        result.dry_run,
+        result.source_counts,
+    )
+
+
 def _load_backfill_tickers(args: object) -> list[str]:
     raw = getattr(args, "tickers", None)
     if raw:

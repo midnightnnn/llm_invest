@@ -96,6 +96,7 @@ from arena.cli_commands.sync import (
     _prepare_kis_command_repo,
     cmd_build_forecasts,
     cmd_build_opportunity_ranker,
+    cmd_backfill_macro_indicators,
     cmd_fundamentals_backfill_kr,
     cmd_fundamentals_backfill_us,
     cmd_fundamentals_coverage,
@@ -210,6 +211,11 @@ def build_parser() -> argparse.ArgumentParser:
     refresh_regime.add_argument("--lookback-days", type=int, default=540)
     refresh_derived = sub.add_parser("refresh-fundamentals-derived", help="Recompute fundamentals_derived_daily")
     refresh_derived.add_argument("--lookback-days", type=int, default=600)
+    macro_backfill = sub.add_parser("backfill-macro-indicators", help="Backfill FRED/ECOS macro observations")
+    macro_backfill.add_argument("--start-date", type=str, default="", help="YYYY-MM-DD; default uses first market_features date")
+    macro_backfill.add_argument("--end-date", type=str, default="", help="YYYY-MM-DD; default uses today")
+    macro_backfill.add_argument("--dry-run", action="store_true", help="Fetch and count rows without inserting")
+    macro_backfill.add_argument("--append", action="store_true", help="Append without deleting the existing date/source window first")
     fund_kr = sub.add_parser("fundamentals-backfill-kr", help="KIS-based KR fundamentals backfill into fundamentals_history_raw")
     fund_kr.add_argument("--tickers", type=str, default="", help="Comma-separated tickers; empty → use universe")
     fund_kr.add_argument("--tickers-file", type=str, default="", help="Optional path to a newline-delimited ticker file")
@@ -354,6 +360,7 @@ def _dispatch_command(args: argparse.Namespace, parser: argparse.ArgumentParser)
         "refresh-signal-ic": lambda ns: cmd_refresh_signal_ic(ns),
         "refresh-regime-features": lambda ns: cmd_refresh_regime_features(ns),
         "refresh-fundamentals-derived": lambda ns: cmd_refresh_fundamentals_derived(ns),
+        "backfill-macro-indicators": lambda ns: cmd_backfill_macro_indicators(ns),
         "fundamentals-backfill-kr": lambda ns: cmd_fundamentals_backfill_kr(ns),
         "fundamentals-backfill-us": lambda ns: cmd_fundamentals_backfill_us(ns),
         "fundamentals-coverage": lambda ns: cmd_fundamentals_coverage(ns),

@@ -139,6 +139,11 @@ def _stub_shared_prep_environment(
         "_upstream_market_freshness",
         lambda *args, **kwargs: (True, {"age_days": 0}),
     )
+    monkeypatch.setattr(
+        run_pipeline_mod,
+        "_refresh_macro_indicators_for_prep",
+        lambda *args, **kwargs: calls.append(("macro", kwargs.get("stage", ""))),
+    )
 
     class _FakeMarketSyncResult:
         inserted_rows = 10

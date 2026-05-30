@@ -176,6 +176,13 @@ def test_batch_default_tool_schema_preserves_required_fields_and_enums() -> None
     sector_params = declaration("sector_summary").parameters.model_dump(mode="json", exclude_none=True)
     assert enum_values(sector_params["properties"]["market_scope"]) == ["us", "kr"]
 
+    macro_decl = declaration("macro_snapshot")
+    macro_params = macro_decl.parameters.model_dump(mode="json", exclude_none=True)
+    assert enum_values(macro_params["properties"]["depth"]) == ["brief", "standard", "full"]
+    assert 'depth="brief"' in macro_decl.description
+    assert 'focus=["fx_external"]' in macro_decl.description
+    assert "include_series=True" in macro_decl.description
+
     scratch_params = declaration("scratch_run_python").parameters.model_dump(mode="json", exclude_none=True)
     assert "code" in scratch_params["required"]
     assert scratch_params["properties"]["inputs"]["type"] == "OBJECT"

@@ -2220,6 +2220,207 @@ class MarketStore:
         payloads = list(dedup.values())
         self._append_json_rows_via_load_job(table_id, payloads)
 
+    @staticmethod
+    def _date_iso(value: Any) -> str | None:
+        if isinstance(value, datetime):
+            return value.date().isoformat()
+        if isinstance(value, date):
+            return value.isoformat()
+        if value is None:
+            return None
+        text = str(value).strip()
+        if not text:
+            return None
+        try:
+            return datetime.fromisoformat(text.replace("Z", "+00:00")).date().isoformat()
+        except ValueError:
+            try:
+                return date.fromisoformat(text[:10]).isoformat()
+            except ValueError:
+                return None
+
+    @staticmethod
+    def _datetime_iso(value: Any, fallback: datetime) -> str:
+        if isinstance(value, datetime):
+            return value.isoformat()
+        if isinstance(value, date):
+            return datetime.combine(value, datetime.min.time()).isoformat()
+        if value is not None:
+            text = str(value).strip()
+            if text:
+                try:
+                    return datetime.fromisoformat(text.replace("Z", "+00:00")).isoformat()
+                except ValueError:
+                    return text
+        return fallback.isoformat()
+
+    @classmethod
+    def _macro_indicator_observation_row(cls, row: dict[str, Any], *, observed_at: datetime) -> dict[str, Any] | None:
+        source = str(row.get("source") or "").strip().lower()
+        indicator_key = str(row.get("indicator_key") or "").strip()
+        observation_date = cls._date_iso(row.get("observation_date"))
+        if not source or not indicator_key or not observation_date:
+            return None
+        return {
+            "observed_at": cls._datetime_iso(row.get("observed_at"), observed_at),
+            "as_of_date": cls._date_iso(row.get("as_of_date")) or observation_date,
+            "source": source,
+            "indicator_key": indicator_key,
+            "indicator_name": str(row.get("indicator_name") or "").strip() or None,
+            "group_name": str(row.get("group_name") or "").strip() or None,
+            "market": str(row.get("market") or "").strip().lower() or None,
+            "source_series_id": str(row.get("source_series_id") or "").strip() or None,
+            "source_item_code": str(row.get("source_item_code") or "").strip() or None,
+            "frequency": str(row.get("frequency") or "").strip().lower() or None,
+            "observation_date": observation_date,
+            "value": row.get("value"),
+            "unit": str(row.get("unit") or "").strip() or None,
+            "is_derived": bool(row.get("is_derived", False)),
+            "raw_json": row.get("raw_json"),
+            "ingestion_run_id": str(row.get("ingestion_run_id") or "").strip() or None,
+        }
+
+    def insert_macro_indicator_observations(self, rows: list[dict[str, Any]]) -> int:
+        """Appends normalized FRED/ECOS macro observations."""
+        if not rows:
+            return 0
+
+        table_id = f"{self.session.dataset_fqn}.macro_indicator_observations"
+        observed_at = utc_now()
+        dedup: dict[tuple[str, str, str, str, str], dict[str, Any]] = {}
+        for row in rows:
+            normalized = self._macro_indicator_observation_row(row, observed_at=observed_at)
+            if normalized is None:
+                continue
+            key = (
+                normalized["source"],
+                normalized["indicator_key"],
+                normalized["observation_date"],
+                normalized.get("source_series_id") or "",
+                normalized.get("source_item_code") or "",
+            )
+            dedup[key] = normalized
+        if not dedup:
+            return 0
+        return self._append_json_rows_via_load_job(table_id, list(dedup.values()))
+
+    def delete_macro_indicator_observations(
+        self,
+        *,
+        start_date: date,
+        end_date: date,
+        sources: list[str] | tuple[str, ...] | None = None,
+    ) -> None:
+        """Deletes macro observations in a backfill window before replacing them."""
+        params: dict[str, Any] = {
+            "start_date": start_date,
+            "end_date": end_date,
+        }
+        source_tokens = [str(source or "").strip().lower() for source in (sources or []) if str(source or "").strip()]
+        source_clause = ""
+        if source_tokens:
+            params["sources"] = source_tokens
+            source_clause = " AND source IN UNNEST(@sources)"
+        self.session.execute(
+            f"""
+            DELETE FROM `{self.session.dataset_fqn}.macro_indicator_observations`
+            WHERE observation_date BETWEEN @start_date AND @end_date
+            {source_clause}
+            """,
+            params,
+        )
+
+    def latest_macro_indicator_observation_date(
+        self,
+        *,
+        sources: list[str] | tuple[str, ...] | None = None,
+    ) -> date | None:
+        """Returns the latest stored macro observation date."""
+        params: dict[str, Any] = {}
+        source_tokens = [str(source or "").strip().lower() for source in (sources or []) if str(source or "").strip()]
+        source_clause = ""
+        if source_tokens:
+            params["sources"] = source_tokens
+            source_clause = "WHERE source IN UNNEST(@sources)"
+        rows = self.session.fetch_rows(
+            f"""
+            SELECT MAX(observation_date) AS latest_date
+            FROM `{self.session.dataset_fqn}.macro_indicator_observations`
+            {source_clause}
+            """,
+            params,
+        )
+        if not rows:
+            return None
+        latest = self._date_iso(rows[0].get("latest_date"))
+        return date.fromisoformat(latest) if latest else None
+
+    def macro_indicator_observation_history(
+        self,
+        *,
+        sources: list[str] | tuple[str, ...] | None = None,
+        markets: list[str] | tuple[str, ...] | None = None,
+        indicator_keys: list[str] | tuple[str, ...] | None = None,
+        start_date: date | None = None,
+        end_date: date | None = None,
+        lookback_days: int | None = None,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Loads historical macro observations for snapshot drilldowns."""
+        _ = lookback_days
+        params: dict[str, Any] = {}
+        filters: list[str] = []
+        source_tokens = [str(source or "").strip().lower() for source in (sources or []) if str(source or "").strip()]
+        if source_tokens:
+            params["sources"] = source_tokens
+            filters.append("source IN UNNEST(@sources)")
+        market_tokens = [str(market or "").strip().lower() for market in (markets or []) if str(market or "").strip()]
+        if market_tokens:
+            params["markets"] = market_tokens
+            filters.append("market IN UNNEST(@markets)")
+        key_tokens = [str(key or "").strip() for key in (indicator_keys or []) if str(key or "").strip()]
+        if key_tokens:
+            params["indicator_keys"] = key_tokens
+            filters.append("indicator_key IN UNNEST(@indicator_keys)")
+        if start_date is not None:
+            params["start_date"] = start_date
+            filters.append("observation_date >= @start_date")
+        if end_date is not None:
+            params["end_date"] = end_date
+            filters.append("observation_date <= @end_date")
+
+        where = f"WHERE {' AND '.join(filters)}" if filters else ""
+        limit_clause = ""
+        if limit is not None and int(limit) > 0:
+            params["limit"] = int(limit)
+            limit_clause = "LIMIT @limit"
+        return self.session.fetch_rows(
+            f"""
+            SELECT observed_at, as_of_date, source, indicator_key, indicator_name,
+                   group_name, market, source_series_id, source_item_code,
+                   frequency, observation_date, value, unit, is_derived, raw_json,
+                   ingestion_run_id
+            FROM `{self.session.dataset_fqn}.macro_indicator_observations`
+            {where}
+            ORDER BY indicator_key, observation_date
+            {limit_clause}
+            """,
+            params,
+        )
+
+    def earliest_market_feature_date(self) -> date | None:
+        """Returns the first trading date available in market_features."""
+        rows = self.session.fetch_rows(
+            f"""
+            SELECT MIN(DATE(as_of_ts)) AS start_date
+            FROM `{self.session.dataset_fqn}.market_features`
+            """
+        )
+        if not rows:
+            return None
+        start = self._date_iso(rows[0].get("start_date"))
+        return date.fromisoformat(start) if start else None
+
     def insert_market_features_latest(self, rows: list[dict[str, Any]]) -> int:
         """Appends compact latest snapshots, relying on read-time dedup by updated_at/as_of_ts."""
         if not rows:

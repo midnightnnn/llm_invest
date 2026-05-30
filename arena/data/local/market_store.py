@@ -199,6 +199,141 @@ class LocalMarketStore:
         payload = [row for row in payload if row["ticker"]]
         return self.session.insert_dicts("market_features_latest", payload)
 
+    @staticmethod
+    def _macro_indicator_observation_row(row: dict[str, Any]) -> dict[str, Any]:
+        observed_at = LocalMarketStore._datetime_value(row.get("observed_at")) or utc_now()
+        observation_date = LocalMarketStore._date_value(row.get("observation_date"))
+        as_of_date = LocalMarketStore._date_value(row.get("as_of_date")) or observation_date
+        raw_json = row.get("raw_json")
+        return {
+            "observed_at": observed_at,
+            "as_of_date": as_of_date,
+            "source": str(row.get("source") or "").strip().lower(),
+            "indicator_key": str(row.get("indicator_key") or "").strip(),
+            "indicator_name": str(row.get("indicator_name") or "").strip() or None,
+            "group_name": str(row.get("group_name") or "").strip() or None,
+            "market": str(row.get("market") or "").strip().lower() or None,
+            "source_series_id": str(row.get("source_series_id") or "").strip() or None,
+            "source_item_code": str(row.get("source_item_code") or "").strip() or None,
+            "frequency": str(row.get("frequency") or "").strip().lower() or None,
+            "observation_date": observation_date,
+            "value": row.get("value"),
+            "unit": str(row.get("unit") or "").strip() or None,
+            "is_derived": bool(row.get("is_derived", False)),
+            "raw_json": raw_json if isinstance(raw_json, str) else LocalMarketStore._json_dumps(raw_json),
+            "ingestion_run_id": str(row.get("ingestion_run_id") or "").strip() or None,
+        }
+
+    def insert_macro_indicator_observations(self, rows: list[dict[str, Any]]) -> int:
+        payload = [
+            self._macro_indicator_observation_row(row)
+            for row in rows
+            if str(row.get("source") or "").strip()
+            and str(row.get("indicator_key") or "").strip()
+            and self._date_value(row.get("observation_date")) is not None
+        ]
+        return self.session.insert_dicts("macro_indicator_observations", payload)
+
+    def delete_macro_indicator_observations(
+        self,
+        *,
+        start_date: date,
+        end_date: date,
+        sources: list[str] | tuple[str, ...] | None = None,
+    ) -> None:
+        params: dict[str, Any] = {"start_date": start_date, "end_date": end_date}
+        source_tokens = [str(source or "").strip().lower() for source in (sources or []) if str(source or "").strip()]
+        source_clause = ""
+        if source_tokens:
+            params["sources"] = source_tokens
+            source_clause = " AND source IN (SELECT unnest($sources))"
+        self.session.execute(
+            "DELETE FROM macro_indicator_observations "
+            "WHERE observation_date BETWEEN $start_date AND $end_date"
+            f"{source_clause}",
+            params,
+        )
+
+    def latest_macro_indicator_observation_date(
+        self,
+        *,
+        sources: list[str] | tuple[str, ...] | None = None,
+    ) -> date | None:
+        params: dict[str, Any] = {}
+        source_tokens = [str(source or "").strip().lower() for source in (sources or []) if str(source or "").strip()]
+        source_clause = ""
+        if source_tokens:
+            params["sources"] = source_tokens
+            source_clause = "WHERE source IN (SELECT unnest($sources))"
+        rows = self.session.fetch_rows(
+            "SELECT MAX(observation_date) AS latest_date FROM macro_indicator_observations "
+            f"{source_clause}",
+            params,
+        )
+        if not rows:
+            return None
+        return self._date_value(rows[0].get("latest_date"))
+
+    def macro_indicator_observation_history(
+        self,
+        *,
+        sources: list[str] | tuple[str, ...] | None = None,
+        markets: list[str] | tuple[str, ...] | None = None,
+        indicator_keys: list[str] | tuple[str, ...] | None = None,
+        start_date: date | None = None,
+        end_date: date | None = None,
+        lookback_days: int | None = None,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
+        _ = lookback_days
+        params: dict[str, Any] = {}
+        filters: list[str] = []
+        source_tokens = [str(source or "").strip().lower() for source in (sources or []) if str(source or "").strip()]
+        if source_tokens:
+            params["sources"] = source_tokens
+            filters.append("source IN (SELECT unnest($sources))")
+        market_tokens = [str(market or "").strip().lower() for market in (markets or []) if str(market or "").strip()]
+        if market_tokens:
+            params["markets"] = market_tokens
+            filters.append("market IN (SELECT unnest($markets))")
+        key_tokens = [str(key or "").strip() for key in (indicator_keys or []) if str(key or "").strip()]
+        if key_tokens:
+            params["indicator_keys"] = key_tokens
+            filters.append("indicator_key IN (SELECT unnest($indicator_keys))")
+        if start_date is not None:
+            params["start_date"] = start_date
+            filters.append("observation_date >= $start_date")
+        if end_date is not None:
+            params["end_date"] = end_date
+            filters.append("observation_date <= $end_date")
+
+        where = f"WHERE {' AND '.join(filters)}" if filters else ""
+        limit_clause = ""
+        if limit is not None and int(limit) > 0:
+            params["limit"] = int(limit)
+            limit_clause = "LIMIT $limit"
+        return self.session.fetch_rows(
+            f"""
+            SELECT observed_at, as_of_date, source, indicator_key, indicator_name,
+                   group_name, market, source_series_id, source_item_code,
+                   frequency, observation_date, value, unit, is_derived, raw_json,
+                   ingestion_run_id
+            FROM macro_indicator_observations
+            {where}
+            ORDER BY indicator_key, observation_date
+            {limit_clause}
+            """,
+            params,
+        )
+
+    def earliest_market_feature_date(self) -> date | None:
+        rows = self.session.fetch_rows(
+            "SELECT MIN(CAST(as_of_ts AS DATE)) AS start_date FROM market_features"
+        )
+        if not rows:
+            return None
+        return self._date_value(rows[0].get("start_date"))
+
     def upsert_instrument_master(self, rows: list[dict[str, Any]]) -> int:
         payload = []
         for row in rows:

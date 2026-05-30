@@ -405,6 +405,127 @@ def test_compact_memory_context_generic_keeps_full_summary() -> None:
     assert memory["outcome"] == "win"
 
 
+def _macro_indicator(
+    value: float,
+    *,
+    date: str = "2026-05-30",
+    unit: str = "%",
+    source: str = "fred",
+    series_id: str | None = None,
+    class_name: str | None = None,
+) -> dict[str, object]:
+    item: dict[str, object] = {
+        "value": value,
+        "date": date,
+        "unit": unit,
+        "source": source,
+    }
+    if series_id:
+        item["series_id"] = series_id
+    if class_name:
+        item["class_name"] = class_name
+    return item
+
+
+def test_compact_macro_snapshot_balances_fred_and_ecos_groups() -> None:
+    indicators = {
+        "fed_funds_rate": _macro_indicator(3.62, series_id="DFF"),
+        "sofr": _macro_indicator(3.62, series_id="SOFR"),
+        "treasury_10y": _macro_indicator(4.45, series_id="DGS10"),
+        "yield_spread_10y_3m": _macro_indicator(0.76, unit="pp", series_id="DGS10-DGS3MO"),
+        "core_cpi_yoy": _macro_indicator(2.74, series_id="CPILFESL"),
+        "real_gdp": _macro_indicator(24152.656, unit="billions chained 2017 dollars", series_id="GDPC1"),
+        "high_yield_oas": _macro_indicator(2.72, series_id="BAMLH0A0HYM2"),
+        "vix": _macro_indicator(15.74, unit="index", series_id="VIXCLS"),
+        "case_shiller_home_price_yoy": _macro_indicator(3.12, series_id="CSUSHPINSA"),
+        "bok_base_rate": _macro_indicator(2.5, source="ecos", class_name="시장금리"),
+        "kr_treasury_5y": _macro_indicator(3.924, source="ecos", class_name="시장금리"),
+        "kr_m2_money_supply": _macro_indicator(4143515.8, unit="십억원", source="ecos", class_name="통화량"),
+        "kr_household_credit": _macro_indicator(1993110.8, unit="십억원", source="ecos", class_name="예금/대출금"),
+        "jpy_krw": _macro_indicator(945.56, unit="원", source="ecos", class_name="환율"),
+        "kr_current_account": _macro_indicator(37327.1, unit="백만달러", source="ecos", class_name="국제수지"),
+        "kr_all_industry_production": _macro_indicator(117.8, unit="2020=100", source="ecos", class_name="생산"),
+        "kr_cpi": _macro_indicator(119.37, unit="2020=100", source="ecos", class_name="소비자/생산자 물가"),
+        "kr_consumer_sentiment_index": _macro_indicator(106.1, unit="", source="ecos", class_name="심리지표"),
+        "kr_house_price_index": _macro_indicator(101.4, unit="2025.03=100", source="ecos", class_name="부동산 가격"),
+        "dubai_oil": _macro_indicator(105.3, unit="달러/배럴", source="ecos", class_name="국제원자재가격"),
+    }
+    for idx in range(60):
+        indicators[f"unused_{idx}"] = _macro_indicator(float(idx), series_id=f"UNUSED{idx}")
+
+    out = _compact_tool_result_for_prompt(
+        "macro_snapshot",
+        {
+            "as_of": "2026-05-30",
+            "source": "fred+ecos",
+            "coverage": {
+                "fred": {"requested": 40, "returned": 40},
+                "ecos": {"requested": 101, "returned": 100},
+            },
+            "indicators": indicators,
+            "groups": {"large_raw_group": indicators},
+        },
+    )
+
+    assert out["coverage"] == {"fred": "40/40", "ecos": "100/101"}
+    assert out["key_indicators"]["us_policy"]["sofr"]["id"] == "SOFR"
+    assert out["key_indicators"]["us_inflation"]["core_cpi_yoy"]["src"] == "fred"
+    assert out["key_indicators"]["kr_money_credit"]["kr_m2_money_supply"]["src"] == "ecos"
+    assert out["key_indicators"]["kr_fx_external"]["jpy_krw"]["id"] == "환율"
+    assert out["key_indicators"]["kr_housing_commodities"]["dubai_oil"]["u"] == "달러/배럴"
+    assert "indicators" not in out
+    assert "groups" not in out
+    assert "unused_0" not in str(out)
+    assert out["compaction"]["raw_indicator_count"] == 80
+    assert out["compaction"]["omitted_indicator_count"] > 50
+
+
+def test_compact_macro_snapshot_preserves_regime_card_and_requested_drilldown() -> None:
+    out = _compact_tool_result_for_prompt(
+        "macro_snapshot",
+        {
+            "as_of": "2026-05-30",
+            "source": "ecos",
+            "depth": "full",
+            "data_mode": "historical",
+            "coverage": {"ecos": {"requested": 68, "returned": 68}},
+            "regime_card": {"fx_external": "pressure_high", "rates_curve": "easing"},
+            "market_implications": {"usd_exposure": "positive_but_expensive"},
+            "groups": {
+                "external": {
+                    "state": "pressure_high",
+                    "evidence": [
+                        {
+                            "k": "usd_krw",
+                            "v": 1410.0,
+                            "d": "2026-05-30",
+                            "u": "KRW per USD",
+                            "chg_3m": 50.0,
+                            "z": 1.22,
+                            "series": [
+                                {"d": "2026-04-01", "v": 1380.0},
+                                {"d": "2026-05-30", "v": 1410.0},
+                            ],
+                        }
+                    ],
+                }
+            },
+            "notable_movers": [{"k": "usd_krw", "why": "high percentile and rising"}],
+            "omitted": {"indicator_count": 80, "reason": "available via focus/depth"},
+            "indicators": {
+                "usd_krw": {"value": 1410.0, "date": "2026-05-30", "unit": "KRW per USD"},
+                "unused": {"value": 1.0},
+            },
+        },
+    )
+
+    assert out["depth"] == "full"
+    assert out["regime_card"]["fx_external"] == "pressure_high"
+    assert out["market_implications"]["usd_exposure"] == "positive_but_expensive"
+    assert out["groups"]["external"]["evidence"][0]["series"][-1]["v"] == 1410.0
+    assert "unused" not in str(out)
+
+
 def test_tool_wrapper_injects_memory_for_macro_tools_with_typed_query() -> None:
     captured: dict[str, object] = {}
 

@@ -285,6 +285,34 @@ def test_market_features_columns_match(duckdb_module):
         con.close()
 
 
+def test_macro_indicator_observations_schema_is_available(duckdb_module):
+    """Macro history must be a first-class table in both BigQuery and DuckDB."""
+    rendered_bq = "\n".join(render_table_ddls("proj", "ds"))
+    assert "`proj.ds.macro_indicator_observations`" in rendered_bq
+    assert "PARTITION BY observation_date" in rendered_bq
+    assert "CLUSTER BY source, indicator_key" in rendered_bq
+
+    con = duckdb_module.connect(":memory:")
+    try:
+        for ddl in render_duckdb_ddls():
+            con.execute(ddl)
+        cols = con.execute(
+            "SELECT column_name, data_type FROM information_schema.columns "
+            "WHERE table_name = 'macro_indicator_observations' ORDER BY ordinal_position"
+        ).fetchall()
+        col_map = dict(cols)
+        assert col_map["observed_at"] == "TIMESTAMP"
+        assert col_map["source"] == "VARCHAR"
+        assert col_map["indicator_key"] == "VARCHAR"
+        assert col_map["source_series_id"] == "VARCHAR"
+        assert col_map["source_item_code"] == "VARCHAR"
+        assert col_map["observation_date"] == "DATE"
+        assert col_map["value"] == "DOUBLE"
+        assert col_map["raw_json"] == "JSON"
+    finally:
+        con.close()
+
+
 def test_duckdb_session_insert_dataframe_bulk_path(tmp_path, duckdb_module):
     pd = pytest.importorskip("pandas")
     import numpy as np

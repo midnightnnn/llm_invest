@@ -146,6 +146,158 @@ def _compact_memory_context_rows(rows: Any) -> list[dict[str, Any]]:
     return model_memory_context_rows(rows, limit=3)
 
 
+_MACRO_COMPACT_BUCKETS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("us_policy", ("fed_funds_rate", "sofr")),
+    ("us_curve", ("treasury_10y", "treasury_3m", "yield_spread_10y_3m")),
+    ("us_inflation", ("cpi_yoy", "core_cpi_yoy", "core_pce_yoy")),
+    ("us_growth", ("real_gdp", "industrial_production_yoy")),
+    ("us_credit", ("high_yield_oas", "credit_spread_hy_corp", "financial_stress_index")),
+    ("us_market", ("sp500", "vix", "wti_crude")),
+    ("us_housing", ("mortgage_30y", "case_shiller_home_price_yoy")),
+    ("kr_policy", ("bok_base_rate", "kr_treasury_5y", "kr_yield_spread_5y_3y")),
+    ("kr_money_credit", ("kr_m2_money_supply", "kr_household_credit", "kr_bank_loan_deposit_spread")),
+    ("kr_fx_external", ("usd_krw", "jpy_krw", "kr_current_account", "kr_fx_reserves")),
+    ("kr_growth_cycle", ("kr_gdp_growth", "kr_all_industry_production", "kr_leading_cyclical_component")),
+    ("kr_inflation", ("kr_cpi", "kr_core_cpi_ex_food_energy", "kr_ppi")),
+    ("kr_sentiment", ("kr_consumer_sentiment_index", "kr_economic_sentiment_index")),
+    ("kr_housing_commodities", ("kr_house_price_index", "kr_jeonse_price_index", "dubai_oil", "gold_spot")),
+)
+
+
+def _compact_macro_coverage(coverage: Any) -> dict[str, str]:
+    out: dict[str, str] = {}
+    if not isinstance(coverage, dict):
+        return out
+    for source, item in coverage.items():
+        if not isinstance(item, dict):
+            continue
+        returned = item.get("returned")
+        requested = item.get("requested")
+        if returned is None or requested is None:
+            continue
+        out[str(source)] = f"{returned}/{requested}"
+    return out
+
+
+def _compact_macro_indicator(item: Any) -> dict[str, Any] | None:
+    if not isinstance(item, dict) or item.get("value") is None:
+        return None
+    out: dict[str, Any] = {"v": item.get("value")}
+    if item.get("date") not in {None, ""}:
+        out["d"] = item.get("date")
+    if item.get("unit") not in {None, ""}:
+        out["u"] = item.get("unit")
+    if item.get("source") not in {None, ""}:
+        out["src"] = item.get("source")
+    identifier = item.get("series_id") or item.get("stat_code") or item.get("class_name")
+    if identifier not in {None, ""}:
+        out["id"] = identifier
+    return out
+
+
+def _compact_macro_evidence(item: Any) -> dict[str, Any] | None:
+    if not isinstance(item, dict) or item.get("k") is None:
+        return None
+    fields = ("k", "v", "d", "u", "src", "id", "item", "freq", "chg_1m", "chg_3m", "yoy", "z", "pct", "trend", "lag_days")
+    out = {field: item.get(field) for field in fields if item.get(field) is not None}
+    series = item.get("series")
+    if isinstance(series, list) and series:
+        out["series"] = [
+            {"d": point.get("d"), "v": point.get("v")}
+            for point in series[:12]
+            if isinstance(point, dict) and point.get("d") is not None and point.get("v") is not None
+        ]
+    return out or None
+
+
+def _compact_macro_groups(groups: Any) -> dict[str, Any]:
+    if not isinstance(groups, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for group, payload in list(groups.items())[:10]:
+        if not isinstance(payload, dict):
+            continue
+        evidence = [
+            compacted
+            for compacted in (_compact_macro_evidence(item) for item in (payload.get("evidence") or [])[:8])
+            if compacted
+        ]
+        item: dict[str, Any] = {}
+        if payload.get("state") is not None:
+            item["state"] = payload.get("state")
+        if evidence:
+            item["evidence"] = evidence
+        if item:
+            out[str(group)] = item
+    return out
+
+
+def _compact_macro_snapshot(core: dict[str, Any]) -> dict[str, Any]:
+    indicators = core.get("indicators") or {}
+    compacted: dict[str, Any] = {
+        "as_of": core.get("as_of"),
+        "source": core.get("source"),
+    }
+    coverage = _compact_macro_coverage(core.get("coverage"))
+    if coverage:
+        compacted["coverage"] = coverage
+    if isinstance(core.get("regime_card"), dict):
+        for key in ("depth", "data_mode", "focus"):
+            if core.get(key) is not None:
+                compacted[key] = core.get(key)
+        compacted["regime_card"] = core.get("regime_card")
+        if isinstance(core.get("market_implications"), dict):
+            compacted["market_implications"] = core.get("market_implications")
+        groups = _compact_macro_groups(core.get("groups"))
+        if groups:
+            compacted["groups"] = groups
+        movers = _compact_rows(
+            core.get("notable_movers"),
+            fields=("k", "why"),
+            limit=5,
+            text_fields=("why",),
+            max_text=120,
+        )
+        if movers:
+            compacted["notable_movers"] = movers
+        if isinstance(core.get("omitted"), dict):
+            compacted["omitted"] = core.get("omitted")
+        if core.get("error") is not None:
+            compacted["error"] = core.get("error")
+        return compacted
+    if not isinstance(indicators, dict):
+        if core.get("error") is not None:
+            compacted["error"] = core.get("error")
+        return compacted
+
+    selected_keys: set[str] = set()
+    key_indicators: dict[str, dict[str, Any]] = {}
+    for bucket, keys in _MACRO_COMPACT_BUCKETS:
+        bucket_payload: dict[str, Any] = {}
+        for key in keys:
+            item = _compact_macro_indicator(indicators.get(key))
+            if item is None:
+                continue
+            bucket_payload[key] = item
+            selected_keys.add(key)
+        if bucket_payload:
+            key_indicators[bucket] = bucket_payload
+    if key_indicators:
+        compacted["key_indicators"] = key_indicators
+
+    raw_count = len(indicators)
+    visible_count = len(selected_keys)
+    if raw_count > visible_count:
+        compacted["compaction"] = {
+            "raw_indicator_count": raw_count,
+            "visible_indicator_count": visible_count,
+            "omitted_indicator_count": raw_count - visible_count,
+        }
+    if core.get("error") is not None:
+        compacted["error"] = core.get("error")
+    return compacted
+
+
 def _compact_tool_result_for_prompt(
     tool_name: str,
     value: Any,
@@ -581,23 +733,7 @@ def _compact_tool_result_for_prompt(
         if core.get("error") is not None:
             compacted["error"] = core.get("error")
     elif token == "macro_snapshot" and isinstance(core, dict):
-        indicators = core.get("indicators") or {}
-        if isinstance(indicators, dict):
-            compact_indicators: dict[str, Any] = {}
-            for key, item in list(indicators.items())[:12]:
-                if isinstance(item, dict):
-                    compact_indicators[str(key)] = {
-                        "value": item.get("value"),
-                        "date": item.get("date"),
-                        "unit": item.get("unit"),
-                    }
-            compacted = {
-                "as_of": core.get("as_of"),
-                "indicators": compact_indicators,
-                "source": core.get("source"),
-            }
-            if core.get("error") is not None:
-                compacted["error"] = core.get("error")
+        compacted = _compact_macro_snapshot(core)
     elif token == "get_research_briefing":
         compacted = _compact_rows(
             core,

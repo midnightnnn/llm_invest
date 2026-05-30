@@ -546,6 +546,28 @@ TABLE_DDLS: tuple[str, ...] = (
     CLUSTER BY ticker
     """,
     """
+    CREATE TABLE IF NOT EXISTS `{project}.{dataset}.macro_indicator_observations` (
+      observed_at TIMESTAMP NOT NULL,
+      as_of_date DATE NOT NULL,
+      source STRING NOT NULL,
+      indicator_key STRING NOT NULL,
+      indicator_name STRING,
+      group_name STRING,
+      market STRING,
+      source_series_id STRING,
+      source_item_code STRING,
+      frequency STRING,
+      observation_date DATE NOT NULL,
+      value FLOAT64,
+      unit STRING,
+      is_derived BOOL,
+      raw_json JSON,
+      ingestion_run_id STRING
+    )
+    PARTITION BY observation_date
+    CLUSTER BY source, indicator_key
+    """,
+    """
     CREATE TABLE IF NOT EXISTS `{project}.{dataset}.instrument_master` (
       instrument_id STRING NOT NULL,
       ticker STRING NOT NULL,

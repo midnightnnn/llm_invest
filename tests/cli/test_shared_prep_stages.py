@@ -106,6 +106,8 @@ def test_cmd_run_shared_prep_slow_runs_only_ml_and_skips_dispatch(monkeypatch) -
 
     stages = [c[0] for c in calls]
     assert "sync" not in stages, "slow stage must skip sync-market"
+    assert "macro" in stages
+    assert stages.index("macro") < stages.index("forecast")
     assert "forecast" in stages
     assert "fundamentals" in stages
     assert "ranker" in stages

@@ -161,6 +161,19 @@ def test_default_registry_prompt_descriptions_reach_llm_tool_catalog(monkeypatch
     assert rows["recommend_opportunities"]["description"] == "llm-visible::recommend_opportunities.txt"
 
 
+def test_macro_snapshot_model_description_is_canonical_parameter_guide() -> None:
+    reg = build_default_registry(repo=_FakeRepo(), settings=_settings())
+    entries = {entry.tool_id: entry for entry in reg.list_entries(include_disabled=True)}
+    entry = entries["macro_snapshot"]
+
+    assert 'depth="brief"' in entry.description
+    assert 'focus=["fx_external"]' in entry.description
+    assert 'include_series=True' in entry.description
+    assert '"rates_curve"' in entry.description
+    assert "include_series" not in entry.description_ko
+    assert "max_points" not in entry.description_ko
+
+
 def test_default_registry_applies_tools_config_overlay() -> None:
     repo = _FakeRepo()
     repo._cfg[("local", "tools_config")] = json.dumps(

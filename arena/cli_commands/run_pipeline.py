@@ -42,6 +42,71 @@ def _truthy_env(name: str) -> bool:
     return str(os.getenv(name, "")).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+def _macro_backfill_replace_days() -> int:
+    raw = str(os.getenv("ARENA_MACRO_BACKFILL_REPLACE_DAYS", "120")).strip()
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 120
+
+
+def _refresh_macro_indicators_for_prep(
+    settings: Settings,
+    repo: BigQueryRepository,
+    *,
+    stage: str,
+    market: str,
+) -> None:
+    """Refreshes macro observations for ML prep; failures stay non-fatal."""
+    try:
+        from arena.macro_backfill import MacroBackfillService
+
+        result = MacroBackfillService(settings=settings, repo=repo).refresh_incremental(
+            replace_days=_macro_backfill_replace_days(),
+        )
+        if result.start_date is None:
+            logger.warning(
+                "[yellow]Shared prep: macro refresh skipped[/yellow] no market_features rows found",
+                extra=event_extra(
+                    "shared_prep_macro_refresh_skipped",
+                    stage=stage,
+                    market=market,
+                    reason="no_market_features",
+                ),
+            )
+            return
+        logger.info(
+            "[cyan]Shared prep macro refresh[/cyan] start=%s end=%s discovered=%d inserted=%d sources=%s",
+            result.start_date.isoformat(),
+            result.end_date.isoformat(),
+            result.discovered,
+            result.inserted,
+            result.source_counts,
+            extra=event_extra(
+                "shared_prep_macro_refresh_done",
+                stage=stage,
+                market=market,
+                start_date=result.start_date.isoformat(),
+                end_date=result.end_date.isoformat(),
+                discovered=result.discovered,
+                inserted=result.inserted,
+                source_counts=result.source_counts,
+            ),
+        )
+    except Exception as exc:
+        logger.warning(
+            "[yellow]Shared prep macro refresh skipped (non-fatal)[/yellow] err=%s",
+            str(exc),
+            extra=failure_extra(
+                "shared_prep_macro_refresh_failed",
+                exc,
+                stage=stage,
+                market=market,
+            ),
+            exc_info=True,
+        )
+
+
 def _batch_tenant_work(
     phase: str | None,
     live: bool,
@@ -986,6 +1051,14 @@ def cmd_run_shared_prep(
                     ),
                 )
                 raise SystemExit(7)
+
+            logger.info("[bold cyan]Shared prep: refresh-macro-indicators[/bold cyan]")
+            _refresh_macro_indicators_for_prep(
+                bootstrap_settings,
+                repo,
+                stage=stage_norm,
+                market=market_override or "all",
+            )
 
             logger.info("[bold cyan]Shared prep: refresh-fundamentals-derived[/bold cyan]")
             fund_args = type(

@@ -303,6 +303,114 @@ def test_insert_market_features_appends_via_load_job_without_delete() -> None:
     assert "ingested_at" in rows[0]
 
 
+def test_earliest_market_feature_date_queries_min_as_of_date() -> None:
+    store = _make_market_store([[{"start_date": date(2026, 3, 1)}]])
+
+    out = store.earliest_market_feature_date()
+
+    assert out == date(2026, 3, 1)
+    sql, _params = store.session.call_pairs[-1]
+    assert "MIN(DATE(as_of_ts)) AS start_date" in sql
+    assert "market_features" in sql
+
+
+def test_latest_macro_indicator_observation_date_filters_by_sources() -> None:
+    store = _make_market_store([[{"latest_date": date(2026, 5, 29)}]])
+
+    out = store.latest_macro_indicator_observation_date(sources=["fred", "ecos"])
+
+    assert out == date(2026, 5, 29)
+    sql, params = store.session.call_pairs[-1]
+    assert "MAX(observation_date) AS latest_date" in sql
+    assert "FROM `proj.ds.macro_indicator_observations`" in sql
+    assert "source IN UNNEST(@sources)" in sql
+    assert params == {"sources": ["fred", "ecos"]}
+
+
+def test_macro_indicator_observation_history_queries_filtered_window() -> None:
+    store = _make_market_store(
+        [[{"source": "ecos", "indicator_key": "usd_krw", "observation_date": date(2026, 5, 30), "value": 1410.0}]]
+    )
+
+    rows = store.macro_indicator_observation_history(
+        sources=["ecos"],
+        markets=["kr"],
+        indicator_keys=["usd_krw"],
+        start_date=date(2026, 1, 1),
+        end_date=date(2026, 5, 30),
+        limit=100,
+    )
+
+    assert rows[0]["indicator_key"] == "usd_krw"
+    sql, params = store.session.call_pairs[-1]
+    assert "FROM `proj.ds.macro_indicator_observations`" in sql
+    assert "source IN UNNEST(@sources)" in sql
+    assert "market IN UNNEST(@markets)" in sql
+    assert "indicator_key IN UNNEST(@indicator_keys)" in sql
+    assert "observation_date >= @start_date" in sql
+    assert "observation_date <= @end_date" in sql
+    assert "LIMIT @limit" in sql
+    assert params == {
+        "sources": ["ecos"],
+        "markets": ["kr"],
+        "indicator_keys": ["usd_krw"],
+        "start_date": date(2026, 1, 1),
+        "end_date": date(2026, 5, 30),
+        "limit": 100,
+    }
+
+
+def test_insert_macro_indicator_observations_appends_via_load_job_without_delete() -> None:
+    store = _make_market_write_store()
+
+    written = store.insert_macro_indicator_observations(
+        [
+            {
+                "observed_at": "2026-05-30T00:00:00+00:00",
+                "as_of_date": "2026-05-29",
+                "source": "fred",
+                "indicator_key": "treasury_10y",
+                "indicator_name": "US 10Y Treasury Yield",
+                "group_name": "rates_curve",
+                "market": "us",
+                "source_series_id": "DGS10",
+                "frequency": "daily",
+                "observation_date": "2026-05-29",
+                "value": 4.5,
+                "unit": "%",
+                "raw_json": {"date": "2026-05-29", "value": "4.50"},
+            }
+        ]
+    )
+
+    assert written == 1
+    assert len(store.session.client.loads) == 1
+    table_id, rows = store.session.client.loads[0]
+    assert table_id == "proj.ds.macro_indicator_observations"
+    assert rows[0]["source"] == "fred"
+    assert rows[0]["indicator_key"] == "treasury_10y"
+    assert rows[0]["source_series_id"] == "DGS10"
+    assert rows[0]["source_item_code"] is None
+    assert rows[0]["value"] == 4.5
+    assert rows[0]["raw_json"] == {"date": "2026-05-29", "value": "4.50"}
+
+
+def test_delete_macro_indicator_observations_filters_by_range_and_source() -> None:
+    store = _make_market_store([])
+
+    store.delete_macro_indicator_observations(
+        start_date=date(2026, 3, 1),
+        end_date=date(2026, 3, 3),
+        sources=["fred", "ecos"],
+    )
+
+    sql, params = store.session.call_pairs[-1]
+    assert "DELETE FROM `proj.ds.macro_indicator_observations`" in sql
+    assert "observation_date BETWEEN @start_date AND @end_date" in sql
+    assert "source IN UNNEST(@sources)" in sql
+    assert params == {"start_date": date(2026, 3, 1), "end_date": date(2026, 3, 3), "sources": ["fred", "ecos"]}
+
+
 def test_insert_market_features_latest_appends_via_load_job_without_delete() -> None:
     store = _make_market_write_store()
 

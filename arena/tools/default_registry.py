@@ -218,7 +218,7 @@ def _base_entries(
             tier="optional",
             callable=mt.macro_snapshot,
             label_ko="거시 지표 조회",
-            description_ko="에이전트의 타겟 마켓에 맞는 거시경제 지표를 일괄 조회합니다. US: 연방기금금리·CPI·실업률·국채 수익률(FRED 데이터), KR: BOK 기준금리·소비자물가·실업률·국고채 수익률·USD/KRW 환율(ECOS 데이터). 거시 환경을 파악한 뒤 레짐 지표나 포트폴리오 최적화와 연계하면 효과적입니다.",
+            description_ko="에이전트의 타겟 마켓에 맞는 확장 거시경제 지표를 일괄 조회합니다. US: 정책금리·SOFR·국채곡선·물가/PCE·고용·GDP/생산·유동성/신용·시장·원자재·환율·주택(FRED 데이터). KR: 기준금리·시장/여수신금리·통화/신용·환율·주식/채권·성장·생산·소비·투자·심리·고용·대외/무역·물가·부동산·원자재(ECOS 데이터). 주요 YoY와 스프레드도 함께 반환합니다.",
             sort_order=250,
         ),
     ]
@@ -336,7 +336,7 @@ def build_default_registry(
     """Builds the canonical tool registry used by runtime, UI, and analytics."""
     qt = QuantTools(repo=repo, settings=settings)
     st = SentimentTools(settings=settings)
-    mt = MacroTools(settings=settings)
+    mt = MacroTools(settings=settings, repo=repo)
     overlay = _load_tools_config(repo, str(tenant_id or "").strip().lower() or "local")
 
     entries: list[ToolEntry] = []
