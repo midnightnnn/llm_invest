@@ -22,6 +22,7 @@ from arena.market_sources import (
 from arena.market_feature_normalization import normalize_market_feature_rows
 from arena.memory.forgetting import effective_memory_score
 from arena.memory.candidates import CANDIDATE_MEMORY_EVENT_TYPES
+from arena.memory.candidate_structured import format_candidate_memory_prompt_line
 from arena.memory.graph import memory_event_node_id
 from arena.memory.policy import (
     get_memory_policy_value,
@@ -1260,6 +1261,8 @@ class ContextBuilder:
     def _memory_prompt_text(self, row: dict[str, Any]) -> str:
         """Returns the prompt-facing summary without changing stored memory data."""
         event_type = str(row.get("event_type") or "").strip().lower()
+        if event_type in CANDIDATE_MEMORY_EVENT_TYPES:
+            return format_candidate_memory_prompt_line(row).removeprefix("- ")
         summary = self._trim_text(row.get("summary"), max_len=220)
         if event_type == "trade_execution":
             summary = self._strip_memory_execution_noise(summary)
@@ -1294,6 +1297,9 @@ class ContextBuilder:
 
     def _format_memory_line(self, row: dict[str, Any]) -> str:
         """Formats one deterministic, prompt-facing memory line."""
+        event_type = str(row.get("event_type") or "").strip().lower()
+        if event_type in CANDIDATE_MEMORY_EVENT_TYPES:
+            return format_candidate_memory_prompt_line(row)
         bits = self._memory_prompt_meta_bits(row)
         meta = f"[{' | '.join(bits)}] " if bits else ""
         return f"- {meta}{self._memory_prompt_text(row)}"

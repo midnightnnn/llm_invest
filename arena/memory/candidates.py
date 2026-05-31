@@ -4,6 +4,8 @@ import re
 from datetime import date
 from typing import Any
 
+from arena.memory.candidate_structured import build_structured_candidate_memory
+
 CANDIDATE_MEMORY_EVENT_TYPES: tuple[str, ...] = (
     "candidate_screen_hit",
     "candidate_watchlist",
@@ -275,6 +277,22 @@ def candidate_memory_records(
             "suggested_next_checks": missing_checks[:3],
             "held_at_creation": False,
         }
+        payload["structured_memory"] = build_structured_candidate_memory(
+            {
+                "event_type": event_type,
+                "summary": _summary_line(
+                    ticker=ticker,
+                    event_type=event_type,
+                    source_tools=source_tools,
+                    analyzed_by=analyzed_by,
+                    discovery_count=discovery_count,
+                    rank=rank,
+                    evidence=evidence,
+                    skip_reasons=skip_reasons,
+                ),
+                "payload_json": payload,
+            }
+        )
         rows.append(
             {
                 "ticker": ticker,

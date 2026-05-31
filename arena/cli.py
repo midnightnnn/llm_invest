@@ -34,6 +34,7 @@ from arena.tenant_leases import FirestoreTenantLeaseStore
 
 from arena.cli_commands.admin import (
     cmd_approve_live_tenant,
+    cmd_backfill_candidate_memory_structures,
     cmd_backfill_tenant_markets,
     cmd_enable_memory_forgetting,
     cmd_promote_tenant_live,
@@ -315,6 +316,17 @@ def build_parser() -> argparse.ArgumentParser:
     run_memory_tuner.add_argument("--tenant", action="append", default=[], help="Optional tenant id (repeatable). Defaults to all runtime tenants")
     run_memory_tuner.add_argument("--updated-by", default="cli-memory-tuner", help="Actor id/email recorded in audit log")
 
+    candidate_memory_backfill = sub.add_parser(
+        "backfill-candidate-memory-structures",
+        help="Backfill structured candidate memory payloads for loss-minimized prompt recall",
+    )
+    candidate_memory_backfill.add_argument("--tenant", action="append", default=[], help="Optional tenant id (repeatable). Defaults to all runtime tenants")
+    candidate_memory_backfill.add_argument("--agent", action="append", default=[], help="Optional agent id (repeatable). Defaults to configured agents")
+    candidate_memory_backfill.add_argument("--live", action="store_true", help="Use live trading-mode memories")
+    candidate_memory_backfill.add_argument("--dry-run", action="store_true", help="Count rows without updating payload_json")
+    candidate_memory_backfill.add_argument("--include-existing", action="store_true", help="Rewrite rows that already have structured_memory")
+    candidate_memory_backfill.add_argument("--limit-per-agent", type=int, default=1000, help="Maximum candidate memory rows per agent")
+
     extract_rel = sub.add_parser(
         "extract-memory-relations",
         help="Extract semantic relation triples from stored memory sources",
@@ -437,6 +449,14 @@ def _dispatch_command(args: argparse.Namespace, parser: argparse.ArgumentParser)
         "run-memory-forgetting-tuner": lambda ns: cmd_run_memory_forgetting_tuner(
             tenant_ids=list(getattr(ns, "tenant", [])),
             updated_by=str(getattr(ns, "updated_by", "") or "cli-memory-tuner"),
+        ),
+        "backfill-candidate-memory-structures": lambda ns: cmd_backfill_candidate_memory_structures(
+            tenant_ids=list(getattr(ns, "tenant", [])),
+            agent_ids=list(getattr(ns, "agent", [])),
+            live=bool(getattr(ns, "live", False)),
+            dry_run=bool(getattr(ns, "dry_run", False)),
+            include_existing=bool(getattr(ns, "include_existing", False)),
+            limit_per_agent=int(getattr(ns, "limit_per_agent", 1000) or 1000),
         ),
         "extract-memory-relations": lambda ns: cmd_extract_memory_relations(
             tenant_ids=list(getattr(ns, "tenant", [])),

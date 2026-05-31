@@ -716,6 +716,47 @@ class MemoryBQStore:
             },
         )
 
+    def candidate_memory_events_for_structured_backfill(
+        self,
+        *,
+        agent_id: str,
+        trading_mode: str = "paper",
+        tenant_id: str | None = None,
+        limit: int = 1000,
+        include_existing: bool = False,
+    ) -> list[dict[str, Any]]:
+        """Returns candidate memories missing payload_json.structured_memory."""
+        tenant = self.session.resolve_tenant_id(tenant_id)
+        existing_filter = ""
+        if not include_existing:
+            existing_filter = "AND COALESCE(JSON_VALUE(payload_json, '$.structured_memory.v'), '') = ''"
+        sql = f"""
+        SELECT {_MEMORY_SELECT_COLUMNS}
+        FROM `{self.session.dataset_fqn}.agent_memory_events`
+        WHERE tenant_id = @tenant_id
+          AND agent_id = @agent_id
+          AND trading_mode = @trading_mode
+          AND event_type IN UNNEST(@event_types)
+          {existing_filter}
+        ORDER BY created_at DESC
+        LIMIT @limit
+        """
+        return self.session.fetch_rows(
+            sql,
+            {
+                "tenant_id": tenant,
+                "agent_id": str(agent_id or "").strip(),
+                "trading_mode": str(trading_mode or "paper").strip().lower() or "paper",
+                "event_types": [
+                    "candidate_screen_hit",
+                    "candidate_watchlist",
+                    "candidate_rejected",
+                    "candidate_thesis",
+                ],
+                "limit": max(1, min(int(limit or 1000), 10000)),
+            },
+        )
+
     def find_trade_execution_memory_event(
         self,
         *,

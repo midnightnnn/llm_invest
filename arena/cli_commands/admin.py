@@ -9,6 +9,7 @@ from arena.memory.policy import (
     normalize_memory_policy,
     serialize_memory_policy,
 )
+from arena.memory.candidate_structured import backfill_candidate_memory_structures
 from arena.memory.tuning import run_memory_forgetting_tuner
 
 logger = logging.getLogger(__name__)
@@ -299,6 +300,79 @@ def cmd_enable_memory_forgetting(
         len(tenants),
         updated,
         skipped,
+    )
+
+
+def cmd_backfill_candidate_memory_structures(
+    *,
+    tenant_ids: list[str] | None = None,
+    agent_ids: list[str] | None = None,
+    live: bool = False,
+    dry_run: bool = False,
+    include_existing: bool = False,
+    limit_per_agent: int = 1000,
+) -> None:
+    """Backfills candidate memory payload_json.structured_memory for prompt-safe recall."""
+    cli = _cli()
+    settings = cli.load_settings()
+    if live:
+        settings.trading_mode = "live"
+    cli.configure_logging(settings.log_level, settings.log_format)
+    repo = cli._repo_or_exit(settings, tenant_id="local")
+    repo.ensure_dataset()
+    repo.ensure_tables()
+
+    explicit_tenants = [str(token or "").strip().lower() for token in (tenant_ids or []) if str(token or "").strip()]
+    if explicit_tenants:
+        tenants = list(dict.fromkeys(explicit_tenants))
+    else:
+        tenants = list(repo.list_runtime_tenants(limit=2000))
+    if not tenants:
+        tenants = ["local"]
+
+    explicit_agents = [str(token or "").strip() for token in (agent_ids or []) if str(token or "").strip()]
+    agents = list(dict.fromkeys(explicit_agents or [str(agent or "").strip() for agent in settings.agent_ids if str(agent or "").strip()]))
+    if not agents:
+        raise SystemExit("No agent ids configured; pass --agent")
+
+    scanned = updated = would_update = skipped = 0
+    quality_counts: dict[str, int] = {}
+    for tenant in tenants:
+        result = backfill_candidate_memory_structures(
+            repo,
+            agent_ids=agents,
+            trading_mode=settings.trading_mode,
+            tenant_id=tenant,
+            limit_per_agent=max(1, int(limit_per_agent or 1000)),
+            dry_run=dry_run,
+            include_existing=include_existing,
+        )
+        scanned += result.scanned
+        updated += result.updated
+        would_update += result.would_update
+        skipped += result.skipped
+        for key, value in result.quality_counts.items():
+            quality_counts[key] = quality_counts.get(key, 0) + int(value)
+        logger.info(
+            "[green]Candidate memory structure backfill[/green] tenant=%s scanned=%d updated=%d would_update=%d dry_run=%s qualities=%s",
+            tenant,
+            result.scanned,
+            result.updated,
+            result.would_update,
+            dry_run,
+            result.quality_counts,
+        )
+
+    logger.info(
+        "[bold green]Candidate memory structure backfill done[/bold green] tenants=%d agents=%d scanned=%d updated=%d would_update=%d skipped=%d dry_run=%s qualities=%s",
+        len(tenants),
+        len(agents),
+        scanned,
+        updated,
+        would_update,
+        skipped,
+        dry_run,
+        quality_counts,
     )
 
 

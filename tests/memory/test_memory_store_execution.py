@@ -113,6 +113,12 @@ def test_record_candidate_memories_persists_bounded_nonheld_screen_hits() -> Non
     assert event.event_type == "candidate_screen_hit"
     assert event.payload["ticker"] == "MSFT"
     assert event.payload["cycle_id"] == "cycle_candidate"
+    assert event.payload["structured_memory"]["v"] == "candidate_memory_v1"
+    assert event.payload["structured_memory"]["t"] == "MSFT"
+    assert event.payload["structured_memory"]["src"] == ["screen_market:value"]
+    assert event.payload["structured_memory"]["rank"] == 2
+    assert event.payload["structured_memory"]["score"] == 1.2
+    assert event.payload["structured_memory"]["why"] == "Valuation support"
     assert event.semantic_key.startswith("candidate:gpt:paper:MSFT:")
     assert event.expires_at is not None
     assert vector_store.saved[0]["event_type"] == "candidate_screen_hit"

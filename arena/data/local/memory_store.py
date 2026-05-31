@@ -590,8 +590,9 @@ class LocalMemoryStore:
             "trading_mode": trading_mode,
             "event_types": [
                 "candidate_screen_hit",
-                "candidate_discovery",
-                "candidate_opportunity",
+                "candidate_watchlist",
+                "candidate_rejected",
+                "candidate_thesis",
             ],
             "limit": max(1, int(limit)),
         }
@@ -609,6 +610,48 @@ class LocalMemoryStore:
               AND event_type IN (SELECT unnest($event_types))
               {exclude_clause}
             ORDER BY COALESCE(effective_score, score, importance_score, 0.0) DESC, created_at DESC
+            LIMIT $limit
+            """,
+            params,
+        )
+
+    def candidate_memory_events_for_structured_backfill(
+        self,
+        *,
+        agent_id: str,
+        trading_mode: str = "paper",
+        tenant_id: str | None = None,
+        limit: int = 1000,
+        include_existing: bool = False,
+    ) -> list[dict[str, Any]]:
+        tenant = self.session.resolve_tenant_id(tenant_id)
+        params: dict[str, Any] = {
+            "tenant_id": tenant,
+            "agent_id": str(agent_id or "").strip(),
+            "trading_mode": str(trading_mode or "paper").strip().lower() or "paper",
+            "event_types": [
+                "candidate_screen_hit",
+                "candidate_watchlist",
+                "candidate_rejected",
+                "candidate_thesis",
+            ],
+            "limit": max(1, int(limit or 1000)),
+        }
+        existing_filter = ""
+        if not include_existing:
+            existing_filter = (
+                "AND COALESCE(json_extract_string(payload_json, '$.structured_memory.v'), '') = ''"
+            )
+        return self.session.fetch_rows(
+            f"""
+            SELECT {_MEMORY_SELECT_COLUMNS}
+            FROM agent_memory_events
+            WHERE tenant_id = $tenant_id
+              AND agent_id = $agent_id
+              AND trading_mode = $trading_mode
+              AND event_type IN (SELECT unnest($event_types))
+              {existing_filter}
+            ORDER BY created_at DESC
             LIMIT $limit
             """,
             params,

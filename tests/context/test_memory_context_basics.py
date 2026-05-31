@@ -283,3 +283,75 @@ def test_context_builder_reserves_candidate_memory_track() -> None:
     assert "Neutral Lessons:" in context["memory_context"]
     assert any(row["event_id"] == "cand_msft" and row["memory_track"] == "candidate" for row in context["memory_events"])
     assert sum(1 for row in context["memory_events"] if "AAPL" in row.get("tickers", [])) <= 2
+
+
+def test_candidate_memory_context_uses_structured_payload_without_checked_truncation() -> None:
+    snapshot = AccountSnapshot(
+        cash_krw=500_000,
+        total_equity_krw=1_200_000,
+        positions={
+            "AAPL": Position(
+                ticker="AAPL",
+                quantity=1,
+                avg_price_krw=100_000,
+                market_price_krw=120_000,
+            )
+        },
+    )
+    settings = _settings()
+    repo = FakeRepo()
+    memory = FakeMemory(
+        top_rows=[
+            {
+                "event_id": "trade_aapl",
+                "created_at": "2026-02-24T00:00:00Z",
+                "agent_id": "gpt",
+                "event_type": "trade_execution",
+                "summary": "AAPL BUY rationale: core position.",
+                "importance_score": 0.6,
+                "score": 0.6,
+                "payload_json": '{"intent":{"ticker":"AAPL","side":"BUY"}}',
+            }
+        ]
+    )
+    long_reason = "Learned IC ranker score=+0.8661; " + ("reason detail " * 25)
+    repo.candidate_memory_rows = [
+        {
+            "event_id": "cand_crwv",
+            "created_at": "2026-05-12T00:00:00Z",
+            "agent_id": "gpt",
+            "event_type": "candidate_watchlist",
+            "summary": (
+                "CRWV candidate_watchlist: surfaced by recommend_opportunities:balanced "
+                "rank=4 (score=0.215288); follow-up seen via fetch_sec_filings, forecast_returns."
+            ),
+            "importance_score": 0.38,
+            "score": 0.38,
+            "payload_json": json.dumps(
+                {
+                    "source": "candidate_discovery",
+                    "ticker": "CRWV",
+                    "candidate_status": "watchlist",
+                    "source_tools": ["recommend_opportunities:balanced"],
+                    "analyzed_by": ["fetch_sec_filings", "forecast_returns"],
+                    "last_seen_rank": 4,
+                    "discovery_evidence": {
+                        "score": 0.215288,
+                        "reason_for": long_reason,
+                        "reason_risk": "blended_oos_ic=-0.015; signals_scored=14",
+                    },
+                },
+                ensure_ascii=False,
+            ),
+        }
+    ]
+    builder = ContextBuilder(repo=repo, memory=memory, board=FakeBoard(), settings=settings)
+
+    context = builder.build(agent_id="gpt", snapshot=snapshot)
+
+    assert "Candidate Memory:" in context["memory_context"]
+    assert '"t":"CRWV"' in context["memory_context"]
+    assert "fetch_sec_filings" in context["memory_context"]
+    assert "forecast_returns" in context["memory_context"]
+    assert "forecast_retu..." not in context["memory_context"]
+    assert long_reason in context["memory_context"]
