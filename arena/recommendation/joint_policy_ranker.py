@@ -24,12 +24,19 @@ import numpy as np
 from arena.config import Settings
 from arena.market_feature_normalization import daily_history_sources
 from arena.market_sources import live_market_sources_for_markets, parse_markets
-from arena.recommendation.signals import ALL_SIGNALS, SIGNAL_NAMES
+from arena.recommendation.macro_interactions import (
+    MACRO_CONDITIONING_PAIRS,
+    macro_factor_frame_for_rows,
+)
+from arena.recommendation.signals import ALL_SIGNALS, SignalDef
 
 logger = logging.getLogger(__name__)
 
 
 SCORE_SOURCE = "joint_policy_v1"
+POLICY_VARIANT = "macro_interaction_joint_v1"
+POLICY_SIGNALS: tuple[SignalDef, ...] = ALL_SIGNALS
+POLICY_SIGNAL_NAMES: tuple[str, ...] = tuple(signal.name for signal in POLICY_SIGNALS)
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,6 +61,18 @@ class JointPolicyFit:
     lambda_l2: float
     lambda_turnover: float
     gamma: float
+
+
+@dataclass(frozen=True, slots=True)
+class MacroConditionedPolicyFit:
+    joint_coefficients: dict[str, float]
+    previous_joint_coefficients: dict[str, float]
+    base_coefficients: dict[str, float]
+    macro_weights: dict[str, dict[str, float]]
+    effective_coefficients: dict[str, float]
+    factor_values: dict[str, float]
+    active_pairs: list[dict[str, Any]]
+    training_dates: int
 
 
 def _utc_now() -> datetime:
@@ -195,7 +214,7 @@ def _overlay_latest_forecasts_for_scoring_rows(
 
 
 def _policy_version(*, as_of_date: date, signals_count: int) -> str:
-    seed = f"joint-policy:{as_of_date.isoformat()}:{signals_count}:{SCORE_SOURCE}"
+    seed = f"joint-policy:{POLICY_VARIANT}:{as_of_date.isoformat()}:{signals_count}:{SCORE_SOURCE}"
     digest = hashlib.sha1(seed.encode("utf-8")).hexdigest()[:12]
     return f"opportunity_ranker_joint_policy_{as_of_date.isoformat().replace('-', '')}_{digest}"
 
@@ -205,10 +224,11 @@ def _policy_feature_matrix(
     *,
     fit_stats: dict[str, tuple[float, float]] | None = None,
     params: JointPolicyParams,
+    signals: tuple[SignalDef, ...] = POLICY_SIGNALS,
 ) -> tuple[np.ndarray, dict[str, tuple[float, float]]]:
     stats: dict[str, tuple[float, float]] = {}
     columns: list[np.ndarray] = []
-    for signal in ALL_SIGNALS:
+    for signal in signals:
         raw = np.asarray(
             [
                 np.nan if (value := _finite_float(row.get(signal.column))) is None else value
@@ -237,6 +257,7 @@ def _characteristic_returns_by_date(
     rows: list[dict[str, Any]],
     *,
     params: JointPolicyParams,
+    signals: tuple[SignalDef, ...] = POLICY_SIGNALS,
 ) -> tuple[np.ndarray, list[date], int]:
     grouped: dict[date, list[dict[str, Any]]] = {}
     for row in rows:
@@ -256,7 +277,7 @@ def _characteristic_returns_by_date(
         valid_y = np.isfinite(y)
         if int(valid_y.sum()) < 3:
             continue
-        x, _ = _policy_feature_matrix(day_rows, params=params)
+        x, _ = _policy_feature_matrix(day_rows, params=params, signals=signals)
         x = x[valid_y]
         y = y[valid_y]
         if x.shape[0] < 3 or x.shape[1] == 0:
@@ -265,7 +286,7 @@ def _characteristic_returns_by_date(
         dates.append(as_of)
         observations += int(x.shape[0])
     if not char_rows:
-        return np.zeros((0, len(ALL_SIGNALS)), dtype=float), [], 0
+        return np.zeros((0, len(signals)), dtype=float), [], 0
     return np.vstack(char_rows).astype(float), dates, observations
 
 
@@ -369,6 +390,152 @@ def _solve_elastic_net_quadratic(
     return theta
 
 
+def _finite_factor(value: Any) -> float | None:
+    parsed = _finite_float(value)
+    return float(parsed) if parsed is not None else None
+
+
+def _macro_interaction_name(signal_name: str, factor_name: str) -> str:
+    return f"macro_{factor_name}_x_{signal_name}"
+
+
+def expand_characteristic_returns_with_macro_interactions(
+    *,
+    characteristic_returns: np.ndarray,
+    training_dates: list[date],
+    signal_names: tuple[str, ...],
+    factor_by_date: dict[date, dict[str, float | None]],
+    conditioning_pairs: tuple[tuple[str, str], ...] = MACRO_CONDITIONING_PAIRS,
+) -> tuple[np.ndarray, tuple[str, ...], list[dict[str, str]]]:
+    """Appends signal × macro-factor characteristic-return columns."""
+    arr = np.asarray(characteristic_returns, dtype=float)
+    if arr.ndim != 2:
+        raise ValueError("characteristic_returns must be a 2D array")
+    if arr.shape[1] != len(signal_names):
+        raise ValueError("signal_names length must match characteristic_returns columns")
+
+    columns: list[np.ndarray] = [arr[:, idx].astype(float) for idx in range(arr.shape[1])]
+    expanded_names: list[str] = list(signal_names)
+    interaction_specs: list[dict[str, str]] = []
+    signal_index = {name: idx for idx, name in enumerate(signal_names)}
+    date_count = min(len(training_dates), arr.shape[0])
+    for signal_name, factor_name in conditioning_pairs:
+        if signal_name not in signal_names:
+            continue
+        interaction_name = _macro_interaction_name(signal_name, factor_name)
+        if interaction_name in expanded_names:
+            continue
+        signal_idx = signal_index[signal_name]
+        values = np.zeros(arr.shape[0], dtype=float)
+        for row_idx in range(date_count):
+            as_of = training_dates[row_idx]
+            factor_value = _finite_factor((factor_by_date.get(as_of) or {}).get(factor_name))
+            if factor_value is None:
+                factor_value = 0.0
+            values[row_idx] = float(arr[row_idx, signal_idx]) * float(factor_value)
+        columns.append(values)
+        expanded_names.append(interaction_name)
+        interaction_specs.append(
+            {
+                "name": interaction_name,
+                "signal": signal_name,
+                "factor": factor_name,
+            }
+        )
+    if not columns:
+        return np.zeros((arr.shape[0], 0), dtype=float), tuple(), []
+    return np.column_stack(columns).astype(float), tuple(expanded_names), interaction_specs
+
+
+def _effective_policy_from_joint_fit(
+    *,
+    joint_fit: JointPolicyFit,
+    base_signal_names: tuple[str, ...],
+    interaction_specs: list[dict[str, str]],
+    current_factors: dict[str, float | None],
+) -> MacroConditionedPolicyFit:
+    factor_values: dict[str, float] = {}
+    for name, raw_value in current_factors.items():
+        parsed_value = _finite_factor(raw_value)
+        if parsed_value is not None:
+            factor_values[name] = float(parsed_value)
+
+    macro_weights: dict[str, dict[str, float]] = {name: {} for name in base_signal_names}
+    active_pairs: list[dict[str, Any]] = []
+    for spec in interaction_specs:
+        signal_name = str(spec.get("signal") or "")
+        factor_name = str(spec.get("factor") or "")
+        interaction_name = str(spec.get("name") or "")
+        if not signal_name or not factor_name or not interaction_name:
+            continue
+        weight = float(joint_fit.coefficients.get(interaction_name, 0.0))
+        macro_weights.setdefault(signal_name, {})[factor_name] = weight
+        if abs(weight) > 1e-12:
+            active_pairs.append(
+                {
+                    "name": interaction_name,
+                    "signal": signal_name,
+                    "factor": factor_name,
+                    "weight": weight,
+                }
+            )
+
+    base_coefficients = {
+        name: float(joint_fit.coefficients.get(name, 0.0))
+        for name in base_signal_names
+    }
+    effective: dict[str, float] = {}
+    for signal_name in base_signal_names:
+        value = float(base_coefficients.get(signal_name, 0.0))
+        for factor_name, weight in macro_weights.get(signal_name, {}).items():
+            value += float(weight) * float(factor_values.get(factor_name, 0.0))
+        effective[signal_name] = float(value)
+
+    return MacroConditionedPolicyFit(
+        joint_coefficients=dict(joint_fit.coefficients),
+        previous_joint_coefficients=dict(joint_fit.previous_coefficients),
+        base_coefficients=base_coefficients,
+        macro_weights=macro_weights,
+        effective_coefficients=effective,
+        factor_values=factor_values,
+        active_pairs=active_pairs,
+        training_dates=joint_fit.training_dates,
+    )
+
+
+def _round_float_map(values: dict[str, float], *, digits: int = 8) -> dict[str, float]:
+    return {name: round(float(value), digits) for name, value in values.items()}
+
+
+def _round_nested_float_map(values: dict[str, dict[str, float]], *, digits: int = 8) -> dict[str, dict[str, float]]:
+    return {
+        name: {inner_name: round(float(inner_value), digits) for inner_name, inner_value in inner.items()}
+        for name, inner in values.items()
+        if inner
+    }
+
+
+def _macro_conditioning_json(fit: MacroConditionedPolicyFit) -> dict[str, Any]:
+    return {
+        "variant": POLICY_VARIANT,
+        "factor_values": _round_float_map(fit.factor_values),
+        "joint_policy_coefficients": _round_float_map(fit.joint_coefficients),
+        "macro_interaction_coefficients": _round_nested_float_map(fit.macro_weights),
+        "macro_weights": _round_nested_float_map(fit.macro_weights),
+        "effective_policy_coefficients": _round_float_map(fit.effective_coefficients),
+        "active_pairs": [
+            {
+                "name": str(item.get("name") or ""),
+                "signal": str(item.get("signal") or ""),
+                "factor": str(item.get("factor") or ""),
+                "weight": round(float(item.get("weight") or 0.0), 8),
+            }
+            for item in fit.active_pairs
+        ],
+        "training_dates": fit.training_dates,
+    }
+
+
 def _score_rows(
     *,
     scoring_rows: list[dict[str, Any]],
@@ -377,11 +544,14 @@ def _score_rows(
     as_of_date: date,
     ranker_version: str,
     params: JointPolicyParams,
+    signals: tuple[SignalDef, ...] = POLICY_SIGNALS,
+    macro_conditioning: MacroConditionedPolicyFit | None = None,
 ) -> list[dict[str, Any]]:
     if not scoring_rows:
         return []
-    x, stats = _policy_feature_matrix(scoring_rows, params=params)
-    coef = np.asarray([fit.coefficients.get(name, 0.0) for name in SIGNAL_NAMES], dtype=float)
+    signal_names = tuple(signal.name for signal in signals)
+    x, stats = _policy_feature_matrix(scoring_rows, params=params, signals=signals)
+    coef = np.asarray([fit.coefficients.get(name, 0.0) for name in signal_names], dtype=float)
     scores = x @ coef
     staged: list[dict[str, Any]] = []
     for idx, row in enumerate(scoring_rows):
@@ -390,13 +560,13 @@ def _score_rows(
             continue
         contribs = {
             name: float(x[idx, j] * coef[j])
-            for j, name in enumerate(SIGNAL_NAMES)
+            for j, name in enumerate(signal_names)
             if math.isfinite(float(x[idx, j])) and abs(float(x[idx, j] * coef[j])) > 1e-12
         }
         top_contribs = sorted(contribs.items(), key=lambda kv: -abs(kv[1]))[:5]
         feature_json = {
             signal.name: _finite_float(row.get(signal.column))
-            for signal in ALL_SIGNALS
+            for signal in signals
             if _finite_float(row.get(signal.column)) is not None
         }
         staged.append(
@@ -423,10 +593,19 @@ def _score_rows(
                 "optimizer_raw_weight": None,
                 "feature_json": feature_json,
                 "explanation_json": {
-                    "model_family": "regularized_joint_policy",
+                    "model_family": "regularized_joint_policy_macro_interactions"
+                    if macro_conditioning is not None
+                    else "regularized_joint_policy",
+                    "policy_variant": POLICY_VARIANT if macro_conditioning is not None else "base",
                     "policy_coefficients": {
                         name: round(float(value), 8) for name, value in fit.coefficients.items()
                     },
+                    "base_policy_coefficients": _round_float_map(macro_conditioning.base_coefficients)
+                    if macro_conditioning is not None
+                    else None,
+                    "macro_conditioning": _macro_conditioning_json(macro_conditioning)
+                    if macro_conditioning is not None
+                    else None,
                     "previous_policy_coefficients": {
                         name: round(float(value), 8)
                         for name, value in fit.previous_coefficients.items()
@@ -503,6 +682,12 @@ def build_and_store_joint_policy_ranker(
             repo,
             loaded_scoring_rows,
         )
+        macro_training_frame = macro_factor_frame_for_rows(
+            repo, training_rows, lookback_days=lookback_days, market=market
+        )
+        macro_scoring_frame = macro_factor_frame_for_rows(
+            repo, forecast_scoring_rows, lookback_days=lookback_days, market=market
+        )
         scoring_rows, forecast_filter = _filter_forecast_complete_scoring_rows(forecast_scoring_rows)
         forecast_filter["latest_forecast_overlay"] = overlay_diagnostics
         if forecast_filter["dropped_rows"]:
@@ -516,6 +701,7 @@ def build_and_store_joint_policy_ranker(
         char_returns, training_dates, observations = _characteristic_returns_by_date(
             training_rows,
             params=active_params,
+            signals=POLICY_SIGNALS,
         )
         if len(training_dates) < int(active_params.min_training_dates):
             note = f"insufficient policy history: {len(training_dates)} < {int(active_params.min_training_dates)}"
@@ -525,7 +711,7 @@ def build_and_store_joint_policy_ranker(
                 now,
                 "",
                 "unusable",
-                list(SIGNAL_NAMES),
+                list(POLICY_SIGNAL_NAMES),
                 observations,
                 len(training_dates),
                 len(scoring_rows),
@@ -536,6 +722,10 @@ def build_and_store_joint_policy_ranker(
                     "market": market,
                     "score_source": SCORE_SOURCE,
                     "forecast_scoring_filter": forecast_filter,
+                    "macro_conditioning": {
+                        "training": macro_training_frame.diagnostics,
+                        "scoring": macro_scoring_frame.diagnostics,
+                    },
                 },
                 score_source=SCORE_SOURCE,
             )
@@ -560,7 +750,7 @@ def build_and_store_joint_policy_ranker(
                 now,
                 "",
                 "unusable",
-                list(SIGNAL_NAMES),
+                list(POLICY_SIGNAL_NAMES),
                 observations,
                 len(training_dates),
                 0,
@@ -571,6 +761,10 @@ def build_and_store_joint_policy_ranker(
                     "market": market,
                     "score_source": SCORE_SOURCE,
                     "forecast_scoring_filter": forecast_filter,
+                    "macro_conditioning": {
+                        "training": macro_training_frame.diagnostics,
+                        "scoring": macro_scoring_frame.diagnostics,
+                    },
                 },
                 score_source=SCORE_SOURCE,
             )
@@ -585,13 +779,70 @@ def build_and_store_joint_policy_ranker(
                 note=note,
             )
 
-        fit = fit_turnover_regularized_policy(
-            char_returns,
-            signal_names=SIGNAL_NAMES,
+        as_of_date = max((_date_key(row.get("as_of_date")) for row in scoring_rows), default=now.date())
+        current_factors = macro_scoring_frame.factors_for(as_of_date, market)
+        factor_by_date = {
+            training_date: macro_training_frame.factors_for(training_date, market)
+            for training_date in training_dates
+        }
+        expanded_char_returns, expanded_signal_names, interaction_specs = (
+            expand_characteristic_returns_with_macro_interactions(
+                characteristic_returns=char_returns,
+                training_dates=training_dates,
+                signal_names=POLICY_SIGNAL_NAMES,
+                factor_by_date=factor_by_date,
+            )
+        )
+        joint_fit = fit_turnover_regularized_policy(
+            expanded_char_returns,
+            signal_names=expanded_signal_names,
             params=active_params,
         )
-        as_of_date = max((_date_key(row.get("as_of_date")) for row in scoring_rows), default=now.date())
-        version = _policy_version(as_of_date=as_of_date, signals_count=len(SIGNAL_NAMES))
+        macro_fit = _effective_policy_from_joint_fit(
+            joint_fit=joint_fit,
+            base_signal_names=POLICY_SIGNAL_NAMES,
+            interaction_specs=interaction_specs,
+            current_factors=current_factors,
+        )
+        previous_macro_fit = _effective_policy_from_joint_fit(
+            joint_fit=JointPolicyFit(
+                coefficients=joint_fit.previous_coefficients,
+                previous_coefficients=joint_fit.previous_coefficients,
+                training_dates=joint_fit.training_dates,
+                trailing_window=joint_fit.trailing_window,
+                lambda_l1=joint_fit.lambda_l1,
+                lambda_l2=joint_fit.lambda_l2,
+                lambda_turnover=joint_fit.lambda_turnover,
+                gamma=joint_fit.gamma,
+            ),
+            base_signal_names=POLICY_SIGNAL_NAMES,
+            interaction_specs=interaction_specs,
+            current_factors=current_factors,
+        )
+        fit = JointPolicyFit(
+            coefficients=macro_fit.effective_coefficients,
+            previous_coefficients=previous_macro_fit.effective_coefficients,
+            training_dates=joint_fit.training_dates,
+            trailing_window=joint_fit.trailing_window,
+            lambda_l1=joint_fit.lambda_l1,
+            lambda_l2=joint_fit.lambda_l2,
+            lambda_turnover=joint_fit.lambda_turnover,
+            gamma=joint_fit.gamma,
+        )
+        base_fit = JointPolicyFit(
+            coefficients=macro_fit.base_coefficients,
+            previous_coefficients={
+                name: float(joint_fit.previous_coefficients.get(name, 0.0))
+                for name in POLICY_SIGNAL_NAMES
+            },
+            training_dates=joint_fit.training_dates,
+            trailing_window=joint_fit.trailing_window,
+            lambda_l1=joint_fit.lambda_l1,
+            lambda_l2=joint_fit.lambda_l2,
+            lambda_turnover=joint_fit.lambda_turnover,
+            gamma=joint_fit.gamma,
+        )
+        version = _policy_version(as_of_date=as_of_date, signals_count=len(POLICY_SIGNAL_NAMES))
         output_rows = _score_rows(
             scoring_rows=scoring_rows,
             fit=fit,
@@ -599,6 +850,8 @@ def build_and_store_joint_policy_ranker(
             as_of_date=as_of_date,
             ranker_version=version,
             params=active_params,
+            signals=POLICY_SIGNALS,
+            macro_conditioning=macro_fit,
         )
         scores_written = int(repo.insert_opportunity_ranker_scores_latest(output_rows) or 0)
         status = "ok" if scores_written > 0 else "unusable"
@@ -606,6 +859,7 @@ def build_and_store_joint_policy_ranker(
             "score_source": SCORE_SOURCE,
             "market": market,
             "policy_coefficients": fit.coefficients,
+            "base_policy_coefficients": base_fit.coefficients,
             "previous_policy_coefficients": fit.previous_coefficients,
             "training_dates": fit.training_dates,
             "training_observations": observations,
@@ -619,6 +873,11 @@ def build_and_store_joint_policy_ranker(
             },
             "horizon_days": horizon_days,
             "forecast_scoring_filter": forecast_filter,
+            "macro_conditioning": {
+                "training": macro_training_frame.diagnostics,
+                "scoring": macro_scoring_frame.diagnostics,
+                **_macro_conditioning_json(macro_fit),
+            },
         }
         _append_run(
             repo,
@@ -626,7 +885,7 @@ def build_and_store_joint_policy_ranker(
             now,
             version,
             status,
-            list(SIGNAL_NAMES),
+            list(POLICY_SIGNAL_NAMES),
             observations,
             fit.training_dates,
             len(scoring_rows),
@@ -656,7 +915,7 @@ def build_and_store_joint_policy_ranker(
             now,
             "",
             "failed",
-            list(SIGNAL_NAMES),
+            list(POLICY_SIGNAL_NAMES),
             0,
             0,
             0,

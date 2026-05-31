@@ -18,8 +18,10 @@ from arena.recommendation import (
 )
 from arena.recommendation.joint_policy_ranker import (
     JointPolicyParams,
+    expand_characteristic_returns_with_macro_interactions,
     fit_turnover_regularized_policy,
 )
+from arena.recommendation.macro_interactions import macro_factor_frame_for_rows
 
 
 def test_schema_includes_new_signal_and_fundamentals_tables() -> None:
@@ -126,10 +128,12 @@ class _FakePolicyRepo(_FakeICRepo):
         regime_rows: list[dict],
         scoring_rows: list[dict],
         forecast_rows: list[dict] | None = None,
+        macro_rows: list[dict] | None = None,
     ) -> None:
         super().__init__(ic_rows=[], regime_rows=regime_rows, scoring_rows=scoring_rows)
         self._policy_rows = list(policy_rows)
         self._forecast_rows = list(forecast_rows or [])
+        self._macro_rows = list(macro_rows or [])
 
     def load_signal_policy_training_rows(self, **_: object) -> list[dict]:
         return [dict(row) for row in self._policy_rows]
@@ -141,6 +145,29 @@ class _FakePolicyRepo(_FakeICRepo):
             for row in self._forecast_rows
             if not tokens or str(row.get("ticker") or "").strip().upper() in tokens
         ]
+
+    def macro_indicator_observation_history(
+        self,
+        *,
+        indicator_keys=None,
+        start_date=None,
+        end_date=None,
+        **_: object,
+    ) -> list[dict]:
+        keys = {str(key or "").strip() for key in (indicator_keys or []) if str(key or "").strip()}
+        out: list[dict] = []
+        for row in self._macro_rows:
+            key = str(row.get("indicator_key") or "").strip()
+            obs = row.get("observation_date")
+            obs_date = obs if isinstance(obs, date) else date.fromisoformat(str(obs)[:10])
+            if keys and key not in keys:
+                continue
+            if start_date is not None and obs_date < start_date:
+                continue
+            if end_date is not None and obs_date > end_date:
+                continue
+            out.append(dict(row))
+        return out
 
 
 def _synthetic_ic_rows(days: int = 120) -> tuple[list[dict], list[dict], list[dict]]:
@@ -434,12 +461,167 @@ def test_build_and_store_opportunity_ranker_writes_joint_policy_scores() -> None
     assert top["score_source"] == "joint_policy_v1"
     assert top["ticker"] == "AAA"
     explanation = top["explanation_json"]
-    assert explanation["model_family"] == "regularized_joint_policy"
+    assert explanation["model_family"] == "regularized_joint_policy_macro_interactions"
+    assert explanation["policy_variant"] == "macro_interaction_joint_v1"
     assert "policy_coefficients" in explanation
     assert explanation["optimizer"]["lambda_l1"] > 0.0
     assert "top_contributions" in explanation
     assert repo.run_rows[-1]["score_source"] == "joint_policy_v1"
     assert "policy_coefficients" in repo.run_rows[-1]["detail_json"]
+
+
+def test_macro_factor_frame_uses_conservative_macro_lag() -> None:
+    rows = [
+        {
+            "as_of_date": "2025-03-02",
+            "ticker": "AAA",
+            "market": "kospi",
+            "signal_momentum_20d": 1.0,
+            "signal_forecast_er": 0.02,
+            "signal_lowvol": 0.5,
+        },
+        {
+            "as_of_date": "2025-03-10",
+            "ticker": "BBB",
+            "market": "kospi",
+            "signal_momentum_20d": 1.0,
+            "signal_forecast_er": 0.02,
+            "signal_lowvol": 0.5,
+        },
+    ]
+    macro_rows = [
+        {"indicator_key": "kr_m2", "observation_date": "2024-01-01", "value": 100.0, "frequency": "monthly"},
+        {"indicator_key": "kr_m2", "observation_date": "2024-02-01", "value": 100.0, "frequency": "monthly"},
+        {"indicator_key": "kr_m2", "observation_date": "2025-01-01", "value": 110.0, "frequency": "monthly"},
+        {"indicator_key": "kr_m2", "observation_date": "2025-02-01", "value": 140.0, "frequency": "monthly"},
+        {"indicator_key": "kr_cpi", "observation_date": "2024-01-01", "value": 100.0, "frequency": "monthly"},
+        {"indicator_key": "kr_cpi", "observation_date": "2024-02-01", "value": 100.0, "frequency": "monthly"},
+        {"indicator_key": "kr_cpi", "observation_date": "2025-01-01", "value": 103.0, "frequency": "monthly"},
+        {"indicator_key": "kr_cpi", "observation_date": "2025-02-01", "value": 104.0, "frequency": "monthly"},
+    ]
+    repo = _FakePolicyRepo(policy_rows=[], regime_rows=[], scoring_rows=[], macro_rows=macro_rows)
+
+    frame = macro_factor_frame_for_rows(repo, rows, lookback_days=500, market="kospi")
+
+    early = frame.factors_for(date(2025, 3, 2), "kospi")["liquidity"]
+    late = frame.factors_for(date(2025, 3, 10), "kospi")["liquidity"]
+    diagnostics = frame.diagnostics
+    assert diagnostics["enabled"] is True
+    assert diagnostics["macro_rows_loaded"] == len(macro_rows)
+    assert early is not None and late is not None
+    assert early < late
+
+
+def test_macro_interaction_weights_are_learned_by_joint_optimizer() -> None:
+    expanded, expanded_names, interaction_specs = expand_characteristic_returns_with_macro_interactions(
+        characteristic_returns=np.array([[-0.01], [0.02], [0.05], [0.08]], dtype=float),
+        training_dates=[
+            date(2025, 1, 1),
+            date(2025, 1, 2),
+            date(2025, 1, 3),
+            date(2025, 1, 4),
+        ],
+        signal_names=("momentum_20d",),
+        factor_by_date={
+            date(2025, 1, 1): {"liquidity": -1.0},
+            date(2025, 1, 2): {"liquidity": 0.0},
+            date(2025, 1, 3): {"liquidity": 1.0},
+            date(2025, 1, 4): {"liquidity": 2.0},
+        },
+        conditioning_pairs=(("momentum_20d", "liquidity"),),
+    )
+    fit = fit_turnover_regularized_policy(
+        expanded,
+        signal_names=expanded_names,
+        params=JointPolicyParams(
+            lambda_l1=0.0,
+            lambda_l2=0.05,
+            lambda_turnover=0.0,
+            gamma=0.0,
+            trailing_window=4,
+            min_training_dates=1,
+            max_abs_weight=0.50,
+        ),
+    )
+
+    assert expanded.shape == (4, 2)
+    assert expanded_names == ("momentum_20d", "macro_liquidity_x_momentum_20d")
+    assert interaction_specs[0]["name"] == "macro_liquidity_x_momentum_20d"
+    assert fit.coefficients["macro_liquidity_x_momentum_20d"] > 0.0
+
+
+def test_build_and_store_opportunity_ranker_includes_macro_conditioned_coefficients() -> None:
+    policy_rows, regime_rows, scoring_rows = _synthetic_policy_rows(days=90)
+    start = date(2024, 1, 1)
+    macro_rows: list[dict] = []
+    for offset in range(0, 460):
+        as_of = start + timedelta(days=offset)
+        macro_rows.extend(
+            [
+                {
+                    "indicator_key": "fed_funds_rate",
+                    "observation_date": as_of.isoformat(),
+                    "value": 3.0 + offset / 1000.0,
+                    "frequency": "daily",
+                },
+                {
+                    "indicator_key": "treasury_10y",
+                    "observation_date": as_of.isoformat(),
+                    "value": 4.0 + offset / 1200.0,
+                    "frequency": "daily",
+                },
+                {
+                    "indicator_key": "treasury_3m",
+                    "observation_date": as_of.isoformat(),
+                    "value": 3.5 + offset / 1300.0,
+                    "frequency": "daily",
+                },
+                {
+                    "indicator_key": "vix",
+                    "observation_date": as_of.isoformat(),
+                    "value": 15.0 + math.sin(offset / 30.0),
+                    "frequency": "daily",
+                },
+            ]
+        )
+    monthly_points = [
+        ("2024-01-01", 100.0, 100.0),
+        ("2024-02-01", 100.0, 100.0),
+        ("2025-01-01", 112.0, 103.0),
+        ("2025-02-01", 118.0, 104.0),
+    ]
+    for obs_date, m2, cpi in monthly_points:
+        macro_rows.append({"indicator_key": "m2_money_supply", "observation_date": obs_date, "value": m2, "frequency": "monthly"})
+        macro_rows.append({"indicator_key": "cpi_index", "observation_date": obs_date, "value": cpi, "frequency": "monthly"})
+    repo = _FakePolicyRepo(
+        policy_rows=policy_rows,
+        regime_rows=regime_rows,
+        scoring_rows=scoring_rows,
+        macro_rows=macro_rows,
+    )
+    settings = load_settings()
+    settings.kis_target_market = "us"
+
+    result = build_and_store_opportunity_ranker(
+        repo,
+        settings,
+        lookback_days=500,
+        horizon_days=20,
+        min_ic_dates=30,
+        max_scoring_rows=10,
+    )
+
+    top = repo.score_rows[0]
+    detail = repo.run_rows[-1]["detail_json"]
+    assert result.status == "ok"
+    assert "macro_liquidity_x_momentum" not in top["feature_json"]
+    assert "macro_conditioning" in top["explanation_json"]
+    assert "base_policy_coefficients" in top["explanation_json"]
+    assert "effective_policy_coefficients" in top["explanation_json"]["macro_conditioning"]
+    assert detail["macro_conditioning"]["training"]["macro_rows_loaded"] > 0
+    assert detail["macro_conditioning"]["joint_policy_coefficients"]
+    assert detail["macro_conditioning"]["macro_interaction_coefficients"]
+    assert detail["macro_conditioning"]["effective_policy_coefficients"]
 
 
 def test_build_and_store_opportunity_ranker_filters_forecast_missing_scoring_rows() -> None:
