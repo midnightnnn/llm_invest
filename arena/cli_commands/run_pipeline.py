@@ -107,6 +107,66 @@ def _refresh_macro_indicators_for_prep(
         )
 
 
+def _refresh_macro_research_for_prep(
+    settings: Settings,
+    repo: BigQueryRepository,
+    *,
+    stage: str,
+    market: str,
+) -> None:
+    """Refreshes official macro research briefings for agent tool context."""
+    if not bool(getattr(settings, "macro_research_enabled", True)):
+        logger.info("[cyan]Shared prep macro research skipped[/cyan] disabled_by_config")
+        return
+    if not str(getattr(settings, "macro_research_gcs_bucket", "") or "").strip():
+        logger.warning(
+            "[yellow]Shared prep macro research skipped[/yellow] missing ARENA_MACRO_RESEARCH_GCS_BUCKET",
+            extra=event_extra(
+                "shared_prep_macro_research_skipped",
+                stage=stage,
+                market=market,
+                reason="missing_gcs_bucket",
+            ),
+        )
+        return
+    try:
+        from arena.macro_research import MacroResearchService
+
+        result = MacroResearchService.from_settings(settings=settings, repo=repo).refresh()
+        logger.info(
+            "[cyan]Shared prep macro research refresh[/cyan] discovered=%d inserted=%d summarized=%d skipped=%d failed=%d sources=%s",
+            result.discovered,
+            result.inserted,
+            result.summarized,
+            result.skipped,
+            result.failed,
+            result.source_counts,
+            extra=event_extra(
+                "shared_prep_macro_research_done",
+                stage=stage,
+                market=market,
+                discovered=result.discovered,
+                inserted=result.inserted,
+                summarized=result.summarized,
+                skipped=result.skipped,
+                failed=result.failed,
+                source_counts=result.source_counts,
+            ),
+        )
+    except Exception as exc:
+        logger.warning(
+            "[yellow]Shared prep macro research refresh skipped (non-fatal)[/yellow] err=%s",
+            str(exc),
+            extra=failure_extra(
+                "shared_prep_macro_research_failed",
+                exc,
+                stage=stage,
+                market=market,
+            ),
+            exc_info=True,
+        )
+
+
 def _batch_tenant_work(
     phase: str | None,
     live: bool,
@@ -1054,6 +1114,14 @@ def cmd_run_shared_prep(
 
             logger.info("[bold cyan]Shared prep: refresh-macro-indicators[/bold cyan]")
             _refresh_macro_indicators_for_prep(
+                bootstrap_settings,
+                repo,
+                stage=stage_norm,
+                market=market_override or "all",
+            )
+
+            logger.info("[bold cyan]Shared prep: refresh-macro-research[/bold cyan]")
+            _refresh_macro_research_for_prep(
                 bootstrap_settings,
                 repo,
                 stage=stage_norm,

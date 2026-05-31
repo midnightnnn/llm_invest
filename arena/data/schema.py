@@ -1058,6 +1058,59 @@ TABLE_DDLS: tuple[str, ...] = (
     CLUSTER BY tenant_id, run_id, strategy, ticker
     """,
     """
+    CREATE TABLE IF NOT EXISTS `{project}.{dataset}.macro_research_documents` (
+      tenant_id STRING NOT NULL,
+      source_doc_id STRING NOT NULL,
+      source STRING NOT NULL,
+      feed_id STRING NOT NULL,
+      doc_type STRING NOT NULL,
+      region STRING,
+      market STRING,
+      title STRING NOT NULL,
+      source_url STRING NOT NULL,
+      published_at TIMESTAMP,
+      fetched_at TIMESTAMP NOT NULL,
+      content_hash STRING NOT NULL,
+      raw_gcs_uri STRING,
+      content_gcs_uri STRING,
+      pdf_gcs_uri STRING,
+      text_char_count INT64,
+      status STRING NOT NULL,
+      summary_status STRING,
+      error_message STRING,
+      themes ARRAY<STRING>,
+      detail_json JSON
+    )
+    PARTITION BY DATE(fetched_at)
+    CLUSTER BY tenant_id, source, feed_id, doc_type
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS `{project}.{dataset}.macro_research_briefings` (
+      tenant_id STRING NOT NULL,
+      source_doc_id STRING NOT NULL,
+      created_at TIMESTAMP NOT NULL,
+      published_at TIMESTAMP,
+      source STRING NOT NULL,
+      feed_id STRING NOT NULL,
+      doc_type STRING NOT NULL,
+      region STRING,
+      market STRING,
+      title STRING NOT NULL,
+      source_url STRING NOT NULL,
+      headline STRING NOT NULL,
+      summary STRING NOT NULL,
+      key_points ARRAY<STRING>,
+      market_implication STRING,
+      risk_flags ARRAY<STRING>,
+      themes ARRAY<STRING>,
+      confidence FLOAT64,
+      model STRING NOT NULL,
+      detail_json JSON
+    )
+    PARTITION BY DATE(created_at)
+    CLUSTER BY tenant_id, source, doc_type, market
+    """,
+    """
     CREATE TABLE IF NOT EXISTS `{project}.{dataset}.research_briefings` (
       tenant_id STRING NOT NULL,
       briefing_id STRING NOT NULL,

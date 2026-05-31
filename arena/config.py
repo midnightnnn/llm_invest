@@ -184,6 +184,11 @@ class Settings:
     research_max_tickers: int = 5
     research_mover_top_n: int = 3
     research_earnings_lookahead_days: int = 7
+    macro_research_enabled: bool = True
+    macro_research_gcs_bucket: str = ""
+    macro_research_lookback_days: int = 30
+    macro_research_max_docs_per_run: int = 12
+    macro_research_feed_profile: str = "research_core"
     adk_max_tool_events: int = 120
     universe_run_top_n: int = 1000
     universe_per_exchange_cap: int = 500
@@ -627,7 +632,7 @@ def load_settings() -> Settings:
         openai_model=os.getenv("OPENAI_MODEL", "").strip(),
         gemini_api_key=os.getenv("GEMINI_API_KEY", "").strip(),
         gemini_model=os.getenv("GEMINI_MODEL", "").strip(),
-        research_gemini_model=os.getenv("ARENA_RESEARCH_GEMINI_MODEL", "gemini-2.5-flash").strip(),
+        research_gemini_model=os.getenv("ARENA_RESEARCH_GEMINI_MODEL", "gemini-3-flash-preview").strip(),
         anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", "").strip(),
         anthropic_model=os.getenv("ANTHROPIC_MODEL", "").strip(),
         anthropic_use_vertexai=_to_bool(os.getenv("ANTHROPIC_USE_VERTEXAI"), False),
@@ -647,6 +652,17 @@ def load_settings() -> Settings:
         research_max_tickers=_to_int(os.getenv("ARENA_RESEARCH_MAX_TICKERS"), 5),
         research_mover_top_n=_to_int(os.getenv("ARENA_RESEARCH_MOVER_TOP_N"), 3),
         research_earnings_lookahead_days=_to_int(os.getenv("ARENA_RESEARCH_EARNINGS_LOOKAHEAD_DAYS"), 7),
+        macro_research_enabled=_to_bool(os.getenv("ARENA_MACRO_RESEARCH_ENABLED"), True),
+        macro_research_gcs_bucket=os.getenv(
+            "ARENA_MACRO_RESEARCH_GCS_BUCKET",
+            f"{os.getenv('GOOGLE_CLOUD_PROJECT', '').strip()}-macro-research"
+            if os.getenv("GOOGLE_CLOUD_PROJECT", "").strip()
+            else "",
+        ).strip(),
+        macro_research_lookback_days=_to_int(os.getenv("ARENA_MACRO_RESEARCH_LOOKBACK_DAYS"), 30),
+        macro_research_max_docs_per_run=_to_int(os.getenv("ARENA_MACRO_RESEARCH_MAX_DOCS_PER_RUN"), 12),
+        macro_research_feed_profile=os.getenv("ARENA_MACRO_RESEARCH_FEED_PROFILE", "research_core").strip()
+        or "research_core",
         adk_max_tool_events=_to_int(os.getenv("ARENA_ADK_MAX_TOOL_EVENTS"), 60),
         universe_run_top_n=_to_int(os.getenv("ARENA_UNIVERSE_RUN_TOP_N"), 1000),
         universe_per_exchange_cap=_to_int(os.getenv("ARENA_UNIVERSE_PER_EXCHANGE_CAP"), 500),

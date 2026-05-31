@@ -323,6 +323,7 @@ class _ADKDecisionRunner:
         self._registry.bind("search_past_experiences", self._toolbox.search_past_experiences)
         self._registry.bind("search_peer_lessons", self._toolbox.search_peer_lessons)
         self._registry.bind("get_research_briefing", self._toolbox.get_research_briefing)
+        self._registry.bind("get_macro_research_briefing", self._toolbox.get_macro_research_briefing)
         self._registry.bind("portfolio_diagnosis", self._toolbox.portfolio_diagnosis)
         self._registry.bind("trade_performance", self._toolbox.trade_performance)
         self._registry.bind("scratch_run_python", self._scratch_workspace.run_python)

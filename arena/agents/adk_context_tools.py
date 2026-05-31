@@ -4,7 +4,7 @@ import inspect
 import json
 import logging
 import os
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Literal, Optional
 
 from arena.config import Settings, research_generation_status
@@ -22,6 +22,8 @@ from arena.tools._market_scope import MarketScope, MarketScopeError
 _PEER_LESSON_SOURCES = frozenset({"memory_compaction", "thesis_chain_compaction"})
 _PUBLIC_RESEARCH_CATEGORIES = ("global_market", "geopolitical", "sector_trends")
 ResearchCategory = Literal["global_market", "geopolitical", "sector_trends", "sector"]
+MacroResearchScope = Literal["latest", "week", "month", "quarter", "all"]
+MacroResearchDetailLevel = Literal["compact", "facts", "full"]
 logger = logging.getLogger(__name__)
 
 
@@ -71,6 +73,70 @@ def _normalize_research_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]
             normalized["detail_json"] = _parse_json_field(normalized.get("detail_json"))
         out.append(normalized)
     return out
+
+
+def _clean_macro_research_tokens(values: Optional[list[str]]) -> list[str] | None:
+    if not values:
+        return None
+    clean = [str(value or "").strip().lower() for value in values if str(value or "").strip()]
+    return list(dict.fromkeys(clean)) or None
+
+
+def _clean_macro_research_ids(values: Optional[list[str]]) -> list[str] | None:
+    if not values:
+        return None
+    clean = [str(value or "").strip() for value in values if str(value or "").strip()]
+    return list(dict.fromkeys(clean)) or None
+
+
+def _macro_research_since(scope: str) -> datetime | None:
+    token = str(scope or "").strip().lower() or "week"
+    if token == "all":
+        return None
+    days = {
+        "latest": 3,
+        "week": 7,
+        "month": 31,
+        "quarter": 92,
+    }.get(token, 7)
+    return utc_now() - timedelta(days=days)
+
+
+def _tool_datetime(value: Any) -> Any:
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc).isoformat()
+    return value
+
+
+def _has_tool_value(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str) and not value.strip():
+        return False
+    return True
+
+
+def _clip_tool_text(value: Any, *, max_len: int) -> str:
+    text = str(value or "").strip()
+    if len(text) <= max_len:
+        return text
+    return text[: max(0, max_len - 3)].rstrip() + "..."
+
+
+def _rich_macro_research_detail(row: dict[str, Any]) -> dict[str, Any]:
+    detail = _parse_json_field(row.get("detail_json"))
+    if not isinstance(detail, dict):
+        detail = {}
+    return {
+        "key_findings": detail.get("key_findings") or row.get("key_points"),
+        "methodology": detail.get("methodology"),
+        "macro_channels": detail.get("macro_channels"),
+        "asset_implications": detail.get("asset_implications"),
+        "watch_indicators": detail.get("watch_indicators"),
+        "caveats": detail.get("caveats") or row.get("risk_flags"),
+    }
 
 
 class _ContextTools:
@@ -621,6 +687,64 @@ class _ContextTools:
         if inspect.isawaitable(result):
             result = await result
         return bool(result)
+
+    async def get_macro_research_briefing(
+        self,
+        scope: MacroResearchScope = "week",
+        market: str = "all",
+        sources: Optional[list[str]] = None,
+        doc_types: Optional[list[str]] = None,
+        themes: Optional[list[str]] = None,
+        source_doc_ids: Optional[list[str]] = None,
+        detail_level: MacroResearchDetailLevel = "compact",
+        limit: int = 5,
+    ) -> list[dict[str, Any]]:
+        """Returns official macro research summaries from BOK/FRED/St. Louis Fed feeds."""
+        max_limit = max(1, min(int(limit), 12))
+        clean_market = str(market or "").strip().lower() or "all"
+        loader = getattr(self.repo, "get_macro_research_briefings", None)
+        if not callable(loader):
+            return []
+        rows = loader(
+            source_doc_ids=_clean_macro_research_ids(source_doc_ids),
+            sources=_clean_macro_research_tokens(sources),
+            doc_types=_clean_macro_research_tokens(doc_types),
+            themes=_clean_macro_research_tokens(themes),
+            market=clean_market,
+            since=_macro_research_since(str(scope or "week")),
+            limit=max_limit,
+            tenant_id=self.tenant_id,
+        )
+        detail = str(detail_level or "compact").strip().lower()
+        out: list[dict[str, Any]] = []
+        for row in rows[:max_limit]:
+            if not isinstance(row, dict):
+                continue
+            item: dict[str, Any] = {
+                "published_at": _tool_datetime(row.get("published_at")),
+                "source": row.get("source"),
+                "doc_type": row.get("doc_type"),
+                "market": row.get("market"),
+                "title": row.get("title"),
+                "headline": row.get("headline"),
+                "summary": _clip_tool_text(row.get("summary"), max_len=700) if detail == "compact" else row.get("summary"),
+                "market_implication": row.get("market_implication"),
+                "themes": row.get("themes") or [],
+                "source_doc_id": row.get("source_doc_id"),
+            }
+            item = {key: value for key, value in item.items() if _has_tool_value(value)}
+            if detail in {"facts", "full"}:
+                rich_detail = _rich_macro_research_detail(row)
+                for key, value in rich_detail.items():
+                    if _has_tool_value(value):
+                        item[key] = value
+                for key in ("confidence", "source_url", "model"):
+                    if _has_tool_value(row.get(key)):
+                        item[key] = row.get(key)
+            if detail == "full" and row.get("detail_json") is not None:
+                item["detail_json"] = _parse_json_field(row.get("detail_json"))
+            out.append(item)
+        return out
 
     def _portfolio_weights(self) -> tuple[dict[str, float], float, float]:
         """Returns per-ticker market value weights based on current context."""

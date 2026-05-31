@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 
 from arena.data.local.config_store import LocalConfigStore
 from arena.data.local.execution_store import LocalExecutionStore
+from arena.data.local.macro_research_store import LocalMacroResearchStore
 from arena.data.local.market_store import LocalMarketStore
 from arena.data.local.memory_store import LocalMemoryStore
 from arena.data.local.session import DuckDBSession, default_db_path
@@ -66,6 +67,7 @@ class LocalRepository:
     _STORE_ATTRS = (
         "_market_store",
         "_memory_store",
+        "_macro_research_store",
         "_config_store",
         "_execution_store",
         "_sleeve_store",
@@ -85,6 +87,7 @@ class LocalRepository:
         )
         self._market_store = LocalMarketStore(self._session)
         self._memory_store = LocalMemoryStore(self._session)
+        self._macro_research_store = LocalMacroResearchStore(self._session)
         self._config_store = LocalConfigStore(self._session)
         self._execution_store = LocalExecutionStore(self._session)
         self._sleeve_store = LocalSleeveStore(self._session, market=self._market_store)
