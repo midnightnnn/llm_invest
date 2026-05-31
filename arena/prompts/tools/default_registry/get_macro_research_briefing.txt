@@ -1,9 +1,9 @@
-Use `get_macro_research_briefing` to retrieve compact summaries of official macro research from BOK, FRED, and the St. Louis Fed.
+Use `get_macro_research_briefing` to retrieve compact summaries of official macro research from BOK and the St. Louis Fed.
 
 Parameters:
 - `scope`: one of `latest`, `week`, `month`, `quarter`, `all`; default `week`.
 - `market`: `us`, `kr`, or `all`; default `all`.
-- `sources`: optional list such as `["bok"]`, `["fred"]`, or `["stlouisfed"]`.
+- `sources`: optional list such as `["bok"]` or `["stlouisfed"]`.
 - `source_doc_ids`: optional exact document ids returned by discovery calls. Use this for precise drilldown.
 - `doc_types`: optional list such as `["issue_note"]`, `["working_paper"]`, `["research_report"]`, `["journal_article"]`, `["research_blog"]`.
 - `themes`: optional macro tags such as `inflation`, `monetary_policy`, `rates`, `credit`, `growth`, `labor`, `financial_stability`, `external`.

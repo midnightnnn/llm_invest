@@ -83,7 +83,7 @@ def _base_entries(
             category="macro",
             tier="optional",
             label_ko="거시 연구 브리핑",
-            description_ko="BOK, FRED, St. Louis Fed의 공식 이슈노트·연구자료·논문 요약을 조회합니다. 수치형 거시 지표가 아니라 중앙은행과 연구기관의 해석, 리스크, 시장 함의를 확인할 때 사용합니다.",
+            description_ko="BOK와 St. Louis Fed의 공식 이슈노트·연구자료·논문 요약을 조회합니다. 수치형 거시 지표가 아니라 중앙은행과 연구기관의 해석, 리스크, 시장 함의를 확인할 때 사용합니다.",
             sort_order=32,
         ),
         _tool(

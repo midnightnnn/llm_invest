@@ -381,6 +381,9 @@ def test_macro_research_schema_and_registry_are_exposed() -> None:
     entry = reg.get("get_macro_research_briefing")
     assert entry.category == "macro"
     assert entry.tier == "optional"
+    assert "FRED" not in entry.description.splitlines()[0]
+    assert '["fred"]' not in entry.description
+    assert "FRED" not in entry.description_ko
 
 
 def test_local_macro_research_store_upserts_and_filters(tmp_path) -> None:
