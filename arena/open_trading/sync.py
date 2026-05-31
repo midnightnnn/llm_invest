@@ -2558,6 +2558,8 @@ class AccountSyncService:
                 exchanges.append(fallback)
 
         out: list[str] = []
+        if "us" in markets or len(markets & self._US_MARKETS) > 1:
+            out.append("00")
         for exchange_code in exchanges:
             market_code = _US_TARGET_TO_BALANCE_MARKET_CODE.get(str(exchange_code or "").strip().upper())
             if market_code and market_code not in out:

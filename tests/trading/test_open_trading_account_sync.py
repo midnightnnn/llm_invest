@@ -224,6 +224,61 @@ def test_account_sync_overseas_merges_multi_exchange_balances() -> None:
     assert snapshot.total_equity_krw == pytest.approx(1_312_000 + snapshot.positions["VZ"].market_value_krw())
 
 
+def test_account_sync_us_uses_all_market_balance_for_amex_positions() -> None:
+    repo = FakeRepo()
+    settings = _settings("us", ["USO"])
+    client = FakeClient()
+    requested_market_codes: list[str | None] = []
+
+    def _present_balance(*, tr_mket_cd=None, max_pages=8):
+        _ = max_pages
+        requested_market_codes.append(tr_mket_cd)
+        if tr_mket_cd == "00":
+            return (
+                [
+                    {
+                        "pdno": "USO",
+                        "cblc_qty13": "2",
+                        "ccld_qty_smtl1": "2",
+                        "ord_psbl_qty1": "2",
+                        "avg_unpr3": "137.6999",
+                        "ovrs_now_pric1": "130.78",
+                        "bass_exrt": "1505.8",
+                        "ovrs_excg_cd": "AMEX",
+                        "tr_crcy_cd": "USD",
+                    }
+                ],
+                [],
+                [{"tot_dncl_amt": "1000000", "tot_asst_amt": "1393892"}],
+            )
+        if tr_mket_cd == "01":
+            return (
+                [
+                    {
+                        "pdno": "AAPL",
+                        "cblc_qty13": "1",
+                        "ccld_qty_smtl1": "1",
+                        "ord_psbl_qty1": "1",
+                        "avg_unpr3": "100",
+                        "ovrs_now_pric1": "120",
+                        "bass_exrt": "1505.8",
+                        "ovrs_excg_cd": "NASD",
+                        "tr_crcy_cd": "USD",
+                    }
+                ],
+                [],
+                [{"tot_dncl_amt": "1000000", "tot_asst_amt": "1180696"}],
+            )
+        return ([], [], [{"tot_dncl_amt": "1000000", "tot_asst_amt": "1000000"}])
+
+    client.get_overseas_present_balance = _present_balance
+    snapshot = AccountSyncService(settings=settings, repo=repo, client=client).sync_account_snapshot()
+
+    assert "00" in requested_market_codes
+    assert snapshot.positions["USO"].quantity == pytest.approx(2.0)
+    assert snapshot.positions["USO"].exchange_code == "AMEX"
+
+
 def test_account_sync_overseas_probes_missing_exchange_code() -> None:
     repo = FakeRepo()
     settings = _settings("us", ["KO"])
