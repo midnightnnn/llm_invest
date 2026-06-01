@@ -17,6 +17,7 @@ from xml.etree import ElementTree as ET
 import requests
 
 from arena.config import Settings, effective_research_gemini_api_key, research_generation_status
+from arena.macro_research_taxonomy import MACRO_RESEARCH_THEME_CODES
 from arena.models import utc_now
 
 logger = logging.getLogger(__name__)
@@ -308,6 +309,31 @@ def _clean_str_list(value: Any, *, max_items: int = 5, max_len: int = 180) -> li
     return out
 
 
+def _clean_theme_codes(value: Any, *, max_items: int = 8) -> list[str]:
+    allowed = set(MACRO_RESEARCH_THEME_CODES)
+    out: list[str] = []
+    for item in _clean_str_list(value, max_items=max_items, max_len=80):
+        token = _clean_token(item)
+        if not token:
+            continue
+        if token in allowed:
+            candidate = token
+        else:
+            candidate = ""
+            text = re.sub(r"\s+", " ", _text(item).lower())
+            compact = token.replace("_", " ")
+            for code in MACRO_RESEARCH_THEME_CODES:
+                phrase = code.replace("_", " ")
+                if code in token or phrase in text or phrase in compact:
+                    candidate = code
+                    break
+        if candidate and candidate not in out:
+            out.append(candidate)
+        if len(out) >= max_items:
+            break
+    return out
+
+
 def _clean_investment_theses(value: Any, *, max_items: int = 5) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
@@ -406,6 +432,7 @@ class GeminiMacroResearchSummarizer:
 
     def summarize(self, document: MacroResearchDocument) -> MacroResearchSummary | None:
         source_hint = f"{document.source}/{document.feed_id}/{document.doc_type}"
+        theme_codes = ", ".join(MACRO_RESEARCH_THEME_CODES)
         prompt = (
             "You are summarizing official central-bank and macroeconomic research for an investment agent. "
             "Return only valid JSON in English. Preserve decision-useful research content, not generic prose. "
@@ -417,13 +444,14 @@ class GeminiMacroResearchSummarizer:
             '"key_findings":["research findings"],"methodology":"data, method, model, or analytical setup",'
             '"macro_channels":["economic transmission channels"],"asset_implications":["market or asset-class implications"],'
             '"watch_indicators":["indicators to monitor"],"caveats":["limitations or risks"],'
-            '"market_implication":"portfolio implication","themes":["macro tags"],'
+            '"market_implication":"portfolio implication","themes":["theme_code"],'
             '"investment_theses":[{"theme_key":"stable_theme_key","horizon":"days|weeks|months|quarters|years",'
             '"thesis":"research-backed investable hypothesis, not a trade order",'
             '"transmission_channels":["economic channels"],"affected_sectors":["sector or industry hints"],'
             '"candidate_queries":["search phrases for downstream discovery, not ticker recommendations"],'
             '"watch_indicators":["confirming indicators"],"invalidation_conditions":["what would weaken the thesis"],'
             '"confidence_label":"low|medium|high"}],"confidence":0.0}. '
+            f"For themes, use lower_snake_case codes from this list where applicable: {theme_codes}. "
             "For investment_theses, do not invent tickers. Use sector, industry, factor, or keyword hints only. "
             f"Source: {source_hint}. Title: {document.title}. URL: {document.source_url}. "
             f"Document text:\n{document.content_text[:18000]}"
@@ -455,7 +483,7 @@ class GeminiMacroResearchSummarizer:
         except (TypeError, ValueError):
             confidence = 0.0
         confidence = max(0.0, min(1.0, confidence))
-        themes = _clean_str_list(parsed.get("themes"), max_items=8, max_len=48)
+        themes = _clean_theme_codes(parsed.get("themes"), max_items=8)
         if not themes:
             themes = list(document.themes)
         key_findings = _clean_str_list(

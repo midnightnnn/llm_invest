@@ -221,7 +221,19 @@ class MacroResearchStore:
             conditions.append("doc_type IN UNNEST(@doc_types)")
             params["doc_types"] = clean_doc_types
         if clean_themes:
-            conditions.append("EXISTS (SELECT 1 FROM UNNEST(themes) AS theme WHERE theme IN UNNEST(@themes))")
+            conditions.append(
+                """
+                EXISTS (
+                  SELECT 1
+                  FROM UNNEST(themes) AS theme
+                  CROSS JOIN UNNEST(@themes) AS requested
+                  WHERE LOWER(theme) = requested
+                     OR REPLACE(LOWER(theme), ' ', '_') = requested
+                     OR LOWER(theme) LIKE CONCAT('%', REPLACE(requested, '_', ' '), '%')
+                     OR REPLACE(LOWER(theme), ' ', '_') LIKE CONCAT('%', requested, '%')
+                )
+                """
+            )
             params["themes"] = clean_themes
         if clean_market and clean_market != "all":
             conditions.append("(market = @market OR market = 'all')")

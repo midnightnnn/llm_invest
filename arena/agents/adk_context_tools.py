@@ -9,6 +9,12 @@ from typing import Any, Literal, Optional
 
 from arena.config import Settings, research_generation_status
 from arena.data.bq import BigQueryRepository
+from arena.macro_research_taxonomy import (
+    MACRO_RESEARCH_DOC_TYPES,
+    MACRO_RESEARCH_MARKETS,
+    MACRO_RESEARCH_SOURCES,
+    MACRO_RESEARCH_THEME_CODES,
+)
 from arena.market_feature_normalization import daily_history_sources
 from arena.market_sources import live_market_sources_for_markets
 from arena.memory.policy import (
@@ -24,6 +30,10 @@ _PUBLIC_RESEARCH_CATEGORIES = ("global_market", "geopolitical", "sector_trends")
 ResearchCategory = Literal["global_market", "geopolitical", "sector_trends", "sector"]
 MacroResearchScope = Literal["latest", "week", "month", "quarter", "all"]
 MacroResearchDetailLevel = Literal["compact", "facts", "full"]
+MacroResearchMarket = Literal[*MACRO_RESEARCH_MARKETS]
+MacroResearchSource = Literal[*MACRO_RESEARCH_SOURCES]
+MacroResearchDocType = Literal[*MACRO_RESEARCH_DOC_TYPES]
+MacroResearchTheme = Literal[*MACRO_RESEARCH_THEME_CODES]
 logger = logging.getLogger(__name__)
 
 
@@ -692,10 +702,10 @@ class _ContextTools:
     async def get_macro_research_briefing(
         self,
         scope: MacroResearchScope = "week",
-        market: str = "all",
-        sources: Optional[list[str]] = None,
-        doc_types: Optional[list[str]] = None,
-        themes: Optional[list[str]] = None,
+        market: MacroResearchMarket = "all",
+        sources: Optional[list[MacroResearchSource]] = None,
+        doc_types: Optional[list[MacroResearchDocType]] = None,
+        themes: Optional[list[MacroResearchTheme]] = None,
         source_doc_ids: Optional[list[str]] = None,
         detail_level: MacroResearchDetailLevel = "compact",
         limit: int = 5,

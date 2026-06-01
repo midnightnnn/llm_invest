@@ -273,6 +273,16 @@ def test_macro_research_service_skips_unchanged_documents() -> None:
     assert len(repo.theses) == 1
 
 
+def test_macro_research_theme_phrases_are_canonicalized() -> None:
+    from arena.macro_research import _clean_theme_codes
+
+    assert _clean_theme_codes(["Inflation Dynamics", "Monetary Policy Transmission", "Credit Risk"]) == [
+        "inflation",
+        "monetary_policy",
+        "credit",
+    ]
+
+
 class _RepoForMacroTool:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
@@ -413,6 +423,36 @@ def test_get_macro_research_briefing_accepts_source_doc_ids_for_drilldown() -> N
     assert out[0]["key_findings"] == ["Credit is rate-sensitive"]
 
 
+def test_get_macro_research_briefing_schema_exposes_filter_enums() -> None:
+    from google.adk.tools.function_tool import FunctionTool
+
+    from arena.agents.adk_agents import _ContextTools
+    from arena.macro_research_taxonomy import (
+        MACRO_RESEARCH_DOC_TYPES,
+        MACRO_RESEARCH_MARKETS,
+        MACRO_RESEARCH_SOURCES,
+        MACRO_RESEARCH_THEME_CODES,
+    )
+
+    tool = _ContextTools.__new__(_ContextTools)
+    tool.repo = _RepoForMacroTool()
+    tool.settings = load_settings()
+    tool.tenant_id = "tenant-a"
+
+    params = FunctionTool(tool.get_macro_research_briefing)._get_declaration().parameters.model_dump(
+        mode="json",
+        exclude_none=True,
+    )
+    props = params["properties"]
+
+    assert props["scope"]["enum"] == ["latest", "week", "month", "quarter", "all"]
+    assert props["market"]["enum"] == list(MACRO_RESEARCH_MARKETS)
+    assert props["sources"]["items"]["enum"] == list(MACRO_RESEARCH_SOURCES)
+    assert props["doc_types"]["items"]["enum"] == list(MACRO_RESEARCH_DOC_TYPES)
+    assert props["themes"]["items"]["enum"] == list(MACRO_RESEARCH_THEME_CODES)
+    assert props["detail_level"]["enum"] == ["compact", "facts", "full"]
+
+
 def test_macro_research_schema_and_registry_are_exposed() -> None:
     from arena.data.local.schema import table_specs
     from arena.tools.default_registry import build_default_registry
@@ -497,6 +537,30 @@ def test_local_macro_research_store_upserts_and_filters(tmp_path) -> None:
         },
         tenant_id="tenant-a",
     )
+    repo.upsert_macro_research_briefing(
+        {
+            "source_doc_id": "stlouisfed:review:inflation-dynamics",
+            "created_at": published_at,
+            "published_at": published_at,
+            "source": "stlouisfed",
+            "feed_id": "stlouisfed_review",
+            "doc_type": "journal_article",
+            "region": "us",
+            "market": "us",
+            "title": "Labor Costs and Inflation Dynamics",
+            "source_url": "https://www.stlouisfed.org/review/example",
+            "headline": "St. Louis Fed links labor costs and inflation dynamics",
+            "summary": "The paper studies inflation dynamics and monetary policy transmission.",
+            "key_points": ["Inflation dynamics are persistent"],
+            "market_implication": "US duration risk should be monitored.",
+            "risk_flags": ["Research article"],
+            "themes": ["Inflation Dynamics", "Monetary Policy Transmission"],
+            "confidence": 0.77,
+            "model": "gemini-3-flash-preview",
+            "detail_json": {"schema_version": "macro_research_summary.v1"},
+        },
+        tenant_id="tenant-a",
+    )
     repo.replace_macro_research_theses(
         "bok:bok_issue_notes:1001:201156",
         [
@@ -545,6 +609,15 @@ def test_local_macro_research_store_upserts_and_filters(tmp_path) -> None:
     assert rows[0]["source_doc_id"] == "bok:bok_issue_notes:1001:201156"
     assert rows[0]["themes"] == ["monetary_policy", "credit"]
     assert rows[0]["detail_json"]["schema_version"] == "macro_research_summary.v1"
+    us_rows = repo.get_macro_research_briefings(
+        sources=["stlouisfed"],
+        themes=["inflation", "monetary_policy"],
+        market="us",
+        limit=5,
+        tenant_id="tenant-b",
+    )
+    assert us_rows[0]["source_doc_id"] == "stlouisfed:review:inflation-dynamics"
+    assert us_rows[0]["themes"] == ["inflation dynamics", "monetary policy transmission"]
     theses = repo.get_macro_research_theses(
         market="kr",
         themes=["credit_transmission"],

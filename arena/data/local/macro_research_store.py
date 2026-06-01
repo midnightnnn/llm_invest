@@ -22,6 +22,23 @@ def _str_list(value: Any) -> list[str]:
     return [str(item).strip().lower() for item in value if str(item).strip()]
 
 
+def _theme_matches(row_themes: Any, requested_themes: set[str]) -> bool:
+    if not requested_themes:
+        return True
+    stored = _str_list(row_themes)
+    for theme in stored:
+        compact = theme.replace(" ", "_")
+        for requested in requested_themes:
+            phrase = requested.replace("_", " ")
+            if theme == requested or compact == requested:
+                return True
+            if phrase and phrase in theme:
+                return True
+            if requested and requested in compact:
+                return True
+    return False
+
+
 def _json_or_none(value: Any) -> Any:
     if isinstance(value, (dict, list)):
         return value
@@ -150,7 +167,7 @@ class LocalMacroResearchStore:
         out: list[dict[str, Any]] = []
         for row in rows:
             row["detail_json"] = _json_or_none(row.get("detail_json"))
-            if clean_themes and not (set(_str_list(row.get("themes"))) & clean_themes):
+            if not _theme_matches(row.get("themes"), clean_themes):
                 continue
             out.append(row)
             if len(out) >= params["limit"]:
