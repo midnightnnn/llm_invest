@@ -700,7 +700,7 @@ class _ContextTools:
         detail_level: MacroResearchDetailLevel = "compact",
         limit: int = 5,
     ) -> list[dict[str, Any]]:
-        """Returns official macro research summaries from BOK/FRED/St. Louis Fed feeds."""
+        """Reads official macro research and investable thesis seeds from BOK/St. Louis Fed briefings."""
         max_limit = max(1, min(int(limit), 12))
         clean_market = str(market or "").strip().lower() or "all"
         loader = getattr(self.repo, "get_macro_research_briefings", None)
