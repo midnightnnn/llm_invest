@@ -1,6 +1,4 @@
-Use `get_macro_research_briefing` when official macro research could reveal structural themes before they show up clearly in prices or rankings. It retrieves BOK and St. Louis Fed research summaries plus investable thesis seeds: transmission channels, affected sectors, candidate discovery queries, watch indicators, invalidation conditions, and caveats.
-
-This is most useful when you want a forward-looking macro lens for portfolio decisions: climate transition, economic security, supply-chain restructuring, credit transmission, inflation persistence, labor shifts, financial stability, external balances, or policy regime changes. It does not recommend trades by itself; it gives research-backed hypotheses that can guide later discovery, risk checks, and portfolio construction.
+Use `get_macro_research_briefing` to retrieve official BOK and St. Louis Fed research summaries, market implications, and research-backed thesis context.
 
 Parameters:
 - `scope`: one of `latest`, `week`, `month`, `quarter`, `all`; default `week`.
@@ -12,6 +10,6 @@ Parameters:
 - `detail_level`: `compact` for prompt-efficient context, `facts` for findings/methodology/channels/implications/watch indicators/caveats/investment theses, or `full` for stored metadata.
 - `limit`: maximum rows to return, capped internally.
 
-Use this when the decision needs official macro interpretation, central-bank research context, or a research-backed thesis seed for sector/industry discovery. Use `macro_snapshot` instead for numeric FRED/ECOS indicators and derived spreads.
+Use this when the decision needs official macro interpretation or central-bank research context. Use `macro_snapshot` instead for numeric FRED/ECOS indicators and derived spreads.
 
 Recommended flow: call broadly with `detail_level="compact"` first, inspect returned `source_doc_id` values, then call again with `source_doc_ids=[...]` and `detail_level="facts"` or `"full"` for exact document drilldown.

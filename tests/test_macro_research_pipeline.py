@@ -437,9 +437,8 @@ def test_macro_research_schema_and_registry_are_exposed() -> None:
     assert "FRED" not in entry.description.splitlines()[0]
     assert '["fred"]' not in entry.description
     assert "FRED" not in entry.description_ko
-    assert "investable thesis seeds" in entry.description
-    assert "candidate discovery queries" in entry.description
-    assert "투자가설 seed" in entry.description_ko
+    assert "research-backed thesis context" in entry.description
+    assert "투자가설 컨텍스트" in entry.description_ko
 
 
 def test_local_macro_research_store_upserts_and_filters(tmp_path) -> None:

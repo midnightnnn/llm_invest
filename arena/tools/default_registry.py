@@ -83,7 +83,7 @@ def _base_entries(
             category="macro",
             tier="optional",
             label_ko="거시 연구 브리핑",
-            description_ko="BOK와 St. Louis Fed의 공식 이슈노트·연구자료·논문 요약과 투자가설 seed를 조회합니다. 가격·랭킹 데이터에 아직 뚜렷하게 반영되지 않은 구조적 테마, 전이 경로, 수혜·피해 업종 힌트, 후보 탐색 쿼리, 감시 지표, 반증 조건을 얻어 포트폴리오 관점의 선행 리서치로 활용할 수 있습니다.",
+            description_ko="BOK와 St. Louis Fed의 공식 이슈노트·연구자료·논문 요약, 시장 함의, 투자가설 컨텍스트를 조회합니다. 수치형 거시 지표가 아니라 연구기관의 해석, 전이 경로, 리스크, 감시 지표를 참고할 때 사용합니다.",
             sort_order=32,
         ),
         _tool(
