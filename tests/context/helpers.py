@@ -21,6 +21,8 @@ class FakeRepo:
         self.ticker_memory_rows: list[dict] = []
         self.memory_by_id: dict[str, dict] = {}
         self.research_briefings: list[dict] = []
+        self.macro_research_theses: list[dict] = []
+        self.macro_research_thesis_calls: list[dict] = []
         self.memory_access_rows: list[dict] = []
         self.graph_neighbors_rows: list[dict] = []
         self.relation_candidate_rows: list[dict] = []
@@ -76,6 +78,41 @@ class FakeRepo:
             filters.append(lambda row: str(row.get("category") or "").strip().lower() in allowed)
         if filters:
             rows = [row for row in rows if any(check(row) for check in filters)]
+        return rows[:limit]
+
+    def get_macro_research_theses(
+        self,
+        *,
+        source_doc_ids=None,
+        themes=None,
+        market=None,
+        status="active",
+        since=None,
+        limit=10,
+        tenant_id=None,
+    ):
+        _ = (source_doc_ids, since, tenant_id)
+        self.macro_research_thesis_calls.append(
+            {
+                "themes": themes,
+                "market": market,
+                "status": status,
+                "limit": limit,
+            }
+        )
+        rows = list(self.macro_research_theses)
+        clean_market = str(market or "").strip().lower()
+        if clean_market and clean_market != "all":
+            rows = [
+                row for row in rows
+                if str(row.get("market") or "").strip().lower() in {clean_market, "all"}
+            ]
+        if status:
+            clean_status = str(status or "").strip().lower()
+            rows = [row for row in rows if str(row.get("status") or "").strip().lower() == clean_status]
+        if themes:
+            allowed = {str(theme).strip().lower() for theme in themes if str(theme).strip()}
+            rows = [row for row in rows if str(row.get("theme_key") or "").strip().lower() in allowed]
         return rows[:limit]
 
     def append_memory_access_events(self, rows, *, tenant_id=None):

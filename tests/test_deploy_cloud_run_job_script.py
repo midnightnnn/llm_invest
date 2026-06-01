@@ -26,6 +26,7 @@ def test_kospi_scheduler_defaults_align_with_runtime_schedule_guard() -> None:
     assert "ARENA_AUTONOMY_WORKING_SET_ENABLED=true" in script
     assert "ARENA_AUTONOMY_TOOL_DEFAULT_CANDIDATES_ENABLED=true" in script
     assert "ARENA_AUTONOMY_OPPORTUNITY_CONTEXT_ENABLED=true" in script
+    assert "ARENA_RESEARCH_GEMINI_MODEL=gemini-3-flash-preview" in script
 
 
 def test_split_deploy_manages_slow_and_fast_prep_jobs() -> None:

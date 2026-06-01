@@ -136,6 +136,7 @@ def _rich_macro_research_detail(row: dict[str, Any]) -> dict[str, Any]:
         "asset_implications": detail.get("asset_implications"),
         "watch_indicators": detail.get("watch_indicators"),
         "caveats": detail.get("caveats") or row.get("risk_flags"),
+        "investment_theses": detail.get("investment_theses"),
     }
 
 
@@ -713,7 +714,6 @@ class _ContextTools:
             market=clean_market,
             since=_macro_research_since(str(scope or "week")),
             limit=max_limit,
-            tenant_id=self.tenant_id,
         )
         detail = str(detail_level or "compact").strip().lower()
         out: list[dict[str, Any]] = []

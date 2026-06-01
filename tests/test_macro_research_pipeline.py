@@ -65,20 +65,31 @@ class _Repo:
     def __init__(self) -> None:
         self.docs: dict[str, dict[str, Any]] = {}
         self.briefings: dict[str, dict[str, Any]] = {}
+        self.theses: dict[str, list[dict[str, Any]]] = {}
 
     def get_macro_research_document(self, source_doc_id: str, *, tenant_id: str | None = None) -> dict[str, Any] | None:
         _ = tenant_id
         return self.docs.get(source_doc_id)
 
     def upsert_macro_research_document(self, row: dict[str, Any], *, tenant_id: str | None = None) -> None:
+        _ = tenant_id
         payload = dict(row)
-        payload["tenant_id"] = tenant_id or payload.get("tenant_id")
         self.docs[str(payload["source_doc_id"])] = payload
 
     def upsert_macro_research_briefing(self, row: dict[str, Any], *, tenant_id: str | None = None) -> None:
+        _ = tenant_id
         payload = dict(row)
-        payload["tenant_id"] = tenant_id or payload.get("tenant_id")
         self.briefings[str(payload["source_doc_id"])] = payload
+
+    def replace_macro_research_theses(
+        self,
+        source_doc_id: str,
+        rows: list[dict[str, Any]],
+        *,
+        tenant_id: str | None = None,
+    ) -> None:
+        _ = tenant_id
+        self.theses[str(source_doc_id)] = [dict(row) for row in rows]
 
 
 class _Summarizer:
@@ -104,6 +115,19 @@ class _Summarizer:
             caveats=["Summary depends on a central-bank research note"],
             market_implication="KR duration and bank credit risk should be monitored.",
             themes=["monetary_policy", "credit"],
+            investment_theses=[
+                {
+                    "theme_key": "credit_transmission",
+                    "horizon": "quarters",
+                    "thesis": "Rate-sensitive household credit can pressure KR lenders and duration-sensitive assets.",
+                    "transmission_channels": ["policy rates", "household credit", "bank lending spreads"],
+                    "affected_sectors": ["banks", "duration_sensitive_assets"],
+                    "candidate_queries": ["KR banks", "duration-sensitive assets"],
+                    "watch_indicators": ["BOK base rate", "household credit growth"],
+                    "invalidation_conditions": ["Household credit growth stabilizes despite higher rates"],
+                    "confidence_label": "medium",
+                }
+            ],
             confidence=0.82,
             detail_json={"source_language": "en"},
         )
@@ -129,8 +153,11 @@ def test_default_macro_research_feeds_exclude_low_signal_feeds() -> None:
     assert "data_research_blog" not in doc_types
 
 
-def test_macro_research_service_ingests_bok_rss_to_gcs_and_summary() -> None:
+def test_macro_research_service_ingests_bok_rss_to_gcs_and_summary(monkeypatch) -> None:
+    import arena.macro_research as macro_research
     from arena.macro_research import MacroResearchFeed, MacroResearchService
+
+    monkeypatch.setattr(macro_research, "_extract_pdf_text", lambda value: "PDF body text about credit pass-through.")
 
     settings = load_settings()
     settings.research_gemini_model = "gemini-3-flash-preview"
@@ -175,6 +202,8 @@ def test_macro_research_service_ingests_bok_rss_to_gcs_and_summary() -> None:
     assert doc["content_gcs_uri"].startswith("gs://arena-macro-research/macro_research/bok/bok_issue_notes/")
     assert doc["pdf_gcs_uri"].startswith("gs://arena-macro-research/macro_research/bok/bok_issue_notes/")
     assert len(object_store.writes) == 3
+    content_write = next(data for path, data in object_store.writes if path.endswith("/content.txt"))
+    assert b"PDF body text about credit pass-through." in content_write
     briefing = repo.briefings[source_doc_id]
     assert briefing["model"] == "gemini-3-flash-preview"
     assert briefing["headline"] == "BOK flags credit sensitivity"
@@ -182,13 +211,23 @@ def test_macro_research_service_ingests_bok_rss_to_gcs_and_summary() -> None:
     assert briefing["key_points"] == ["Credit is rate-sensitive", "Policy transmission remains active"]
     assert briefing["risk_flags"] == ["Summary depends on a central-bank research note"]
     assert briefing["themes"] == ["monetary_policy", "credit"]
-    assert briefing["detail_json"]["schema_version"] == "macro_research_summary.v2"
+    assert briefing["detail_json"]["schema_version"] == "macro_research_summary.v3"
     assert briefing["detail_json"]["methodology"].startswith("Uses official household credit")
     assert briefing["detail_json"]["macro_channels"] == ["policy rates", "household credit", "bank lending spreads"]
     assert briefing["detail_json"]["asset_implications"][0] == "KR duration risk should be monitored"
     assert briefing["detail_json"]["watch_indicators"][0] == "BOK base rate"
     assert briefing["detail_json"]["caveats"] == ["Summary depends on a central-bank research note"]
+    assert briefing["detail_json"]["investment_theses"][0]["theme_key"] == "credit_transmission"
+    thesis_rows = repo.theses[source_doc_id]
+    assert len(thesis_rows) == 1
+    assert thesis_rows[0]["source_doc_id"] == source_doc_id
+    assert thesis_rows[0]["market"] == "kr"
+    assert thesis_rows[0]["theme_key"] == "credit_transmission"
+    assert thesis_rows[0]["thesis"].startswith("Rate-sensitive household credit")
+    assert thesis_rows[0]["candidate_queries"] == ["KR banks", "duration-sensitive assets"]
+    assert thesis_rows[0]["status"] == "active"
     assert summarizer.calls[0].source_doc_id == source_doc_id
+    assert "PDF body text about credit pass-through." in summarizer.calls[0].content_text
 
 
 def test_macro_research_service_skips_unchanged_documents() -> None:
@@ -231,6 +270,7 @@ def test_macro_research_service_skips_unchanged_documents() -> None:
     assert len(summarizer.calls) == 1
     assert len(repo.docs) == 1
     assert len(repo.briefings) == 1
+    assert len(repo.theses) == 1
 
 
 class _RepoForMacroTool:
@@ -265,6 +305,12 @@ class _RepoForMacroTool:
                     "asset_implications": ["KR duration risk should be monitored"],
                     "watch_indicators": ["BOK base rate"],
                     "caveats": ["Central-bank research note"],
+                    "investment_theses": [
+                        {
+                            "theme_key": "credit_transmission",
+                            "thesis": "Household credit sensitivity may pressure KR lenders.",
+                        }
+                    ],
                 },
             }
         ]
@@ -292,7 +338,7 @@ def test_get_macro_research_briefing_returns_compact_rows() -> None:
         )
     )
 
-    assert repo.calls[0]["tenant_id"] == "tenant-a"
+    assert "tenant_id" not in repo.calls[0]
     assert repo.calls[0]["market"] == "kr"
     assert repo.calls[0]["sources"] == ["bok"]
     assert repo.calls[0]["doc_types"] == ["issue_note"]
@@ -340,6 +386,7 @@ def test_get_macro_research_briefing_facts_returns_research_detail() -> None:
     assert out[0]["asset_implications"] == ["KR duration risk should be monitored"]
     assert out[0]["watch_indicators"] == ["BOK base rate"]
     assert out[0]["caveats"] == ["Central-bank research note"]
+    assert out[0]["investment_theses"][0]["theme_key"] == "credit_transmission"
     assert out[0]["confidence"] == 0.82
 
 
@@ -376,6 +423,12 @@ def test_macro_research_schema_and_registry_are_exposed() -> None:
     assert {"source_doc_id", "headline", "summary", "market_implication", "model"} <= specs[
         "macro_research_briefings"
     ]
+    assert {"thesis_id", "source_doc_id", "theme_key", "candidate_queries", "status"} <= specs[
+        "macro_research_theses"
+    ]
+    assert "tenant_id" not in specs["macro_research_documents"]
+    assert "tenant_id" not in specs["macro_research_briefings"]
+    assert "tenant_id" not in specs["macro_research_theses"]
 
     reg = build_default_registry(repo=_FakeRepo(), settings=_settings())
     entry = reg.get("get_macro_research_briefing")
@@ -442,8 +495,39 @@ def test_local_macro_research_store_upserts_and_filters(tmp_path) -> None:
         },
         tenant_id="tenant-a",
     )
+    repo.replace_macro_research_theses(
+        "bok:bok_issue_notes:1001:201156",
+        [
+            {
+                "thesis_id": "mrt_credit",
+                "source_doc_id": "bok:bok_issue_notes:1001:201156",
+                "created_at": published_at,
+                "published_at": published_at,
+                "source": "bok",
+                "feed_id": "bok_issue_notes",
+                "doc_type": "issue_note",
+                "region": "kr",
+                "market": "kr",
+                "title": "Monetary Policy and Household Credit",
+                "source_url": "https://www.bok.or.kr/portal/bbs/P0000559/view.do?nttId=1001&menuNo=201156",
+                "theme_key": "credit_transmission",
+                "horizon": "quarters",
+                "thesis": "Rate-sensitive household credit can pressure KR lenders and duration-sensitive assets.",
+                "transmission_channels": ["policy rates", "household credit"],
+                "affected_sectors": ["banks"],
+                "candidate_queries": ["KR banks"],
+                "watch_indicators": ["BOK base rate"],
+                "invalidation_conditions": ["Household credit stabilizes"],
+                "confidence_label": "medium",
+                "status": "active",
+                "evidence_json": {"source_doc_id": "bok:bok_issue_notes:1001:201156"},
+                "detail_json": {"schema_version": "macro_research_thesis.v1"},
+            }
+        ],
+        tenant_id="tenant-a",
+    )
 
-    doc = repo.get_macro_research_document("bok:bok_issue_notes:1001:201156", tenant_id="tenant-a")
+    doc = repo.get_macro_research_document("bok:bok_issue_notes:1001:201156", tenant_id="tenant-b")
     rows = repo.get_macro_research_briefings(
         source_doc_ids=["bok:bok_issue_notes:1001:201156"],
         sources=["bok"],
@@ -451,7 +535,7 @@ def test_local_macro_research_store_upserts_and_filters(tmp_path) -> None:
         themes=["credit"],
         market="kr",
         limit=5,
-        tenant_id="tenant-a",
+        tenant_id="tenant-b",
     )
 
     assert doc is not None
@@ -459,3 +543,12 @@ def test_local_macro_research_store_upserts_and_filters(tmp_path) -> None:
     assert rows[0]["source_doc_id"] == "bok:bok_issue_notes:1001:201156"
     assert rows[0]["themes"] == ["monetary_policy", "credit"]
     assert rows[0]["detail_json"]["schema_version"] == "macro_research_summary.v1"
+    theses = repo.get_macro_research_theses(
+        market="kr",
+        themes=["credit_transmission"],
+        limit=5,
+        tenant_id="tenant-b",
+    )
+    assert theses[0]["theme_key"] == "credit_transmission"
+    assert theses[0]["candidate_queries"] == ["KR banks"]
+    assert theses[0]["detail_json"]["schema_version"] == "macro_research_thesis.v1"

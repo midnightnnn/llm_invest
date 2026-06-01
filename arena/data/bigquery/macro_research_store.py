@@ -14,7 +14,6 @@ logger = logging.getLogger(__name__)
 
 
 _DOCUMENT_COLUMNS = (
-    "tenant_id",
     "source_doc_id",
     "source",
     "feed_id",
@@ -38,7 +37,6 @@ _DOCUMENT_COLUMNS = (
 )
 
 _BRIEFING_COLUMNS = (
-    "tenant_id",
     "source_doc_id",
     "created_at",
     "published_at",
@@ -57,6 +55,32 @@ _BRIEFING_COLUMNS = (
     "themes",
     "confidence",
     "model",
+    "detail_json",
+)
+
+_THESIS_COLUMNS = (
+    "thesis_id",
+    "source_doc_id",
+    "created_at",
+    "published_at",
+    "source",
+    "feed_id",
+    "doc_type",
+    "region",
+    "market",
+    "title",
+    "source_url",
+    "theme_key",
+    "horizon",
+    "thesis",
+    "transmission_channels",
+    "affected_sectors",
+    "candidate_queries",
+    "watch_indicators",
+    "invalidation_conditions",
+    "confidence_label",
+    "status",
+    "evidence_json",
     "detail_json",
 )
 
@@ -108,16 +132,15 @@ class MacroResearchStore:
         *,
         tenant_id: str | None = None,
     ) -> dict[str, Any] | None:
+        _ = tenant_id
         rows = self.session.fetch_rows(
             f"""
             SELECT *
             FROM `{self.session.dataset_fqn}.macro_research_documents`
-            WHERE tenant_id = @tenant_id
-              AND source_doc_id = @source_doc_id
+            WHERE source_doc_id = @source_doc_id
             LIMIT 1
             """,
             {
-                "tenant_id": self.session.resolve_tenant_id(tenant_id),
                 "source_doc_id": str(source_doc_id or "").strip(),
             },
         )
@@ -127,20 +150,18 @@ class MacroResearchStore:
         return rows[0]
 
     def upsert_macro_research_document(self, row: dict[str, Any], *, tenant_id: str | None = None) -> None:
-        tenant = self.session.resolve_tenant_id(tenant_id)
+        _ = tenant_id
         source_doc_id = str(row.get("source_doc_id") or "").strip()
         if not source_doc_id:
             raise ValueError("source_doc_id is required")
         self.session.execute(
             f"""
             DELETE FROM `{self.session.dataset_fqn}.macro_research_documents`
-            WHERE tenant_id = @tenant_id
-              AND source_doc_id = @source_doc_id
+            WHERE source_doc_id = @source_doc_id
             """,
-            {"tenant_id": tenant, "source_doc_id": source_doc_id},
+            {"source_doc_id": source_doc_id},
         )
         payload = dict(row)
-        payload["tenant_id"] = tenant
         payload["source_doc_id"] = source_doc_id
         payload["fetched_at"] = payload.get("fetched_at") or utc_now()
         payload["themes"] = _str_list(payload.get("themes"))
@@ -148,20 +169,18 @@ class MacroResearchStore:
         self._insert_json("macro_research_documents", [{col: _json_safe(payload.get(col)) for col in _DOCUMENT_COLUMNS}])
 
     def upsert_macro_research_briefing(self, row: dict[str, Any], *, tenant_id: str | None = None) -> None:
-        tenant = self.session.resolve_tenant_id(tenant_id)
+        _ = tenant_id
         source_doc_id = str(row.get("source_doc_id") or "").strip()
         if not source_doc_id:
             raise ValueError("source_doc_id is required")
         self.session.execute(
             f"""
             DELETE FROM `{self.session.dataset_fqn}.macro_research_briefings`
-            WHERE tenant_id = @tenant_id
-              AND source_doc_id = @source_doc_id
+            WHERE source_doc_id = @source_doc_id
             """,
-            {"tenant_id": tenant, "source_doc_id": source_doc_id},
+            {"source_doc_id": source_doc_id},
         )
         payload = dict(row)
-        payload["tenant_id"] = tenant
         payload["source_doc_id"] = source_doc_id
         payload["created_at"] = payload.get("created_at") or utc_now()
         payload["key_points"] = [str(item).strip() for item in (payload.get("key_points") or []) if str(item).strip()]
@@ -182,9 +201,9 @@ class MacroResearchStore:
         limit: int = 10,
         tenant_id: str | None = None,
     ) -> list[dict[str, Any]]:
-        conditions = ["tenant_id = @tenant_id"]
+        _ = tenant_id
+        conditions = ["TRUE"]
         params: dict[str, Any] = {
-            "tenant_id": self.session.resolve_tenant_id(tenant_id),
             "limit": max(1, min(int(limit), 50)),
         }
         clean_source_doc_ids = [str(item or "").strip() for item in (source_doc_ids or []) if str(item or "").strip()]
@@ -221,6 +240,95 @@ class MacroResearchStore:
             params,
         )
         for row in rows:
+            row["detail_json"] = _json_or_none(row.get("detail_json"))
+        return rows
+
+    def replace_macro_research_theses(
+        self,
+        source_doc_id: str,
+        rows: list[dict[str, Any]],
+        *,
+        tenant_id: str | None = None,
+    ) -> None:
+        _ = tenant_id
+        clean_source_doc_id = str(source_doc_id or "").strip()
+        if not clean_source_doc_id:
+            raise ValueError("source_doc_id is required")
+        self.session.execute(
+            f"""
+            DELETE FROM `{self.session.dataset_fqn}.macro_research_theses`
+            WHERE source_doc_id = @source_doc_id
+            """,
+            {"source_doc_id": clean_source_doc_id},
+        )
+        payload_rows: list[dict[str, Any]] = []
+        for row in rows or []:
+            payload = dict(row)
+            payload["source_doc_id"] = clean_source_doc_id
+            payload["thesis_id"] = str(payload.get("thesis_id") or "").strip()
+            payload["created_at"] = payload.get("created_at") or utc_now()
+            payload["status"] = str(payload.get("status") or "active").strip().lower() or "active"
+            payload["theme_key"] = str(payload.get("theme_key") or "").strip().lower() or None
+            for key in (
+                "transmission_channels",
+                "affected_sectors",
+                "candidate_queries",
+                "watch_indicators",
+                "invalidation_conditions",
+            ):
+                payload[key] = [str(item).strip() for item in (payload.get(key) or []) if str(item).strip()]
+            payload["evidence_json"] = _json_value(payload.get("evidence_json") or {})
+            payload["detail_json"] = _json_value(payload.get("detail_json") or {})
+            if not payload["thesis_id"] or not str(payload.get("thesis") or "").strip():
+                continue
+            payload_rows.append({col: _json_safe(payload.get(col)) for col in _THESIS_COLUMNS})
+        self._insert_json("macro_research_theses", payload_rows)
+
+    def get_macro_research_theses(
+        self,
+        *,
+        source_doc_ids: list[str] | None = None,
+        themes: list[str] | None = None,
+        market: str | None = None,
+        status: str | None = "active",
+        since: datetime | None = None,
+        limit: int = 10,
+        tenant_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        _ = tenant_id
+        conditions = ["TRUE"]
+        params: dict[str, Any] = {"limit": max(1, min(int(limit), 50))}
+        clean_source_doc_ids = [str(item or "").strip() for item in (source_doc_ids or []) if str(item or "").strip()]
+        clean_themes = _str_list(themes)
+        clean_market = str(market or "").strip().lower()
+        clean_status = str(status or "").strip().lower()
+        if clean_source_doc_ids:
+            conditions.append("source_doc_id IN UNNEST(@source_doc_ids)")
+            params["source_doc_ids"] = clean_source_doc_ids
+        if clean_themes:
+            conditions.append("theme_key IN UNNEST(@themes)")
+            params["themes"] = clean_themes
+        if clean_market and clean_market != "all":
+            conditions.append("(market = @market OR market = 'all')")
+            params["market"] = clean_market
+        if clean_status:
+            conditions.append("status = @status")
+            params["status"] = clean_status
+        if since is not None:
+            conditions.append("COALESCE(published_at, created_at) >= @since")
+            params["since"] = since
+        rows = self.session.fetch_rows(
+            f"""
+            SELECT *
+            FROM `{self.session.dataset_fqn}.macro_research_theses`
+            WHERE {' AND '.join(conditions)}
+            ORDER BY COALESCE(published_at, created_at) DESC, created_at DESC
+            LIMIT @limit
+            """,
+            params,
+        )
+        for row in rows:
+            row["evidence_json"] = _json_or_none(row.get("evidence_json"))
             row["detail_json"] = _json_or_none(row.get("detail_json"))
         return rows
 

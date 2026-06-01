@@ -131,6 +131,10 @@ def test_user_prompt_omits_sleeve_state_payload() -> None:
             "decision_frame": "Compare self-discovered opportunities against cash first.",
             "market_context": [{"ticker": "AAPL", "close": 123.45}],
             "research_context": "- [AAPL] New product cycle - Demand watchlist.",
+            "macro_research_thesis_context": (
+                "Macro Research Thesis Seeds:\n"
+                "- [climate_transition | quarters] Grid capex thesis. queries=grid equipment"
+            ),
             "relation_context": "Relation Hints:\n- contains ticker AAPL: prior risk lesson.",
             "graph_context": "Decision Paths:\n- AAPL prior entry connects to a later win.",
             "memory_context": "Portfolio Memory:\n- [AAPL | BUY] Keep this compressed lesson.",
@@ -153,6 +157,7 @@ def test_user_prompt_omits_sleeve_state_payload() -> None:
     assert payload["decision_frame"] == "Compare self-discovered opportunities against cash first."
     assert payload["market_context"] == [{"ticker": "AAPL", "close": 123.45}]
     assert payload["research_context"] == "- [AAPL] New product cycle - Demand watchlist."
+    assert payload["macro_research_thesis_context"].startswith("Macro Research Thesis Seeds:")
     assert payload["relation_context"] == "Relation Hints:\n- contains ticker AAPL: prior risk lesson."
     assert payload["graph_context"] == "Decision Paths:\n- AAPL prior entry connects to a later win."
     assert payload["memory_context"] == "Portfolio Memory:\n- [AAPL | BUY] Keep this compressed lesson."
@@ -168,6 +173,7 @@ def test_prompt_context_sections_collects_prompt_details() -> None:
             "market_features": [{"ticker": "AAPL", "close": 123.45}],
             "board_posts": [{"post_id": "board_1", "summary": "Hold watchlist"}],
             "research_context": "- [AAPL] New product cycle - Demand watchlist.",
+            "macro_research_thesis_context": "Macro Research Thesis Seeds:\n- [credit] Household credit watch.",
             "relation_context": "Relation Hints:\n- contains ticker AAPL: prior risk lesson.",
             "graph_context": "Decision Paths:\n- AAPL prior entry connects to a later win.",
             "memory_context": "Memory:\n- Prefer staged entries.",
@@ -178,6 +184,7 @@ def test_prompt_context_sections_collects_prompt_details() -> None:
     assert sections["market_context"] == [{"ticker": "AAPL", "close": 123.45}]
     assert sections["board_context"] == [{"post_id": "board_1", "summary": "Hold watchlist"}]
     assert sections["research_context"] == "- [AAPL] New product cycle - Demand watchlist."
+    assert sections["macro_research_thesis_context"] == "Macro Research Thesis Seeds:\n- [credit] Household credit watch."
     assert sections["relation_context"] == "Relation Hints:\n- contains ticker AAPL: prior risk lesson."
     assert sections["graph_context"] == "Decision Paths:\n- AAPL prior entry connects to a later win."
     assert sections["memory_context"] == "Memory:\n- Prefer staged entries."

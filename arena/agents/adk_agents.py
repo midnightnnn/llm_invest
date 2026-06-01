@@ -974,6 +974,7 @@ class _ADKDecisionRunner:
                 "market_context": context.get("market_context", context.get("market_features", [])),
                 "board_context": context.get("board_context") or context.get("board_posts", []),
                 "research_context": context.get("research_context", ""),
+                "macro_research_thesis_context": context.get("macro_research_thesis_context", ""),
                 "relation_context": context.get("relation_context", ""),
                 "graph_context": context.get("graph_context", ""),
                 "memory_context": context.get("memory_context", ""),

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import html
+import io
 import json
 import logging
 import os
@@ -68,6 +69,7 @@ class MacroResearchSummary:
     caveats: list[str] = field(default_factory=list)
     market_implication: str = ""
     themes: list[str] = field(default_factory=list)
+    investment_theses: list[dict[str, Any]] = field(default_factory=list)
     confidence: float = 0.0
     detail_json: dict[str, Any] = field(default_factory=dict)
 
@@ -209,6 +211,28 @@ def _extract_pdf_urls(value: Any) -> list[str]:
     return clean
 
 
+def _extract_pdf_text(pdf_bytes: bytes) -> str:
+    if not pdf_bytes:
+        return ""
+    try:
+        from pypdf import PdfReader
+
+        reader = PdfReader(io.BytesIO(pdf_bytes))
+        chunks: list[str] = []
+        for page in reader.pages[:20]:
+            try:
+                text = page.extract_text() or ""
+            except Exception:
+                text = ""
+            text = _bounded_text(text, max_len=6000)
+            if text:
+                chunks.append(text)
+        return "\n\n".join(chunks)[:30000]
+    except Exception as exc:
+        logger.debug("Macro research PDF text extraction skipped: %s", str(exc))
+        return ""
+
+
 def _child_text(item: ET.Element, names: tuple[str, ...]) -> str:
     wanted = {name.lower() for name in names}
     for child in list(item):
@@ -284,6 +308,47 @@ def _clean_str_list(value: Any, *, max_items: int = 5, max_len: int = 180) -> li
     return out
 
 
+def _clean_investment_theses(value: Any, *, max_items: int = 5) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        thesis = _bounded_text(item.get("thesis"), max_len=800)
+        if not thesis:
+            continue
+        confidence_label = str(item.get("confidence_label") or "").strip().lower()
+        if confidence_label not in {"low", "medium", "high"}:
+            confidence_label = "medium"
+        horizon = str(item.get("horizon") or "").strip().lower()
+        if horizon not in {"days", "weeks", "months", "quarters", "years"}:
+            horizon = "quarters"
+        theme_key = _clean_token(item.get("theme_key") or item.get("theme") or "")
+        if not theme_key:
+            theme_key = "macro_research"
+        out.append(
+            {
+                "theme_key": theme_key,
+                "horizon": horizon,
+                "thesis": thesis,
+                "transmission_channels": _clean_str_list(item.get("transmission_channels"), max_items=8, max_len=160),
+                "affected_sectors": _clean_str_list(item.get("affected_sectors"), max_items=8, max_len=120),
+                "candidate_queries": _clean_str_list(item.get("candidate_queries"), max_items=8, max_len=120),
+                "watch_indicators": _clean_str_list(item.get("watch_indicators"), max_items=8, max_len=160),
+                "invalidation_conditions": _clean_str_list(
+                    item.get("invalidation_conditions"),
+                    max_items=6,
+                    max_len=240,
+                ),
+                "confidence_label": confidence_label,
+            }
+        )
+        if len(out) >= max_items:
+            break
+    return out
+
+
 def _bounded_text(value: Any, *, max_len: int) -> str:
     text = re.sub(r"\s+", " ", _text(value))
     if len(text) <= max_len:
@@ -352,7 +417,14 @@ class GeminiMacroResearchSummarizer:
             '"key_findings":["research findings"],"methodology":"data, method, model, or analytical setup",'
             '"macro_channels":["economic transmission channels"],"asset_implications":["market or asset-class implications"],'
             '"watch_indicators":["indicators to monitor"],"caveats":["limitations or risks"],'
-            '"market_implication":"portfolio implication","themes":["macro tags"],"confidence":0.0}. '
+            '"market_implication":"portfolio implication","themes":["macro tags"],'
+            '"investment_theses":[{"theme_key":"stable_theme_key","horizon":"days|weeks|months|quarters|years",'
+            '"thesis":"research-backed investable hypothesis, not a trade order",'
+            '"transmission_channels":["economic channels"],"affected_sectors":["sector or industry hints"],'
+            '"candidate_queries":["search phrases for downstream discovery, not ticker recommendations"],'
+            '"watch_indicators":["confirming indicators"],"invalidation_conditions":["what would weaken the thesis"],'
+            '"confidence_label":"low|medium|high"}],"confidence":0.0}. '
+            "For investment_theses, do not invent tickers. Use sector, industry, factor, or keyword hints only. "
             f"Source: {source_hint}. Title: {document.title}. URL: {document.source_url}. "
             f"Document text:\n{document.content_text[:18000]}"
         )
@@ -404,6 +476,7 @@ class GeminiMacroResearchSummarizer:
             _first_text(parsed.get("market_implication"), "; ".join(asset_implications[:3])),
             max_len=1600,
         )
+        investment_theses = _clean_investment_theses(parsed.get("investment_theses"), max_items=5)
         return MacroResearchSummary(
             headline=_bounded_text(parsed.get("headline") or document.title, max_len=140),
             executive_summary=executive_summary,
@@ -415,9 +488,10 @@ class GeminiMacroResearchSummarizer:
             caveats=caveats,
             market_implication=market_implication,
             themes=themes,
+            investment_theses=investment_theses,
             confidence=confidence,
             detail_json={
-                "schema_version": "macro_research_summary.v2",
+                "schema_version": "macro_research_summary.v3",
                 "source_doc_id": document.source_doc_id,
                 "source_url": document.source_url,
                 "executive_summary": executive_summary,
@@ -429,6 +503,7 @@ class GeminiMacroResearchSummarizer:
                 "caveats": caveats,
                 "market_implication": market_implication,
                 "themes": themes,
+                "investment_theses": investment_theses,
                 "raw_model_response": parsed,
             },
         )
@@ -452,7 +527,7 @@ class MacroResearchService:
         self.http = http or requests.Session()
         self.object_store = object_store
         self.summarizer = summarizer
-        self.tenant_id = _text(tenant_id or getattr(repo, "tenant_id", "") or os.getenv("ARENA_TENANT_ID")) or "local"
+        _ = tenant_id
 
     @classmethod
     def from_settings(cls, *, settings: Settings, repo: Any, tenant_id: str | None = None) -> "MacroResearchService":
@@ -515,6 +590,7 @@ class MacroResearchService:
                     inserted += 1
                     if summary is not None:
                         self._upsert_briefing(document, summary)
+                        self._replace_theses(document, summary)
                         summarized += 1
                 except Exception as exc:
                     failed += 1
@@ -586,7 +662,17 @@ class MacroResearchService:
                     str(exc),
                 )
         source_doc_id = _source_doc_id(feed, guid=guid, link=link, title=title, published_at=published_at)
-        content_text = "\n\n".join(part for part in (title, cleaned, f"PDF: {pdf_url}" if pdf_url else "") if part)
+        pdf_text = _extract_pdf_text(pdf_bytes)
+        content_text = "\n\n".join(
+            part
+            for part in (
+                title,
+                cleaned,
+                f"PDF: {pdf_url}" if pdf_url else "",
+                f"PDF extracted text:\n{pdf_text}" if pdf_text else "",
+            )
+            if part
+        )
         hash_input = content_text.encode("utf-8") + b"\n" + hashlib.sha256(pdf_bytes).hexdigest().encode("ascii")
         return MacroResearchDocument(
             source_doc_id=source_doc_id,
@@ -652,7 +738,7 @@ class MacroResearchService:
         getter = getattr(self.repo, "get_macro_research_document", None)
         if not callable(getter):
             return None
-        return getter(source_doc_id, tenant_id=self.tenant_id)
+        return getter(source_doc_id)
 
     def _upsert_document(self, document: MacroResearchDocument, *, status: str) -> None:
         writer = getattr(self.repo, "upsert_macro_research_document", None)
@@ -684,7 +770,6 @@ class MacroResearchService:
                     "content_preview": document.content_text[:1000],
                 },
             },
-            tenant_id=self.tenant_id,
         )
 
     def _upsert_briefing(self, document: MacroResearchDocument, summary: MacroResearchSummary) -> None:
@@ -693,7 +778,7 @@ class MacroResearchService:
             return
         detail_json = {
             **summary.detail_json,
-            "schema_version": "macro_research_summary.v2",
+            "schema_version": "macro_research_summary.v3",
             "source_doc_id": document.source_doc_id,
             "source_url": document.source_url,
             "executive_summary": summary.executive_summary,
@@ -705,6 +790,7 @@ class MacroResearchService:
             "caveats": summary.caveats,
             "market_implication": summary.market_implication,
             "themes": summary.themes or list(document.themes),
+            "investment_theses": summary.investment_theses,
             "document": {
                 "raw_gcs_uri": document.raw_gcs_uri,
                 "content_gcs_uri": document.content_gcs_uri,
@@ -733,8 +819,68 @@ class MacroResearchService:
                 "model": _text(getattr(self.settings, "research_gemini_model", "")) or "gemini-3-flash-preview",
                 "detail_json": detail_json,
             },
-            tenant_id=self.tenant_id,
         )
+
+    def _replace_theses(self, document: MacroResearchDocument, summary: MacroResearchSummary) -> None:
+        writer = getattr(self.repo, "replace_macro_research_theses", None)
+        if not callable(writer):
+            return
+        rows: list[dict[str, Any]] = []
+        for idx, thesis in enumerate(summary.investment_theses or [], start=1):
+            if not isinstance(thesis, dict):
+                continue
+            text = _bounded_text(thesis.get("thesis"), max_len=800)
+            if not text:
+                continue
+            theme_key = _clean_token(thesis.get("theme_key") or "macro_research") or "macro_research"
+            digest = hashlib.sha256(f"{document.source_doc_id}|{idx}|{theme_key}|{text}".encode("utf-8")).hexdigest()[:20]
+            rows.append(
+                {
+                    "thesis_id": f"mrt_{digest}",
+                    "source_doc_id": document.source_doc_id,
+                    "created_at": utc_now(),
+                    "published_at": document.published_at,
+                    "source": document.source,
+                    "feed_id": document.feed_id,
+                    "doc_type": document.doc_type,
+                    "region": document.region or None,
+                    "market": document.market or "all",
+                    "title": document.title,
+                    "source_url": document.source_url,
+                    "theme_key": theme_key,
+                    "horizon": str(thesis.get("horizon") or "quarters").strip().lower() or "quarters",
+                    "thesis": text,
+                    "transmission_channels": _clean_str_list(thesis.get("transmission_channels"), max_items=8, max_len=160),
+                    "affected_sectors": _clean_str_list(thesis.get("affected_sectors"), max_items=8, max_len=120),
+                    "candidate_queries": _clean_str_list(thesis.get("candidate_queries"), max_items=8, max_len=120),
+                    "watch_indicators": _clean_str_list(thesis.get("watch_indicators"), max_items=8, max_len=160),
+                    "invalidation_conditions": _clean_str_list(
+                        thesis.get("invalidation_conditions"),
+                        max_items=6,
+                        max_len=240,
+                    ),
+                    "confidence_label": str(thesis.get("confidence_label") or "medium").strip().lower() or "medium",
+                    "status": "active",
+                    "evidence_json": {
+                        "source_doc_id": document.source_doc_id,
+                        "headline": summary.headline,
+                        "key_findings": summary.key_findings[:5],
+                    },
+                    "detail_json": {
+                        "schema_version": "macro_research_thesis.v1",
+                        "summary_model": _text(getattr(self.settings, "research_gemini_model", "")) or "gemini-3-flash-preview",
+                    },
+                }
+            )
+        try:
+            writer(document.source_doc_id, rows)
+        except Exception as exc:
+            logger.warning(
+                "[yellow]Macro research thesis write skipped[/yellow] source_doc_id=%s err=%s",
+                document.source_doc_id,
+                str(exc),
+                exc_info=True,
+            )
 
 
 def macro_research_bucket_default(project: str) -> str:

@@ -55,6 +55,40 @@ def test_context_builder_does_not_build_environment_queries_from_research_briefi
     assert not any("Shipping disruptions" in query for query in queries)
 
 
+def test_context_builder_injects_macro_research_thesis_context() -> None:
+    repo = FakeRepo()
+    repo.macro_research_theses = [
+        {
+            "thesis_id": "mrt_climate",
+            "source_doc_id": "bok:climate:1",
+            "published_at": "2026-05-30T00:00:00Z",
+            "source": "bok",
+            "market": "kr",
+            "theme_key": "climate_transition",
+            "horizon": "quarters",
+            "thesis": "Climate transition pressure may lift demand for grid equipment and renewable energy capex.",
+            "candidate_queries": ["grid equipment", "renewable energy capex"],
+            "watch_indicators": ["power demand", "policy capex"],
+            "invalidation_conditions": ["policy support weakens"],
+            "confidence_label": "medium",
+            "status": "active",
+        }
+    ]
+    settings = _settings()
+    settings.kis_target_market = "kospi"
+    builder = ContextBuilder(repo=repo, memory=FakeMemory(), board=FakeBoard(), settings=settings)
+    snapshot = AccountSnapshot(cash_krw=500_000, total_equity_krw=1_200_000, positions={})
+
+    context = builder.build(agent_id="gpt", snapshot=snapshot)
+
+    assert repo.macro_research_thesis_calls[0]["market"] == "kr"
+    assert context["macro_research_theses"][0]["theme_key"] == "climate_transition"
+    assert "Macro Research Thesis Seeds:" in context["macro_research_thesis_context"]
+    assert "climate_transition" in context["macro_research_thesis_context"]
+    assert "grid equipment" in context["macro_research_thesis_context"]
+    assert "bok:climate:1" in context["macro_research_thesis_context"]
+
+
 def test_context_builder_hydrates_vector_hits_and_prefers_ticker_overlap() -> None:
     repo = FakeRepo()
     repo.memory_by_id = {

@@ -1059,7 +1059,6 @@ TABLE_DDLS: tuple[str, ...] = (
     """,
     """
     CREATE TABLE IF NOT EXISTS `{project}.{dataset}.macro_research_documents` (
-      tenant_id STRING NOT NULL,
       source_doc_id STRING NOT NULL,
       source STRING NOT NULL,
       feed_id STRING NOT NULL,
@@ -1082,11 +1081,10 @@ TABLE_DDLS: tuple[str, ...] = (
       detail_json JSON
     )
     PARTITION BY DATE(fetched_at)
-    CLUSTER BY tenant_id, source, feed_id, doc_type
+    CLUSTER BY source, feed_id, doc_type
     """,
     """
     CREATE TABLE IF NOT EXISTS `{project}.{dataset}.macro_research_briefings` (
-      tenant_id STRING NOT NULL,
       source_doc_id STRING NOT NULL,
       created_at TIMESTAMP NOT NULL,
       published_at TIMESTAMP,
@@ -1108,7 +1106,36 @@ TABLE_DDLS: tuple[str, ...] = (
       detail_json JSON
     )
     PARTITION BY DATE(created_at)
-    CLUSTER BY tenant_id, source, doc_type, market
+    CLUSTER BY source, doc_type, market
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS `{project}.{dataset}.macro_research_theses` (
+      thesis_id STRING NOT NULL,
+      source_doc_id STRING NOT NULL,
+      created_at TIMESTAMP NOT NULL,
+      published_at TIMESTAMP,
+      source STRING NOT NULL,
+      feed_id STRING NOT NULL,
+      doc_type STRING NOT NULL,
+      region STRING,
+      market STRING,
+      title STRING NOT NULL,
+      source_url STRING NOT NULL,
+      theme_key STRING,
+      horizon STRING,
+      thesis STRING NOT NULL,
+      transmission_channels ARRAY<STRING>,
+      affected_sectors ARRAY<STRING>,
+      candidate_queries ARRAY<STRING>,
+      watch_indicators ARRAY<STRING>,
+      invalidation_conditions ARRAY<STRING>,
+      confidence_label STRING,
+      status STRING NOT NULL,
+      evidence_json JSON,
+      detail_json JSON
+    )
+    PARTITION BY DATE(created_at)
+    CLUSTER BY source, theme_key, market, status
     """,
     """
     CREATE TABLE IF NOT EXISTS `{project}.{dataset}.research_briefings` (
