@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 
 from arena.execution.gateway import ExecutionGateway
 from arena.models import AccountSnapshot, ExecutionReport, ExecutionStatus, RiskDecision, Side, utc_now
@@ -165,6 +166,26 @@ def test_reconcile_submitted_orders_does_not_inject_snapshot_fx() -> None:
     assert updated == 1
     assert broker.calls[0]["fx_rate"] == 0.0
     assert broker.calls[0]["fallback_price_krw"] == 0.0
+
+
+def test_reconcile_submitted_orders_passes_submitted_creation_time() -> None:
+    created_at = datetime(2026, 6, 1, 5, 40, 1, tzinfo=timezone.utc)
+
+    class _CreatedAtRepo(_Repo):
+        def recent_submitted_reports(self, *, limit: int, lookback_hours: int, trading_mode: str | None = None):
+            rows = super().recent_submitted_reports(limit=limit, lookback_hours=lookback_hours, trading_mode=trading_mode)
+            rows[0]["created_at"] = created_at
+            rows[0]["ticker"] = "010580"
+            return rows
+
+    repo = _CreatedAtRepo()
+    broker = _RecordingBroker()
+    gateway = ExecutionGateway(repo=repo, risk_engine=object(), broker=broker, memory_store=object())
+
+    updated = gateway.reconcile_submitted_orders(limit=50, lookback_hours=24)
+
+    assert updated == 1
+    assert broker.calls[0]["submitted_at"] == created_at
 
 
 def test_reconcile_submitted_orders_syncs_memory_store() -> None:

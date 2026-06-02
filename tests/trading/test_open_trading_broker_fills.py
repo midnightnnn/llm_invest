@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import pytest
 
 from arena.broker.open_trading import KISOpenTradingBroker
@@ -113,3 +115,30 @@ def test_reconcile_submitted_uses_fill_lookup(monkeypatch) -> None:
 
     assert report is not None
     assert report.status.value == "FILLED"
+
+
+def test_reconcile_submitted_scans_from_submitted_kst_date_for_kospi(monkeypatch) -> None:
+    settings = _settings()
+    settings.kis_target_market = "kospi"
+    broker = KISOpenTradingBroker(settings=settings)
+    calls: list[dict[str, str]] = []
+
+    def _fake_inquire(**kwargs):
+        calls.append(dict(kwargs))
+        return [{"odno": "0058661300", "tot_ccld_qty": "50", "avg_prvs": "2130"}]
+
+    monkeypatch.setattr(broker.client, "inquire_domestic_daily_ccld", _fake_inquire)
+
+    report = broker.reconcile_submitted(
+        order_id="0058661300",
+        ticker="010580",
+        side="BUY",
+        requested_qty=50,
+        fallback_price_krw=2130,
+        submitted_at=datetime(2026, 6, 1, 5, 40, 1, tzinfo=timezone.utc),
+    )
+
+    assert report is not None
+    assert report.status.value == "FILLED"
+    assert calls[0]["start_date"] == "20260601"
+    assert calls[0]["end_date"] >= "20260601"

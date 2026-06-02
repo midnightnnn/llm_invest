@@ -363,6 +363,7 @@ class ExecutionGateway:
                     requested_qty=float(row.get("requested_qty") or 0.0),
                     fallback_price_krw=0.0,
                     fx_rate=float(row.get("fx_rate") or 0.0),
+                    submitted_at=row.get("created_at"),
                 )
             except Exception as exc:
                 logger.warning(

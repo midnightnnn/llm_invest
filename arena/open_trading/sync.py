@@ -29,6 +29,7 @@ from .exchange_codes import (
 )
 
 logger = logging.getLogger(__name__)
+_KST = timezone(timedelta(hours=9))
 
 _ECOS_STATISTIC_SEARCH_BASE = "https://ecos.bok.or.kr/api/StatisticSearch"
 _ECOS_USD_KRW_STAT_CODE = "731Y001"
@@ -2749,7 +2750,7 @@ class BrokerTradeSyncService:
         return ""
 
     @classmethod
-    def _parse_occurred_at(cls, row: dict[str, object]) -> datetime:
+    def _parse_occurred_at(cls, row: dict[str, object], *, source_tz: timezone = timezone.utc) -> datetime:
         date_token = cls._parse_date_token(
             _pick_str(row, ["ord_dt", "ORD_DT", "ccld_dt", "CCLD_DT", "trad_dt", "TRAD_DT"])
         )
@@ -2760,8 +2761,8 @@ class BrokerTradeSyncService:
         )
         try:
             if time_token:
-                return datetime.strptime(f"{date_token}{time_token}", "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
-            return datetime.strptime(date_token, "%Y%m%d").replace(tzinfo=timezone.utc)
+                return datetime.strptime(f"{date_token}{time_token}", "%Y%m%d%H%M%S").replace(tzinfo=source_tz).astimezone(timezone.utc)
+            return datetime.strptime(date_token, "%Y%m%d").replace(tzinfo=source_tz).astimezone(timezone.utc)
         except ValueError:
             return utc_now()
 
@@ -2776,15 +2777,28 @@ class BrokerTradeSyncService:
         )
 
     @staticmethod
-    def _avg_price(row: dict[str, object]) -> float:
-        return max(
+    def _avg_price(row: dict[str, object], *, quantity: float = 0.0) -> float:
+        price = max(
             _to_float(row.get("ft_ccld_unpr3"), default=0.0),
             _to_float(row.get("CCLD_UNPR"), default=0.0),
             _to_float(row.get("ccld_unpr"), default=0.0),
             _to_float(row.get("avg_pric"), default=0.0),
             _to_float(row.get("avg_unpr"), default=0.0),
             _to_float(row.get("AVG_UNPR"), default=0.0),
+            _to_float(row.get("avg_prvs"), default=0.0),
+            _to_float(row.get("AVG_PRVS"), default=0.0),
+            _to_float(row.get("ord_unpr"), default=0.0),
+            _to_float(row.get("ORD_UNPR"), default=0.0),
         )
+        if price > 0:
+            return price
+        amount = max(
+            _to_float(row.get("tot_ccld_amt"), default=0.0),
+            _to_float(row.get("TOT_CCLD_AMT"), default=0.0),
+        )
+        if amount > 0 and quantity > 0:
+            return amount / quantity
+        return 0.0
 
     @staticmethod
     def _stable_event_id(scope: str, row: dict[str, object]) -> str:
@@ -2838,8 +2852,8 @@ class BrokerTradeSyncService:
         qty = self._filled_qty(row)
         if qty <= 0:
             return None
-        price_krw = self._avg_price(row)
-        occurred_at = self._parse_occurred_at(row)
+        price_krw = self._avg_price(row, quantity=qty)
+        occurred_at = self._parse_occurred_at(row, source_tz=_KST)
         ticker = _pick_str(row, ["pdno", "PDNO", "mksc_shrn_iscd", "MKSC_SHRN_ISCD"]).upper()
         return {
             "event_id": self._stable_event_id("kospi", row),

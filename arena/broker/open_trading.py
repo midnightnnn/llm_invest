@@ -4,7 +4,7 @@ import logging
 import math
 import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from arena.config import Settings
@@ -20,6 +20,7 @@ from arena.open_trading.exchange_codes import (
 )
 
 logger = logging.getLogger(__name__)
+_KST = timezone(timedelta(hours=9))
 
 
 def _to_float(value: object, default: float = 0.0) -> float:
@@ -43,6 +44,38 @@ def _pick_str(row: dict[str, object], keys: list[str]) -> str:
             if value:
                 return value
     return ""
+
+
+def _kis_date_token(value: datetime | None) -> str:
+    if value is None:
+        return datetime.now(_KST).strftime("%Y%m%d")
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(_KST).strftime("%Y%m%d")
+
+
+def _filled_avg_price(row: dict[str, object], *, filled_qty: float) -> float:
+    price = max(
+        _to_float(row.get("ft_ccld_unpr3"), default=0.0),
+        _to_float(row.get("CCLD_UNPR"), default=0.0),
+        _to_float(row.get("ccld_unpr"), default=0.0),
+        _to_float(row.get("avg_pric"), default=0.0),
+        _to_float(row.get("avg_unpr"), default=0.0),
+        _to_float(row.get("AVG_UNPR"), default=0.0),
+        _to_float(row.get("avg_prvs"), default=0.0),
+        _to_float(row.get("AVG_PRVS"), default=0.0),
+        _to_float(row.get("ord_unpr"), default=0.0),
+        _to_float(row.get("ORD_UNPR"), default=0.0),
+    )
+    if price > 0:
+        return price
+    amount = max(
+        _to_float(row.get("tot_ccld_amt"), default=0.0),
+        _to_float(row.get("TOT_CCLD_AMT"), default=0.0),
+    )
+    if amount > 0 and filled_qty > 0:
+        return amount / filled_qty
+    return 0.0
 
 
 def _normalize_us_order_exchange(exchange_code: str, default_exchange: str) -> str:
@@ -267,13 +300,15 @@ class KISOpenTradingBroker:
         message: str,
         exchange_code: str = "",
         fx_rate: float | None = None,
+        submitted_at: datetime | None = None,
     ) -> ExecutionReport | None:
         """Queries KIS once and returns FILLED report if execution is observed."""
-        today = datetime.now(timezone.utc).strftime("%Y%m%d")
         if market == "kospi":
+            end_date = datetime.now(_KST).strftime("%Y%m%d")
+            start_date = min(_kis_date_token(submitted_at), end_date)
             rows = self.client.inquire_domestic_daily_ccld(
-                start_date=today,
-                end_date=today,
+                start_date=start_date,
+                end_date=end_date,
                 pdno=ticker,
                 odno=order_id,
             )
@@ -316,14 +351,7 @@ class KISOpenTradingBroker:
             if filled <= 0:
                 continue
 
-            avg_ccy = max(
-                _to_float(row.get("ft_ccld_unpr3"), default=0.0),
-                _to_float(row.get("CCLD_UNPR"), default=0.0),
-                _to_float(row.get("ccld_unpr"), default=0.0),
-                _to_float(row.get("avg_pric"), default=0.0),
-                _to_float(row.get("avg_unpr"), default=0.0),
-                _to_float(row.get("AVG_UNPR"), default=0.0),
-            )
+            avg_ccy = _filled_avg_price(row, filled_qty=filled)
 
             if filled > best_filled:
                 best_filled = filled
@@ -381,6 +409,7 @@ class KISOpenTradingBroker:
                     message="confirmed",
                     exchange_code=exchange_code,
                     fx_rate=fx_rate,
+                    submitted_at=getattr(intent, "created_at", None),
                 )
                 if confirmed is not None:
                     return confirmed
@@ -405,6 +434,7 @@ class KISOpenTradingBroker:
         requested_qty: float,
         fallback_price_krw: float,
         fx_rate: float | None = None,
+        submitted_at: datetime | None = None,
     ) -> ExecutionReport | None:
         """Attempts one-shot reconciliation for prior SUBMITTED orders."""
         _ = side  # kept for interface completeness/logging extension.
@@ -425,6 +455,7 @@ class KISOpenTradingBroker:
             message="reconciled",
             exchange_code=str(exchange_code or ""),
             fx_rate=fx_rate,
+            submitted_at=submitted_at,
         )
 
     def place_order(self, intent: OrderIntent, *, fx_rate: float | None = None) -> ExecutionReport:

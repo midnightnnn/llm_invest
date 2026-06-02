@@ -161,6 +161,38 @@ def test_broker_trade_sync_normalizes_domestic_rows() -> None:
     assert row["source"] == "kis_inquire_domestic_daily_ccld"
 
 
+def test_broker_trade_sync_normalizes_domestic_kis_price_aliases_and_kst_time() -> None:
+    repo = FakeBrokerTradeRepo()
+    settings = _settings("kospi", ["010580"])
+    client = FakeBrokerTradeClient(
+        domestic=[
+            {
+                "odno": "0058661300",
+                "pdno": "010580",
+                "sll_buy_dvsn_cd": "02",
+                "tot_ccld_qty": "50",
+                "tot_ccld_amt": "106500",
+                "avg_prvs": "2130",
+                "ord_dt": "20260601",
+                "ord_tmd": "144001",
+            }
+        ]
+    )
+    service = BrokerTradeSyncService(settings=settings, repo=repo, client=client)
+
+    result = service.sync_broker_trade_events(days=2)
+
+    assert result.inserted_events == 1
+    row = repo.appended_trade_rows[0]
+    assert row["broker_order_id"] == "0058661300"
+    assert row["ticker"] == "010580"
+    assert row["side"] == "BUY"
+    assert row["quantity"] == pytest.approx(50.0)
+    assert row["price_native"] == pytest.approx(2130.0)
+    assert row["price_krw"] == pytest.approx(2130.0)
+    assert row["occurred_at"] == datetime(2026, 6, 1, 5, 40, 1, tzinfo=timezone.utc)
+
+
 def test_broker_trade_sync_reports_failed_scopes_without_failing_other_markets() -> None:
     repo = FakeBrokerTradeRepo()
     settings = _settings("nasdaq,kospi", ["AAPL", "005930"])
