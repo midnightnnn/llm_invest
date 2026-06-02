@@ -231,32 +231,32 @@ def _normalize_gemini_model(model_id: str) -> str:
 
 
 def _anthropic_model_tier(model_id: str) -> tuple[bool, bool, bool]:
-    """Returns (is_opus_4_7, supports_effort_param, supports_max_effort) for an Anthropic model id.
+    """Returns (supports_xhigh_adaptive, supports_effort_param, supports_max_effort) for an Anthropic model id.
 
     - supports_effort: Opus 4.5+, Sonnet 4.6+
     - supports_max_effort: Opus 4.7/4.6 + Sonnet 4.6 (NOT Opus 4.5)
-    - xhigh: Opus 4.7 only (checked via is_opus_4_7)
+    - xhigh/adaptive: Opus 4.7+
     """
     token = str(model_id or "").strip().lower()
     if token.startswith("anthropic/") or token.startswith("vertex_ai/"):
         token = token.split("/", 1)[1]
-    is_opus_4_7 = token.startswith("claude-opus-4-7")
+    supports_xhigh_adaptive = token.startswith("claude-opus-4-7") or token.startswith("claude-opus-4-8")
     supports_effort = (
         token.startswith("claude-opus-4-")
         or token.startswith("claude-sonnet-4-6")
     )
     is_opus_4_5 = token.startswith("claude-opus-4-5")
     supports_max_effort = supports_effort and not is_opus_4_5
-    return is_opus_4_7, supports_effort, supports_max_effort
+    return supports_xhigh_adaptive, supports_effort, supports_max_effort
 
 
-def _clamp_anthropic_effort(effort: str, *, is_opus_4_7: bool, supports_max: bool) -> str:
+def _clamp_anthropic_effort(effort: str, *, supports_xhigh_adaptive: bool, supports_max: bool) -> str:
     """Clamps user-supplied effort to the closest value the model actually supports."""
     value = str(effort or "").strip().lower()
-    if value == "xhigh" and not is_opus_4_7:
+    if value == "xhigh" and not supports_xhigh_adaptive:
         return "high"
     if value == "max" and not supports_max:
-        return "xhigh" if is_opus_4_7 else "high"
+        return "xhigh" if supports_xhigh_adaptive else "high"
     if value not in {"low", "medium", "high", "xhigh", "max"}:
         return ""
     return value
@@ -265,26 +265,26 @@ def _clamp_anthropic_effort(effort: str, *, is_opus_4_7: bool, supports_max: boo
 def _anthropic_runtime_kwargs(model_id: str, overrides: dict[str, Any] | None = None) -> dict[str, Any]:
     """Builds per-model LiteLLM runtime kwargs for Anthropic (effort, thinking, sampling).
 
-    Without overrides: Opus 4.7 → effort=xhigh + adaptive thinking; others → effort=high.
+    Without overrides: Opus 4.7+ → effort=xhigh + adaptive thinking; others → effort=high.
     With overrides: user-supplied effort replaces the default (clamped per-tier);
-    Opus 4.7 keeps thinking=adaptive always (budget_tokens is removed per API docs).
+    Opus 4.7+ keeps thinking=adaptive always (budget_tokens is removed per API docs).
     """
-    is_opus_4_7, supports_effort, supports_max = _anthropic_model_tier(model_id)
+    supports_xhigh_adaptive, supports_effort, supports_max = _anthropic_model_tier(model_id)
     extra: dict[str, Any] = {}
     ov = overrides or {}
 
     user_effort = _clamp_anthropic_effort(
         str(ov.get("effort") or ""),
-        is_opus_4_7=is_opus_4_7,
+        supports_xhigh_adaptive=supports_xhigh_adaptive,
         supports_max=supports_max,
     )
     if supports_effort:
-        default_effort = "xhigh" if is_opus_4_7 else "high"
+        default_effort = "xhigh" if supports_xhigh_adaptive else "high"
         extra["output_config"] = {"effort": user_effort or default_effort}
         extra["allowed_openai_params"] = ["output_config"]
 
-    # Opus 4.7 mandates adaptive thinking; budget_tokens is rejected by the API.
-    if is_opus_4_7:
+    # Recent Opus releases mandate adaptive thinking; budget_tokens is rejected by the API.
+    if supports_xhigh_adaptive:
         extra["thinking"] = {"type": "adaptive"}
 
     # Sampling / length — Anthropic has no top_k.

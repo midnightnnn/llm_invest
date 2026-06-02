@@ -142,6 +142,13 @@ class TestAnthropicRuntimeKwargs:
         # adaptive thinking stays regardless of effort
         assert extra["thinking"] == {"type": "adaptive"}
 
+    def test_opus_4_8_keeps_xhigh_plus_adaptive(self) -> None:
+        from arena.agents.adk_models import _anthropic_runtime_kwargs
+
+        extra = _anthropic_runtime_kwargs("claude-opus-4-8", {"effort": "xhigh"})
+        assert extra["output_config"] == {"effort": "xhigh"}
+        assert extra["thinking"] == {"type": "adaptive"}
+
     def test_sonnet_4_6_xhigh_override_clamped_to_high(self) -> None:
         from arena.agents.adk_models import _anthropic_runtime_kwargs
 

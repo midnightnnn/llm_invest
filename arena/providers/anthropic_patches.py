@@ -2,7 +2,7 @@
 
 Patches applied:
 
-1. Allow `effort="xhigh"` for Claude Opus 4.7+.
+1. Allow `effort="xhigh"` for recent Claude Opus releases.
    LiteLLM 1.81.16 hardcodes the effort allowlist to
    `{"low", "medium", "high", "max"}` inside
    `AnthropicConfig.transform_request`, which rejects Opus 4.7's `xhigh`.
