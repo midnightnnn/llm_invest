@@ -745,7 +745,17 @@ def _compact_tool_result_for_prompt(
     elif token == "get_macro_research_briefing":
         compacted = _compact_rows(
             core,
-            fields=("published_at", "source", "doc_type", "market", "headline", "summary", "market_implication", "themes"),
+            fields=(
+                "published_at",
+                "source",
+                "doc_type",
+                "market",
+                "headline",
+                "summary",
+                "market_implication",
+                "themes",
+                "source_doc_id",
+            ),
             limit=8,
             text_fields=("headline", "summary", "market_implication"),
             max_text=220,

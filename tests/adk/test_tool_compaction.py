@@ -60,6 +60,27 @@ def test_compact_tool_result_reddit_drops_url_and_trims_text() -> None:
     assert len(out[0]["selftext_snippet"]) <= 140
 
 
+def test_compact_macro_research_briefing_keeps_source_doc_id_for_drilldown() -> None:
+    out = _compact_tool_result_for_prompt(
+        "get_macro_research_briefing",
+        [
+            {
+                "published_at": "2026-05-22T15:00:00+00:00",
+                "source": "stlouisfed",
+                "doc_type": "journal_article",
+                "market": "us",
+                "headline": "Determinants of Mortgage Denial",
+                "summary": "A compact summary of the official research.",
+                "market_implication": "Credit standards remain a housing headwind.",
+                "themes": ["Credit Risk", "Monetary Policy Transmission"],
+                "source_doc_id": "stlouisfed:review:mortgage-denial-2018-2024",
+            }
+        ],
+    )
+
+    assert out[0]["source_doc_id"] == "stlouisfed:review:mortgage-denial-2018-2024"
+
+
 def test_compact_tool_result_technical_signals_multi_returns_summary_rows() -> None:
     out = _compact_tool_result_for_prompt(
         "technical_signals",
