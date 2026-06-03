@@ -370,6 +370,38 @@ def test_get_macro_research_briefing_returns_compact_rows() -> None:
     ]
 
 
+def test_get_macro_research_briefing_compact_preserves_full_summary() -> None:
+    from arena.agents.adk_agents import _ContextTools
+
+    long_summary = ("The official research summary keeps a decision-relevant mechanism. " * 14) + "SUMMARY_TAIL"
+    repo = _RepoForMacroTool()
+
+    def get_rows(**kwargs: Any) -> list[dict[str, Any]]:
+        repo.calls.append(kwargs)
+        rows = _RepoForMacroTool().get_macro_research_briefings(**kwargs)
+        rows[0]["summary"] = long_summary
+        return rows
+
+    repo.get_macro_research_briefings = get_rows  # type: ignore[method-assign]
+    tool = _ContextTools.__new__(_ContextTools)
+    tool.repo = repo
+    tool.settings = load_settings()
+    tool.settings.trading_mode = "paper"
+    tool.tenant_id = "tenant-a"
+
+    out = asyncio.run(
+        tool.get_macro_research_briefing(
+            scope="week",
+            market="kr",
+            detail_level="compact",
+            limit=1,
+        )
+    )
+
+    assert out[0]["summary"] == long_summary
+    assert out[0]["summary"].endswith("SUMMARY_TAIL")
+
+
 def test_get_macro_research_briefing_facts_returns_research_detail() -> None:
     from arena.agents.adk_agents import _ContextTools
 

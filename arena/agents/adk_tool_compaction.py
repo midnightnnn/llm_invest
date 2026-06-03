@@ -757,8 +757,6 @@ def _compact_tool_result_for_prompt(
                 "source_doc_id",
             ),
             limit=8,
-            text_fields=("headline", "summary", "market_implication"),
-            max_text=220,
         )
     elif token in {"search_past_experiences", "search_peer_lessons"}:
         compacted = _compact_rows(

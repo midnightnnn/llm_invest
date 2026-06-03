@@ -737,7 +737,7 @@ class _ContextTools:
                 "market": row.get("market"),
                 "title": row.get("title"),
                 "headline": row.get("headline"),
-                "summary": _clip_tool_text(row.get("summary"), max_len=700) if detail == "compact" else row.get("summary"),
+                "summary": row.get("summary"),
                 "market_implication": row.get("market_implication"),
                 "themes": row.get("themes") or [],
                 "source_doc_id": row.get("source_doc_id"),
