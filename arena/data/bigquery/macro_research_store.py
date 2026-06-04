@@ -168,6 +168,104 @@ class MacroResearchStore:
         payload["detail_json"] = _json_value(payload.get("detail_json") or {})
         self._insert_json("macro_research_documents", [{col: _json_safe(payload.get(col)) for col in _DOCUMENT_COLUMNS}])
 
+    def get_macro_research_documents(
+        self,
+        *,
+        source_doc_ids: list[str] | None = None,
+        sources: list[str] | None = None,
+        doc_types: list[str] | None = None,
+        themes: list[str] | None = None,
+        market: str | None = None,
+        since: datetime | None = None,
+        limit: int = 10,
+        tenant_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        _ = tenant_id
+        conditions = ["TRUE"]
+        params: dict[str, Any] = {
+            "limit": max(1, min(int(limit), 50)),
+        }
+        clean_source_doc_ids = [str(item or "").strip() for item in (source_doc_ids or []) if str(item or "").strip()]
+        clean_sources = _str_list(sources)
+        clean_doc_types = _str_list(doc_types)
+        clean_themes = _str_list(themes)
+        clean_market = str(market or "").strip().lower()
+        if clean_source_doc_ids:
+            conditions.append("source_doc_id IN UNNEST(@source_doc_ids)")
+            params["source_doc_ids"] = clean_source_doc_ids
+        if clean_sources:
+            conditions.append("source IN UNNEST(@sources)")
+            params["sources"] = clean_sources
+        if clean_doc_types:
+            conditions.append("doc_type IN UNNEST(@doc_types)")
+            params["doc_types"] = clean_doc_types
+        if clean_themes:
+            conditions.append(
+                """
+                EXISTS (
+                  SELECT 1
+                  FROM UNNEST(themes) AS theme
+                  CROSS JOIN UNNEST(@themes) AS requested
+                  WHERE LOWER(theme) = requested
+                     OR REPLACE(LOWER(theme), ' ', '_') = requested
+                     OR LOWER(theme) LIKE CONCAT('%', REPLACE(requested, '_', ' '), '%')
+                     OR REPLACE(LOWER(theme), ' ', '_') LIKE CONCAT('%', requested, '%')
+                )
+                """
+            )
+            params["themes"] = clean_themes
+        if clean_market and clean_market != "all":
+            conditions.append("(market = @market OR market = 'all')")
+            params["market"] = clean_market
+        if since is not None:
+            conditions.append("COALESCE(published_at, fetched_at) >= @since")
+            params["since"] = since
+        rows = self.session.fetch_rows(
+            f"""
+            SELECT *
+            FROM `{self.session.dataset_fqn}.macro_research_documents`
+            WHERE {' AND '.join(conditions)}
+            ORDER BY COALESCE(published_at, fetched_at) DESC, fetched_at DESC
+            LIMIT @limit
+            """,
+            params,
+        )
+        for row in rows:
+            row["detail_json"] = _json_or_none(row.get("detail_json"))
+        return rows
+
+    def update_macro_research_document_snapshot(
+        self,
+        source_doc_id: str,
+        *,
+        content_hash: str | None = None,
+        content_gcs_uri: str | None = None,
+        text_char_count: int | None = None,
+        status: str = "read",
+        error_message: str | None = None,
+        tenant_id: str | None = None,
+    ) -> None:
+        _ = tenant_id
+        self.session.execute(
+            f"""
+            UPDATE `{self.session.dataset_fqn}.macro_research_documents`
+            SET content_hash = COALESCE(@content_hash, content_hash),
+                content_gcs_uri = COALESCE(@content_gcs_uri, content_gcs_uri),
+                text_char_count = COALESCE(@text_char_count, text_char_count),
+                status = @status,
+                error_message = @error_message
+            WHERE source_doc_id = @source_doc_id
+            """,
+            {
+                "source_doc_id": str(source_doc_id or "").strip(),
+                "content_hash": content_hash,
+                "content_gcs_uri": content_gcs_uri,
+                "text_char_count": text_char_count,
+                "status": str(status or "read").strip().lower() or "read",
+                "error_message": error_message,
+            },
+        )
+
     def upsert_macro_research_briefing(self, row: dict[str, Any], *, tenant_id: str | None = None) -> None:
         _ = tenant_id
         source_doc_id = str(row.get("source_doc_id") or "").strip()

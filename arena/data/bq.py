@@ -22,6 +22,7 @@ from .bigquery.llm_audit_store import LlmAuditStore
 from .bigquery.macro_research_store import MacroResearchStore
 from .bigquery.market_store import MarketStore
 from .bigquery.memory_bq_store import MemoryBQStore
+from .bigquery.research_document_store import ResearchDocumentStore
 from .bigquery.runtime_store import RuntimeStore
 from .bigquery.session import BigQuerySession
 from .bigquery.sleeve_store import SleeveStore
@@ -48,6 +49,7 @@ class BigQueryRepository:
         self._market_store = MarketStore(self._session)
         self._memory_bq_store = MemoryBQStore(self._session)
         self._macro_research_store = MacroResearchStore(self._session)
+        self._research_document_store = ResearchDocumentStore(self._session)
         self._runtime_store = RuntimeStore(self._session)
         self._backtest_store = BacktestStore(self._session)
         self._execution_store = ExecutionStore(self._session, memory_bq_store=self._memory_bq_store)
@@ -125,6 +127,7 @@ class BigQueryRepository:
     _STORE_ATTRS = (
         "_memory_bq_store",
         "_macro_research_store",
+        "_research_document_store",
         "_llm_audit_store",
         "_runtime_store",
         "_market_store",

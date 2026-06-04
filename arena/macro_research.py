@@ -11,7 +11,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any, Protocol
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, unquote, urljoin, urlparse
 from xml.etree import ElementTree as ET
 
 import requests
@@ -560,31 +560,31 @@ class MacroResearchService:
     @classmethod
     def from_settings(cls, *, settings: Settings, repo: Any, tenant_id: str | None = None) -> "MacroResearchService":
         bucket = _text(getattr(settings, "macro_research_gcs_bucket", ""))
-        object_store = GcsMacroResearchObjectStore(
-            bucket_name=bucket,
-            project=settings.google_cloud_project or None,
-        )
-        summarizer: MacroResearchSummarizer | None = None
-        try:
-            summarizer = GeminiMacroResearchSummarizer(settings=settings)
-        except Exception as exc:
-            logger.warning(
-                "[yellow]Macro research summarizer disabled[/yellow] err=%s",
-                str(exc),
+        object_store: MacroResearchObjectStore | None = None
+        if bucket and _text(os.getenv("ARENA_MACRO_RESEARCH_EAGER_GCS", "")).lower() in {"1", "true", "yes"}:
+            object_store = GcsMacroResearchObjectStore(
+                bucket_name=bucket,
+                project=settings.google_cloud_project or None,
             )
+        summarizer: MacroResearchSummarizer | None = None
+        if _text(os.getenv("ARENA_MACRO_RESEARCH_EAGER_SUMMARY", "")).lower() in {"1", "true", "yes"}:
+            try:
+                summarizer = GeminiMacroResearchSummarizer(settings=settings)
+            except Exception as exc:
+                logger.warning(
+                    "[yellow]Macro research summarizer disabled[/yellow] err=%s",
+                    str(exc),
+                )
         return cls(settings=settings, repo=repo, object_store=object_store, summarizer=summarizer, tenant_id=tenant_id)
 
     def refresh(self, *, max_items_per_feed: int | None = None) -> MacroResearchRefreshResult:
         run_cap = max(1, int(getattr(self.settings, "macro_research_max_docs_per_run", 12) or 12))
         default_per_feed_cap = max(1, (run_cap + max(len(self.feeds), 1) - 1) // max(len(self.feeds), 1))
         per_feed_cap = max(1, int(max_items_per_feed)) if max_items_per_feed is not None else default_per_feed_cap
-        remaining = run_cap
         discovered = inserted = summarized = skipped = failed = 0
         source_counts: dict[str, int] = {}
         for feed in self.feeds:
-            if max_items_per_feed is None and remaining <= 0:
-                break
-            item_cap = min(per_feed_cap, remaining) if max_items_per_feed is None else per_feed_cap
+            item_cap = per_feed_cap
             try:
                 items = self._fetch_feed_items(feed)[:item_cap]
             except Exception as exc:
@@ -596,24 +596,26 @@ class MacroResearchService:
                     exc_info=True,
                 )
                 continue
-            if max_items_per_feed is None:
-                remaining -= len(items)
             source_counts[feed.source] = source_counts.get(feed.source, 0) + len(items)
             for item in items:
                 discovered += 1
                 try:
-                    document = self._document_from_item(feed, item)
+                    eager_content = self.object_store is not None or self.summarizer is not None
+                    document = self._document_from_item(feed, item, eager_content=eager_content)
                     existing = self._get_existing_document(document.source_doc_id)
                     if (
                         existing
                         and _text(existing.get("content_hash")) == document.content_hash
-                        and _text(existing.get("status")).lower() == "summarized"
+                        and (
+                            (self.summarizer is None and _text(existing.get("status")).lower() in {"listed", "stored", "read", "summarized"})
+                            or (self.summarizer is not None and _text(existing.get("status")).lower() == "summarized")
+                        )
                     ):
                         skipped += 1
                         continue
                     document = self._write_objects(document)
                     summary = self.summarizer.summarize(document) if self.summarizer is not None else None
-                    status = "summarized" if summary is not None else "stored"
+                    status = "summarized" if summary is not None else "listed"
                     self._upsert_document(document, status=status)
                     inserted += 1
                     if summary is not None:
@@ -669,7 +671,13 @@ class MacroResearchService:
             )
         return out
 
-    def _document_from_item(self, feed: MacroResearchFeed, item: dict[str, Any]) -> MacroResearchDocument:
+    def _document_from_item(
+        self,
+        feed: MacroResearchFeed,
+        item: dict[str, Any],
+        *,
+        eager_content: bool = False,
+    ) -> MacroResearchDocument:
         title = _bounded_text(item.get("title"), max_len=300)
         link = unquote(html.unescape(_text(item.get("link") or item.get("guid"))))
         guid = unquote(html.unescape(_text(item.get("guid") or link)))
@@ -677,8 +685,10 @@ class MacroResearchService:
         description = _text(item.get("description"))
         cleaned = _clean_html(description)
         pdf_url = (_extract_pdf_urls(description) or [""])[0]
-        pdf_bytes = b""
         if pdf_url:
+            pdf_url = urljoin(link or feed.url, pdf_url)
+        pdf_bytes = b""
+        if eager_content and pdf_url:
             try:
                 response = self.http.get(pdf_url, timeout=45)
                 response.raise_for_status()
@@ -690,7 +700,7 @@ class MacroResearchService:
                     str(exc),
                 )
         source_doc_id = _source_doc_id(feed, guid=guid, link=link, title=title, published_at=published_at)
-        pdf_text = _extract_pdf_text(pdf_bytes)
+        pdf_text = _extract_pdf_text(pdf_bytes) if eager_content else ""
         content_text = "\n\n".join(
             part
             for part in (

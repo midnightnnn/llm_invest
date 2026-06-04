@@ -273,6 +273,50 @@ def test_macro_research_service_skips_unchanged_documents() -> None:
     assert len(repo.theses) == 1
 
 
+def test_macro_research_service_can_store_metadata_without_gcs_or_summary() -> None:
+    from arena.macro_research import MacroResearchFeed, MacroResearchService
+
+    settings = load_settings()
+    settings.macro_research_gcs_bucket = ""
+    repo = _Repo()
+    http = _Http()
+    service = MacroResearchService(
+        settings=settings,
+        repo=repo,
+        feeds=[
+            MacroResearchFeed(
+                source="bok",
+                feed_id="bok_issue_notes",
+                title="BOK Issue Notes",
+                url="https://bok.local/rss",
+                doc_type="issue_note",
+                region="kr",
+                market="kr",
+                themes=("monetary_policy", "credit"),
+            )
+        ],
+        http=http,
+        object_store=None,
+        summarizer=None,
+        tenant_id="tenant-a",
+    )
+
+    result = service.refresh(max_items_per_feed=5)
+
+    assert result.discovered == 1
+    assert result.inserted == 1
+    assert result.summarized == 0
+    assert http.calls == ["https://bok.local/rss"]
+    doc = repo.docs["bok:bok_issue_notes:1001:201156"]
+    assert doc["status"] == "listed"
+    assert doc["summary_status"] == "pending"
+    assert doc["content_gcs_uri"] is None
+    assert doc["pdf_gcs_uri"] is None
+    assert doc["detail_json"]["pdf_url"] == "https://file-cdn.bok.or.kr/research-note.pdf?token=abc"
+    assert repo.briefings == {}
+    assert repo.theses == {}
+
+
 def test_macro_research_theme_phrases_are_canonicalized() -> None:
     from arena.macro_research import _clean_theme_codes
 
@@ -324,6 +368,119 @@ class _RepoForMacroTool:
                 },
             }
         ]
+
+
+class _RepoForMacroDocumentTool:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+        self.updates: list[dict[str, Any]] = []
+
+    def get_macro_research_documents(self, **kwargs: Any) -> list[dict[str, Any]]:
+        self.calls.append(kwargs)
+        return [
+            {
+                "source_doc_id": "bok:bok_issue_notes:1001:201156",
+                "published_at": datetime(2026, 5, 29, 0, 0, tzinfo=timezone.utc),
+                "source": "bok",
+                "feed_id": "bok_issue_notes",
+                "doc_type": "issue_note",
+                "market": "kr",
+                "title": "Monetary Policy and Household Credit",
+                "source_url": "https://www.bok.or.kr/portal/bbs/P0000559/view.do?nttId=1001&menuNo=201156",
+                "themes": ["monetary_policy", "credit"],
+                "text_char_count": 128,
+                "status": "listed",
+                "detail_json": {"pdf_url": ""},
+            }
+        ]
+
+    def update_macro_research_document_snapshot(self, source_doc_id: str, **kwargs: Any) -> None:
+        self.updates.append({"source_doc_id": source_doc_id, **kwargs})
+
+
+def test_get_macro_research_briefing_lists_document_metadata_when_available() -> None:
+    from arena.agents.adk_agents import _ContextTools
+
+    repo = _RepoForMacroDocumentTool()
+    tool = _ContextTools.__new__(_ContextTools)
+    tool.repo = repo
+    tool.settings = load_settings()
+    tool.settings.trading_mode = "paper"
+    tool.tenant_id = "tenant-a"
+
+    out = asyncio.run(
+        tool.get_macro_research_briefing(
+            scope="week",
+            market="kr",
+            sources=["bok"],
+            doc_types=["issue_note"],
+            themes=["credit"],
+            limit=1,
+        )
+    )
+
+    assert repo.calls[0]["sources"] == ["bok"]
+    assert repo.calls[0]["themes"] == ["credit"]
+    assert out == [
+        {
+            "published_at": "2026-05-29T00:00:00+00:00",
+            "source": "bok",
+            "feed_id": "bok_issue_notes",
+            "doc_type": "issue_note",
+            "market": "kr",
+            "title": "Monetary Policy and Household Credit",
+            "source_url": "https://www.bok.or.kr/portal/bbs/P0000559/view.do?nttId=1001&menuNo=201156",
+            "themes": ["monetary_policy", "credit"],
+            "source_doc_id": "bok:bok_issue_notes:1001:201156",
+            "text_char_count": 128,
+            "status": "listed",
+        }
+    ]
+
+
+def test_get_macro_research_briefing_reads_live_source_by_doc_id(monkeypatch) -> None:
+    from arena.agents import adk_context_tools
+    from arena.agents.adk_agents import _ContextTools
+    from arena.research_documents import LiveDocumentRead
+
+    repo = _RepoForMacroDocumentTool()
+    tool = _ContextTools.__new__(_ContextTools)
+    tool.repo = repo
+    tool.settings = load_settings()
+    tool.settings.trading_mode = "paper"
+    tool.settings.macro_research_gcs_bucket = ""
+    tool.tenant_id = "tenant-a"
+
+    monkeypatch.setattr(
+        adk_context_tools,
+        "fetch_live_document",
+        lambda url: LiveDocumentRead(
+            source_url=url,
+            final_url=url,
+            content_type="text/html",
+            content_text="Official document body " * 20,
+            content_hash="hash-read",
+            retrieved_at=datetime(2026, 5, 30, 0, 0, tzinfo=timezone.utc),
+        ),
+    )
+
+    out = asyncio.run(
+        tool.get_macro_research_briefing(
+            source_doc_ids=["bok:bok_issue_notes:1001:201156"],
+            detail_level="read",
+            offset=0,
+            max_chars=80,
+            limit=1,
+        )
+    )
+
+    assert repo.calls[0]["source_doc_ids"] == ["bok:bok_issue_notes:1001:201156"]
+    assert repo.calls[0]["since"] is None
+    assert out[0]["content_text"].startswith("Official document body")
+    assert out[0]["next_offset"] == 80
+    assert out[0]["content_hash"] == "hash-read"
+    assert repo.updates[0]["status"] == "read"
+    assert repo.updates[0]["content_hash"] == "hash-read"
 
 
 def test_get_macro_research_briefing_returns_compact_rows() -> None:
@@ -482,7 +639,7 @@ def test_get_macro_research_briefing_schema_exposes_filter_enums() -> None:
     assert props["sources"]["items"]["enum"] == list(MACRO_RESEARCH_SOURCES)
     assert props["doc_types"]["items"]["enum"] == list(MACRO_RESEARCH_DOC_TYPES)
     assert props["themes"]["items"]["enum"] == list(MACRO_RESEARCH_THEME_CODES)
-    assert props["detail_level"]["enum"] == ["compact", "facts", "full"]
+    assert props["detail_level"]["enum"] == ["list", "compact", "read", "facts", "full"]
 
 
 def test_macro_research_schema_and_registry_are_exposed() -> None:
@@ -509,8 +666,8 @@ def test_macro_research_schema_and_registry_are_exposed() -> None:
     assert "FRED" not in entry.description.splitlines()[0]
     assert '["fred"]' not in entry.description
     assert "FRED" not in entry.description_ko
-    assert "research-backed thesis context" in entry.description
-    assert "투자가설 컨텍스트" in entry.description_ko
+    assert "source_doc_id" in entry.description
+    assert "드릴다운" in entry.description_ko
 
 
 def test_local_macro_research_store_upserts_and_filters(tmp_path) -> None:

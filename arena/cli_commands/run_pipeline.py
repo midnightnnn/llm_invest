@@ -118,17 +118,6 @@ def _refresh_macro_research_for_prep(
     if not bool(getattr(settings, "macro_research_enabled", True)):
         logger.info("[cyan]Shared prep macro research skipped[/cyan] disabled_by_config")
         return
-    if not str(getattr(settings, "macro_research_gcs_bucket", "") or "").strip():
-        logger.warning(
-            "[yellow]Shared prep macro research skipped[/yellow] missing ARENA_MACRO_RESEARCH_GCS_BUCKET",
-            extra=event_extra(
-                "shared_prep_macro_research_skipped",
-                stage=stage,
-                market=market,
-                reason="missing_gcs_bucket",
-            ),
-        )
-        return
     try:
         from arena.macro_research import MacroResearchService
 

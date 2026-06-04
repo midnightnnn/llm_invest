@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 
 from arena.agents.adk_agents import _ContextTools
 from arena.config import load_settings
@@ -30,6 +31,53 @@ class _RepoForStructuredResearch:
                 },
             }
         ][:limit]
+
+
+class _RepoForResearchDocuments:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+        self.updates: list[dict] = []
+
+    def get_research_documents(
+        self,
+        *,
+        source_doc_ids=None,
+        tickers=None,
+        categories=None,
+        limit=10,
+        trading_mode="paper",
+        tenant_id=None,
+    ):
+        self.calls.append(
+            {
+                "source_doc_ids": source_doc_ids,
+                "tickers": tickers,
+                "categories": categories,
+                "limit": limit,
+                "trading_mode": trading_mode,
+                "tenant_id": tenant_id,
+            }
+        )
+        return [
+            {
+                "source_doc_id": "research:google_news:aapl:abc",
+                "published_at": datetime(2026, 6, 3, 12, 0, tzinfo=timezone.utc),
+                "source": "google_news",
+                "feed_id": "google_news_aapl",
+                "category": "held",
+                "market": "us",
+                "ticker": "AAPL",
+                "publisher": "CNBC",
+                "title": "Apple shares rise after earnings",
+                "source_url": "https://example.test/aapl",
+                "snippet": "Apple reported stronger iPhone sales.",
+                "text_char_count": 36,
+                "status": "listed",
+            }
+        ][:limit]
+
+    def update_research_document_snapshot(self, source_doc_id, **kwargs):
+        self.updates.append({"source_doc_id": source_doc_id, **kwargs})
 
 
 class _RepoForOnDemandResearch:
@@ -83,6 +131,79 @@ def test_search_peer_lessons_returns_only_compactor_reflections() -> None:
     assert out[0]["author_id"] == "gemini"
     assert out[0]["memory_source"] == "thesis_chain_compaction"
     assert tool._vector_store.calls[0]["agent_id"] == "gpt"
+
+
+def test_get_research_briefing_lists_research_documents_without_refresher() -> None:
+    repo = _RepoForResearchDocuments()
+    tool = _ContextTools.__new__(_ContextTools)
+    tool.repo = repo
+    tool.settings = load_settings()
+    tool.settings.trading_mode = "paper"
+    tool.tenant_id = "tenant-a"
+    tool._research_refresher = lambda **kwargs: (_ for _ in ()).throw(AssertionError("should not call refresher"))
+
+    out = asyncio.run(tool.get_research_briefing(tickers=["aapl"], limit=1))
+
+    assert repo.calls[0]["tickers"] == ["AAPL"]
+    assert out == [
+        {
+            "published_at": "2026-06-03T12:00:00+00:00",
+            "source": "google_news",
+            "feed_id": "google_news_aapl",
+            "category": "held",
+            "market": "us",
+            "ticker": "AAPL",
+            "publisher": "CNBC",
+            "title": "Apple shares rise after earnings",
+            "source_url": "https://example.test/aapl",
+            "snippet": "Apple reported stronger iPhone sales.",
+            "source_doc_id": "research:google_news:aapl:abc",
+            "text_char_count": 36,
+            "status": "listed",
+        }
+    ]
+
+
+def test_get_research_briefing_reads_live_source_by_doc_id(monkeypatch) -> None:
+    from arena.agents import adk_context_tools
+    from arena.research_documents import LiveDocumentRead
+
+    repo = _RepoForResearchDocuments()
+    tool = _ContextTools.__new__(_ContextTools)
+    tool.repo = repo
+    tool.settings = load_settings()
+    tool.settings.trading_mode = "paper"
+    tool.settings.macro_research_gcs_bucket = ""
+    tool.tenant_id = "tenant-a"
+
+    monkeypatch.setattr(
+        adk_context_tools,
+        "fetch_live_document",
+        lambda url: LiveDocumentRead(
+            source_url=url,
+            final_url=url,
+            content_type="text/html",
+            content_text="Article evidence " * 20,
+            content_hash="hash-read",
+            retrieved_at=datetime(2026, 6, 3, 12, 5, tzinfo=timezone.utc),
+        ),
+    )
+
+    out = asyncio.run(
+        tool.get_research_briefing(
+            source_doc_ids=["research:google_news:aapl:abc"],
+            detail_level="read",
+            offset=0,
+            max_chars=60,
+            limit=1,
+        )
+    )
+
+    assert repo.calls[0]["source_doc_ids"] == ["research:google_news:aapl:abc"]
+    assert out[0]["content_text"].startswith("Article evidence")
+    assert out[0]["next_offset"] == 60
+    assert out[0]["content_hash"] == "hash-read"
+    assert repo.updates[0]["status"] == "read"
 
 
 def test_get_research_briefing_refreshes_missing_tickers_and_sector_alias(monkeypatch) -> None:

@@ -416,7 +416,15 @@ def _get_research_briefing(args: dict, result: Any) -> MemoryQuerySpec | None:
         ticker = str(row.get("ticker") or "").strip().upper()
         if ticker:
             tickers.append(ticker)
-        text_parts.extend([str(row.get("headline") or ""), str(row.get("summary") or "")])
+        text_parts.extend(
+            [
+                str(row.get("headline") or ""),
+                str(row.get("summary") or ""),
+                str(row.get("title") or ""),
+                str(row.get("snippet") or ""),
+                str(row.get("content_text") or ""),
+            ]
+        )
     themes = _theme_keys_from_text(" ".join(text_parts))
     keys = [*categories[:3], *themes[:4]]
     query_parts = [*keys, *_dedupe(tickers, limit=3)]

@@ -1154,6 +1154,33 @@ TABLE_DDLS: tuple[str, ...] = (
     CLUSTER BY tenant_id, ticker
     """,
     """
+    CREATE TABLE IF NOT EXISTS `{project}.{dataset}.research_documents` (
+      tenant_id STRING NOT NULL,
+      source_doc_id STRING NOT NULL,
+      source STRING NOT NULL,
+      feed_id STRING,
+      category STRING NOT NULL,
+      market STRING,
+      ticker STRING,
+      publisher STRING,
+      publisher_url STRING,
+      title STRING NOT NULL,
+      source_url STRING NOT NULL,
+      published_at TIMESTAMP,
+      fetched_at TIMESTAMP NOT NULL,
+      snippet STRING,
+      content_hash STRING,
+      content_gcs_uri STRING,
+      text_char_count INT64,
+      status STRING NOT NULL,
+      error_message STRING,
+      detail_json JSON,
+      trading_mode STRING NOT NULL
+    )
+    PARTITION BY DATE(fetched_at)
+    CLUSTER BY tenant_id, category, ticker
+    """,
+    """
     CREATE TABLE IF NOT EXISTS `{project}.{dataset}.dividend_events` (
       tenant_id STRING NOT NULL,
       event_id STRING NOT NULL,

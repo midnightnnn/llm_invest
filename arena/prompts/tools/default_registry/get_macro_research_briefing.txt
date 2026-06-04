@@ -1,4 +1,4 @@
-Use `get_macro_research_briefing` to retrieve official BOK and St. Louis Fed research summaries, market implications, and research-backed thesis context.
+Use `get_macro_research_briefing` to list official BOK and St. Louis Fed research documents from rule-based metadata. The list response includes source_doc_id and source_url but does not summarize. To inspect evidence, call the same tool again with source_doc_ids; it live-fetches the linked source text and returns content_text, content_hash, and next_offset when more text is available.
 
 Parameters:
 - `scope`: one of `latest`, `week`, `month`, `quarter`, `all`; default `week`.

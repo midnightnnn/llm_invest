@@ -66,6 +66,52 @@ def test_research_briefings_round_trip_with_filters(repo):
     assert [row["briefing_id"] for row in live_rows] == ["brf_live"]
 
 
+def test_research_documents_round_trip_and_snapshot_update(repo):
+    published = datetime(2026, 6, 3, 12, 0, tzinfo=timezone.utc)
+    repo.upsert_research_document(
+        {
+            "source_doc_id": "research:google_news:aapl:abc",
+            "source": "google_news",
+            "feed_id": "google_news_aapl",
+            "category": "held",
+            "market": "us",
+            "ticker": "AAPL",
+            "publisher": "CNBC",
+            "publisher_url": "https://www.cnbc.com",
+            "title": "Apple shares rise after earnings",
+            "source_url": "https://example.test/aapl",
+            "published_at": published,
+            "fetched_at": published,
+            "snippet": "Apple reported stronger iPhone sales.",
+            "content_hash": "listed-hash",
+            "content_gcs_uri": None,
+            "text_char_count": 36,
+            "status": "listed",
+            "error_message": None,
+            "detail_json": {"feed_url": "https://news.google.com/rss/search?q=AAPL"},
+            "trading_mode": "paper",
+        }
+    )
+
+    rows = repo.get_research_documents(tickers=["aapl"], limit=5)
+    assert rows[0]["source_doc_id"] == "research:google_news:aapl:abc"
+    assert rows[0]["detail_json"]["feed_url"].startswith("https://news.google.com")
+
+    repo.update_research_document_snapshot(
+        "research:google_news:aapl:abc",
+        content_hash="read-hash",
+        content_gcs_uri="gs://bucket/research/content.txt",
+        text_char_count=2048,
+        status="read",
+    )
+    doc = repo.get_research_document("research:google_news:aapl:abc")
+    assert doc is not None
+    assert doc["content_hash"] == "read-hash"
+    assert doc["content_gcs_uri"] == "gs://bucket/research/content.txt"
+    assert doc["text_char_count"] == 2048
+    assert doc["status"] == "read"
+
+
 def test_append_runtime_audit_log_uses_bigquery_signature(repo):
     repo.append_runtime_audit_log(
         action="agent_cycle",

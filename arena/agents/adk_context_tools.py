@@ -22,6 +22,7 @@ from arena.memory.policy import (
     memory_vector_search_enabled,
 )
 from arena.models import utc_now
+from arena.research_documents import ResearchDocumentService, fetch_live_document, write_research_snapshot
 from arena.tools.allocation import optimize_hrp
 from arena.tools._market_scope import MarketScope, MarketScopeError
 
@@ -29,7 +30,8 @@ _PEER_LESSON_SOURCES = frozenset({"memory_compaction", "thesis_chain_compaction"
 _PUBLIC_RESEARCH_CATEGORIES = ("global_market", "geopolitical", "sector_trends")
 ResearchCategory = Literal["global_market", "geopolitical", "sector_trends", "sector"]
 MacroResearchScope = Literal["latest", "week", "month", "quarter", "all"]
-MacroResearchDetailLevel = Literal["compact", "facts", "full"]
+ResearchDocumentDetailLevel = Literal["list", "read", "full"]
+MacroResearchDetailLevel = Literal["list", "compact", "read", "facts", "full"]
 MacroResearchMarket = Literal[*MACRO_RESEARCH_MARKETS]
 MacroResearchSource = Literal[*MACRO_RESEARCH_SOURCES]
 MacroResearchDocType = Literal[*MACRO_RESEARCH_DOC_TYPES]
@@ -148,6 +150,86 @@ def _rich_macro_research_detail(row: dict[str, Any]) -> dict[str, Any]:
         "caveats": detail.get("caveats") or row.get("risk_flags"),
         "investment_theses": detail.get("investment_theses"),
     }
+
+
+def _document_list_item(row: dict[str, Any], *, macro: bool = False) -> dict[str, Any]:
+    fields = (
+        "published_at",
+        "source",
+        "feed_id",
+        "doc_type",
+        "category",
+        "market",
+        "ticker",
+        "publisher",
+        "title",
+        "source_url",
+        "snippet",
+        "themes",
+        "source_doc_id",
+        "text_char_count",
+        "content_gcs_uri",
+        "status",
+    )
+    item: dict[str, Any] = {}
+    for field in fields:
+        if field == "category" and macro:
+            continue
+        if field == "doc_type" and not macro:
+            continue
+        value = row.get(field)
+        if field == "published_at":
+            value = _tool_datetime(value)
+        if _has_tool_value(value):
+            item[field] = value
+    if row.get("content_gcs_uri"):
+        item["has_snapshot"] = True
+    return item
+
+
+def _content_chunk(text: str, *, offset: int, max_chars: int) -> tuple[str, int | None]:
+    safe_text = str(text or "")
+    safe_offset = max(0, min(int(offset or 0), len(safe_text)))
+    safe_max = max(1, min(int(max_chars or 12000), 30000))
+    end = min(len(safe_text), safe_offset + safe_max)
+    next_offset = end if end < len(safe_text) else None
+    return safe_text[safe_offset:end], next_offset
+
+
+def _read_document_item(
+    row: dict[str, Any],
+    *,
+    settings: Settings,
+    namespace: str,
+    offset: int,
+    max_chars: int,
+) -> dict[str, Any]:
+    detail = _parse_json_field(row.get("detail_json"))
+    if not isinstance(detail, dict):
+        detail = {}
+    source_url = str(detail.get("pdf_url") or row.get("source_url") or "").strip()
+    read = fetch_live_document(source_url)
+    item = _document_list_item(row, macro=namespace == "macro")
+    item["retrieved_at"] = _tool_datetime(read.retrieved_at)
+    if read.final_url:
+        item["final_url"] = read.final_url
+    if read.content_type:
+        item["content_type"] = read.content_type
+    if read.error:
+        item["fetch_error"] = read.error
+        return item
+    chunk, next_offset = _content_chunk(read.content_text, offset=offset, max_chars=max_chars)
+    item["content_text"] = chunk
+    item["content_offset"] = max(0, int(offset or 0))
+    if next_offset is not None:
+        item["next_offset"] = next_offset
+    item["content_hash"] = read.content_hash
+    item["text_char_count"] = read.text_char_count
+    snapshot_uri = write_research_snapshot(settings, namespace=namespace, row=row, content_text=read.content_text)
+    if snapshot_uri:
+        item["content_gcs_uri"] = snapshot_uri
+        item["has_snapshot"] = True
+    return item
 
 
 class _ContextTools:
@@ -548,13 +630,78 @@ class _ContextTools:
         self,
         tickers: Optional[list[str]] = None,
         categories: Optional[list[ResearchCategory]] = None,
+        source_doc_ids: Optional[list[str]] = None,
+        detail_level: ResearchDocumentDetailLevel = "list",
+        offset: int = 0,
+        max_chars: int = 12000,
         limit: int = 5,
         refresh_missing: bool = False,
     ) -> list[dict[str, Any]]:
-        """Fetches research briefings and can generate missing requested context on demand."""
+        """Lists rule-based research documents; with source_doc_ids, live-fetches document text for drilldown."""
         max_limit = max(1, min(int(limit), 20))
         clean_tickers = _clean_research_tickers(tickers)
         clean_cats = _clean_research_categories(categories)
+        clean_doc_ids = _clean_macro_research_ids(source_doc_ids)
+        loader = getattr(self.repo, "get_research_documents", None)
+        if callable(loader):
+            if refresh_missing and not clean_doc_ids:
+                ResearchDocumentService(settings=self.settings, repo=self.repo, tenant_id=self.tenant_id).refresh(
+                    tickers=clean_tickers or [],
+                    categories=clean_cats,
+                    limit=max_limit,
+                )
+            rows = loader(
+                source_doc_ids=clean_doc_ids,
+                tickers=clean_tickers,
+                categories=clean_cats,
+                limit=max_limit,
+                trading_mode=self.settings.trading_mode,
+                tenant_id=self.tenant_id,
+            )
+            if not rows and not clean_doc_ids:
+                ResearchDocumentService(settings=self.settings, repo=self.repo, tenant_id=self.tenant_id).refresh(
+                    tickers=clean_tickers or [],
+                    categories=clean_cats,
+                    limit=max_limit,
+                )
+                rows = loader(
+                    source_doc_ids=None,
+                    tickers=clean_tickers,
+                    categories=clean_cats,
+                    limit=max_limit,
+                    trading_mode=self.settings.trading_mode,
+                    tenant_id=self.tenant_id,
+                )
+            detail = str(detail_level or "list").strip().lower()
+            if clean_doc_ids or detail in {"read", "full"}:
+                out: list[dict[str, Any]] = []
+                updater = getattr(self.repo, "update_research_document_snapshot", None)
+                for row in rows[:max_limit]:
+                    if not isinstance(row, dict):
+                        continue
+                    item = _read_document_item(
+                        row,
+                        settings=self.settings,
+                        namespace="research",
+                        offset=offset,
+                        max_chars=max_chars,
+                    )
+                    if callable(updater):
+                        updater(
+                            row.get("source_doc_id"),
+                            content_hash=item.get("content_hash"),
+                            content_gcs_uri=item.get("content_gcs_uri"),
+                            text_char_count=item.get("text_char_count"),
+                            status="fetch_failed" if item.get("fetch_error") else "read",
+                            error_message=item.get("fetch_error"),
+                            trading_mode=self.settings.trading_mode,
+                            tenant_id=self.tenant_id,
+                        )
+                    out.append(item)
+                return out
+            return [_document_list_item(row) for row in rows[:max_limit] if isinstance(row, dict)]
+
+        # Legacy fallback for tests/local fakes that only expose generated briefings.
         rows = self._get_research_briefing_rows(
             clean_tickers=clean_tickers,
             clean_cats=clean_cats,
@@ -708,21 +855,64 @@ class _ContextTools:
         themes: Optional[list[MacroResearchTheme]] = None,
         source_doc_ids: Optional[list[str]] = None,
         detail_level: MacroResearchDetailLevel = "compact",
+        offset: int = 0,
+        max_chars: int = 12000,
         limit: int = 5,
     ) -> list[dict[str, Any]]:
-        """Reads official BOK/St. Louis Fed research summaries, market implications, and thesis context."""
+        """Lists official BOK/St. Louis Fed research documents; with source_doc_ids, live-fetches source text."""
         max_limit = max(1, min(int(limit), 12))
         clean_market = str(market or "").strip().lower() or "all"
+        clean_doc_ids = _clean_macro_research_ids(source_doc_ids)
+        doc_loader = getattr(self.repo, "get_macro_research_documents", None)
+        if callable(doc_loader):
+            rows = doc_loader(
+                source_doc_ids=clean_doc_ids,
+                sources=_clean_macro_research_tokens(sources),
+                doc_types=_clean_macro_research_tokens(doc_types),
+                themes=_clean_macro_research_tokens(themes),
+                market=clean_market,
+                since=None if clean_doc_ids else _macro_research_since(str(scope or "week")),
+                limit=max_limit,
+            )
+            detail = str(detail_level or "compact").strip().lower()
+            if clean_doc_ids or detail in {"read", "facts", "full"}:
+                out: list[dict[str, Any]] = []
+                updater = getattr(self.repo, "update_macro_research_document_snapshot", None)
+                for row in rows[:max_limit]:
+                    if not isinstance(row, dict):
+                        continue
+                    item = _read_document_item(
+                        row,
+                        settings=self.settings,
+                        namespace="macro",
+                        offset=offset,
+                        max_chars=max_chars,
+                    )
+                    if detail == "full" and row.get("detail_json") is not None:
+                        item["detail_json"] = _parse_json_field(row.get("detail_json"))
+                    if callable(updater):
+                        updater(
+                            row.get("source_doc_id"),
+                            content_hash=item.get("content_hash"),
+                            content_gcs_uri=item.get("content_gcs_uri"),
+                            text_char_count=item.get("text_char_count"),
+                            status="fetch_failed" if item.get("fetch_error") else "read",
+                            error_message=item.get("fetch_error"),
+                        )
+                    out.append(item)
+                return out
+            return [_document_list_item(row, macro=True) for row in rows[:max_limit] if isinstance(row, dict)]
+
         loader = getattr(self.repo, "get_macro_research_briefings", None)
         if not callable(loader):
             return []
         rows = loader(
-            source_doc_ids=_clean_macro_research_ids(source_doc_ids),
+            source_doc_ids=clean_doc_ids,
             sources=_clean_macro_research_tokens(sources),
             doc_types=_clean_macro_research_tokens(doc_types),
             themes=_clean_macro_research_tokens(themes),
             market=clean_market,
-            since=_macro_research_since(str(scope or "week")),
+            since=None if clean_doc_ids else _macro_research_since(str(scope or "week")),
             limit=max_limit,
         )
         detail = str(detail_level or "compact").strip().lower()

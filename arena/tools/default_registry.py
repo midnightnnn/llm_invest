@@ -75,7 +75,7 @@ def _base_entries(
             category="context",
             tier="core",
             label_ko="리서치 브리핑",
-            description_ko="글로벌 시장 동향, 지정학 이슈, 섹터 로테이션, 보유·관심 종목에 대한 리서치 브리핑을 조회합니다. 필요하면 권한이 있는 Gemini+Google Search 리서치 에이전트로 누락된 요청 항목을 새로 조사할 수 있습니다.",
+            description_ko="글로벌 시장 동향, 지정학 이슈, 섹터 로테이션, 보유·관심 종목 관련 리서치/뉴스 문서를 룰 기반으로 리스트업합니다. 목록에서 source_doc_id를 고른 뒤 같은 도구로 원문 링크를 드릴다운해 읽습니다.",
             sort_order=30,
         ),
         _tool(
@@ -83,7 +83,7 @@ def _base_entries(
             category="macro",
             tier="optional",
             label_ko="거시 연구 브리핑",
-            description_ko="BOK와 St. Louis Fed의 공식 이슈노트·연구자료·논문 요약, 시장 함의, 투자가설 컨텍스트를 조회합니다. 수치형 거시 지표가 아니라 연구기관의 해석, 전이 경로, 리스크, 감시 지표를 참고할 때 사용합니다.",
+            description_ko="BOK와 St. Louis Fed의 공식 이슈노트·연구자료·논문을 룰 기반 메타데이터로 리스트업합니다. 목록에서 source_doc_id를 고른 뒤 같은 도구로 원문 링크를 드릴다운해 읽습니다. 수치형 거시 지표가 아니라 공식 연구 문서 원문을 참고할 때 사용합니다.",
             sort_order=32,
         ),
         _tool(

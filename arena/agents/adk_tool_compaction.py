@@ -737,10 +737,26 @@ def _compact_tool_result_for_prompt(
     elif token == "get_research_briefing":
         compacted = _compact_rows(
             core,
-            fields=("created_at", "ticker", "category", "headline", "summary"),
+            fields=(
+                "published_at",
+                "source",
+                "feed_id",
+                "category",
+                "market",
+                "ticker",
+                "publisher",
+                "title",
+                "source_url",
+                "snippet",
+                "source_doc_id",
+                "content_text",
+                "content_offset",
+                "next_offset",
+                "content_hash",
+                "text_char_count",
+                "fetch_error",
+            ),
             limit=8,
-            text_fields=("headline", "summary"),
-            max_text=220,
         )
     elif token == "get_macro_research_briefing":
         compacted = _compact_rows(
@@ -748,13 +764,22 @@ def _compact_tool_result_for_prompt(
             fields=(
                 "published_at",
                 "source",
+                "feed_id",
                 "doc_type",
                 "market",
+                "title",
                 "headline",
                 "summary",
                 "market_implication",
+                "source_url",
                 "themes",
                 "source_doc_id",
+                "content_text",
+                "content_offset",
+                "next_offset",
+                "content_hash",
+                "text_char_count",
+                "fetch_error",
             ),
             limit=8,
         )
