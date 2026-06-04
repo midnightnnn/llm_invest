@@ -337,9 +337,21 @@ class ScratchWorkspace:
             "blocked_capabilities": list(_BLOCKED_CAPABILITIES),
         }
         runner = "__payload__ = " + repr(payload) + "\n" + _SANDBOX_RUNNER
+        runner_path: str | None = None
         try:
+            # Keep large payloads out of argv; Cloud Run can reject huge `python -c` invocations.
+            with tempfile.NamedTemporaryFile(
+                "w",
+                encoding="utf-8",
+                suffix=".py",
+                prefix="arena_scratch_",
+                dir=tempfile.gettempdir(),
+                delete=False,
+            ) as runner_file:
+                runner_file.write(runner)
+                runner_path = runner_file.name
             completed = subprocess.run(
-                [sys.executable, "-c", runner],
+                [sys.executable, runner_path],
                 cwd=tempfile.gettempdir(),
                 env={
                     **os.environ,
@@ -360,6 +372,12 @@ class ScratchWorkspace:
                 "saved_artifacts": [],
                 "sandbox": self._sandbox_metadata(),
             }
+        finally:
+            if runner_path:
+                try:
+                    os.unlink(runner_path)
+                except OSError:
+                    pass
 
         if completed.returncode != 0:
             return {

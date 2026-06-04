@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+from types import SimpleNamespace
+
 from arena.tools.scratch_workspace import ScratchWorkspace
 
 
@@ -91,3 +95,47 @@ def test_scratch_run_python_blocks_network_imports() -> None:
     assert out["status"] == "error"
     assert "blocked import" in out["error"]
     assert "socket" in out["error"]
+
+
+def test_scratch_run_python_uses_runner_file_for_large_payloads(monkeypatch, tmp_path: Path) -> None:
+    workspace = ScratchWorkspace(
+        agent_id="gpt",
+        tenant_id="local",
+        tool_events=[{"tool": "screen_market", "result": {"rows": ["x" * 200_000]}}],
+    )
+    workspace.set_context({"cycle_id": "cycle_1", "cycle_phase": "explore"})
+    monkeypatch.setattr("arena.tools.scratch_workspace.tempfile.gettempdir", lambda: str(tmp_path))
+
+    captured: dict[str, Path] = {}
+
+    def _fake_run(cmd, **kwargs):
+        _ = kwargs
+        assert cmd[1] != "-c"
+        runner_path = Path(cmd[1])
+        captured["runner_path"] = runner_path
+        runner_text = runner_path.read_text(encoding="utf-8")
+        assert "__payload__" in runner_text
+        assert "screen_market" in runner_text
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "status": "ok",
+                    "stdout": "",
+                    "result": "ready",
+                    "saved_artifacts": [],
+                    "sandbox": {},
+                    "_state": {"tables": {}, "notes": {}},
+                }
+            )
+            + "\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr("arena.tools.scratch_workspace.subprocess.run", _fake_run)
+
+    out = workspace.run_python("result = 'ready'")
+
+    assert out["status"] == "ok"
+    assert out["result"] == "ready"
+    assert not captured["runner_path"].exists()
