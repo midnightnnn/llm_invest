@@ -213,7 +213,7 @@ class ResearchDocumentStore:
             UPDATE `{self.session.dataset_fqn}.research_documents`
             SET content_hash = COALESCE(@content_hash, content_hash),
                 content_gcs_uri = COALESCE(@content_gcs_uri, content_gcs_uri),
-                text_char_count = COALESCE(@text_char_count, text_char_count),
+                text_char_count = COALESCE(CAST(@text_char_count AS INT64), text_char_count),
                 status = @status,
                 error_message = @error_message
             WHERE tenant_id = @tenant_id

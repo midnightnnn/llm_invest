@@ -232,6 +232,19 @@ def _read_document_item(
     return item
 
 
+def _update_document_snapshot_best_effort(updater: Any, source_doc_id: Any, **kwargs: Any) -> None:
+    if not callable(updater):
+        return
+    try:
+        updater(source_doc_id, **kwargs)
+    except Exception as exc:
+        logger.warning(
+            "Document snapshot metadata update skipped source_doc_id=%s err=%s",
+            source_doc_id,
+            str(exc)[:500],
+        )
+
+
 class _ContextTools:
     """Exposes per-cycle context as callable ADK tools."""
 
@@ -686,17 +699,17 @@ class _ContextTools:
                         offset=offset,
                         max_chars=max_chars,
                     )
-                    if callable(updater):
-                        updater(
-                            row.get("source_doc_id"),
-                            content_hash=item.get("content_hash"),
-                            content_gcs_uri=item.get("content_gcs_uri"),
-                            text_char_count=item.get("text_char_count"),
-                            status="fetch_failed" if item.get("fetch_error") else "read",
-                            error_message=item.get("fetch_error"),
-                            trading_mode=self.settings.trading_mode,
-                            tenant_id=self.tenant_id,
-                        )
+                    _update_document_snapshot_best_effort(
+                        updater,
+                        row.get("source_doc_id"),
+                        content_hash=item.get("content_hash"),
+                        content_gcs_uri=item.get("content_gcs_uri"),
+                        text_char_count=item.get("text_char_count"),
+                        status="fetch_failed" if item.get("fetch_error") else "read",
+                        error_message=item.get("fetch_error"),
+                        trading_mode=self.settings.trading_mode,
+                        tenant_id=self.tenant_id,
+                    )
                     out.append(item)
                 return out
             return [_document_list_item(row) for row in rows[:max_limit] if isinstance(row, dict)]
@@ -890,15 +903,15 @@ class _ContextTools:
                     )
                     if detail == "full" and row.get("detail_json") is not None:
                         item["detail_json"] = _parse_json_field(row.get("detail_json"))
-                    if callable(updater):
-                        updater(
-                            row.get("source_doc_id"),
-                            content_hash=item.get("content_hash"),
-                            content_gcs_uri=item.get("content_gcs_uri"),
-                            text_char_count=item.get("text_char_count"),
-                            status="fetch_failed" if item.get("fetch_error") else "read",
-                            error_message=item.get("fetch_error"),
-                        )
+                    _update_document_snapshot_best_effort(
+                        updater,
+                        row.get("source_doc_id"),
+                        content_hash=item.get("content_hash"),
+                        content_gcs_uri=item.get("content_gcs_uri"),
+                        text_char_count=item.get("text_char_count"),
+                        status="fetch_failed" if item.get("fetch_error") else "read",
+                        error_message=item.get("fetch_error"),
+                    )
                     out.append(item)
                 return out
             return [_document_list_item(row, macro=True) for row in rows[:max_limit] if isinstance(row, dict)]

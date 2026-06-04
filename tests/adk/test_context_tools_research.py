@@ -206,6 +206,50 @@ def test_get_research_briefing_reads_live_source_by_doc_id(monkeypatch) -> None:
     assert repo.updates[0]["status"] == "read"
 
 
+def test_get_research_briefing_returns_read_response_when_snapshot_update_fails(monkeypatch) -> None:
+    from arena.agents import adk_context_tools
+    from arena.research_documents import LiveDocumentRead
+
+    repo = _RepoForResearchDocuments()
+    tool = _ContextTools.__new__(_ContextTools)
+    tool.repo = repo
+    tool.settings = load_settings()
+    tool.settings.trading_mode = "paper"
+    tool.settings.macro_research_gcs_bucket = ""
+    tool.tenant_id = "tenant-a"
+
+    def _raise_snapshot_update(*args, **kwargs):
+        _ = (args, kwargs)
+        raise RuntimeError("streaming buffer update blocked")
+
+    repo.update_research_document_snapshot = _raise_snapshot_update  # type: ignore[method-assign]
+    monkeypatch.setattr(
+        adk_context_tools,
+        "fetch_live_document",
+        lambda url: LiveDocumentRead(
+            source_url=url,
+            final_url=url,
+            content_type="text/html",
+            content_text="Fresh article body " * 20,
+            content_hash="hash-fresh",
+            retrieved_at=datetime(2026, 6, 3, 12, 5, tzinfo=timezone.utc),
+        ),
+    )
+
+    out = asyncio.run(
+        tool.get_research_briefing(
+            source_doc_ids=["research:google_news:aapl:abc"],
+            detail_level="read",
+            offset=0,
+            max_chars=80,
+            limit=1,
+        )
+    )
+
+    assert out[0]["content_text"].startswith("Fresh article body")
+    assert out[0]["content_hash"] == "hash-fresh"
+
+
 def test_get_research_briefing_refreshes_missing_tickers_and_sector_alias(monkeypatch) -> None:
     monkeypatch.delenv("GOOGLE_GENAI_USE_VERTEXAI", raising=False)
     repo = _RepoForOnDemandResearch()

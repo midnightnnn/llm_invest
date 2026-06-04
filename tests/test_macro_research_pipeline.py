@@ -483,6 +483,51 @@ def test_get_macro_research_briefing_reads_live_source_by_doc_id(monkeypatch) ->
     assert repo.updates[0]["content_hash"] == "hash-read"
 
 
+def test_get_macro_research_briefing_returns_read_response_when_snapshot_update_fails(monkeypatch) -> None:
+    from arena.agents import adk_context_tools
+    from arena.agents.adk_agents import _ContextTools
+    from arena.research_documents import LiveDocumentRead
+
+    repo = _RepoForMacroDocumentTool()
+    tool = _ContextTools.__new__(_ContextTools)
+    tool.repo = repo
+    tool.settings = load_settings()
+    tool.settings.trading_mode = "paper"
+    tool.settings.macro_research_gcs_bucket = ""
+    tool.tenant_id = "tenant-a"
+
+    def _raise_snapshot_update(*args: Any, **kwargs: Any) -> None:
+        _ = (args, kwargs)
+        raise RuntimeError("streaming buffer update blocked")
+
+    repo.update_macro_research_document_snapshot = _raise_snapshot_update  # type: ignore[method-assign]
+    monkeypatch.setattr(
+        adk_context_tools,
+        "fetch_live_document",
+        lambda url: LiveDocumentRead(
+            source_url=url,
+            final_url=url,
+            content_type="text/html",
+            content_text="Fresh official document body " * 20,
+            content_hash="hash-fresh",
+            retrieved_at=datetime(2026, 5, 30, 0, 0, tzinfo=timezone.utc),
+        ),
+    )
+
+    out = asyncio.run(
+        tool.get_macro_research_briefing(
+            source_doc_ids=["bok:bok_issue_notes:1001:201156"],
+            detail_level="read",
+            offset=0,
+            max_chars=80,
+            limit=1,
+        )
+    )
+
+    assert out[0]["content_text"].startswith("Fresh official document body")
+    assert out[0]["content_hash"] == "hash-fresh"
+
+
 def test_get_macro_research_briefing_returns_compact_rows() -> None:
     from arena.agents.adk_agents import _ContextTools
 
