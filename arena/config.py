@@ -307,7 +307,7 @@ def effective_research_gemini_api_key(settings: Settings) -> str:
 
 
 def research_generation_status(settings: Settings) -> dict[str, Any]:
-    """Returns tenant-scoped Gemini research generation capability state."""
+    """Returns tenant-scoped optional research capability state."""
     enabled_by_config = bool(getattr(settings, "research_enabled", False))
     has_gemini_key = bool(getattr(settings, "gemini_api_key", "").strip())
     has_research_gemini_key = bool(effective_research_gemini_api_key(settings))
