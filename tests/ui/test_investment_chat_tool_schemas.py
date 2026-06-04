@@ -204,6 +204,10 @@ def test_chat_research_tool_schema_exposes_on_demand_refresh_and_category_enum(m
 
     assert "refresh_missing" in props
     assert props["refresh_missing"]["type"] == "BOOLEAN"
+    assert "source_doc_ids" not in props
+    assert "detail_level" not in props
+    assert "offset" not in props
+    assert "max_chars" not in props
     assert props["categories"]["items"]["enum"] == [
         "global_market",
         "geopolitical",

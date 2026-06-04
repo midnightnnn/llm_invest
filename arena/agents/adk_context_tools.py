@@ -22,7 +22,7 @@ from arena.memory.policy import (
     memory_vector_search_enabled,
 )
 from arena.models import utc_now
-from arena.research_documents import ResearchDocumentService, fetch_live_document, write_research_snapshot
+from arena.research_documents import fetch_live_document, write_research_snapshot
 from arena.tools.allocation import optimize_hrp
 from arena.tools._market_scope import MarketScope, MarketScopeError
 
@@ -30,7 +30,6 @@ _PEER_LESSON_SOURCES = frozenset({"memory_compaction", "thesis_chain_compaction"
 _PUBLIC_RESEARCH_CATEGORIES = ("global_market", "geopolitical", "sector_trends")
 ResearchCategory = Literal["global_market", "geopolitical", "sector_trends", "sector"]
 MacroResearchScope = Literal["latest", "week", "month", "quarter", "all"]
-ResearchDocumentDetailLevel = Literal["list", "read", "full"]
 MacroResearchDetailLevel = Literal["list", "compact", "read", "facts", "full"]
 MacroResearchMarket = Literal[*MACRO_RESEARCH_MARKETS]
 MacroResearchSource = Literal[*MACRO_RESEARCH_SOURCES]
@@ -643,78 +642,13 @@ class _ContextTools:
         self,
         tickers: Optional[list[str]] = None,
         categories: Optional[list[ResearchCategory]] = None,
-        source_doc_ids: Optional[list[str]] = None,
-        detail_level: ResearchDocumentDetailLevel = "list",
-        offset: int = 0,
-        max_chars: int = 12000,
         limit: int = 5,
         refresh_missing: bool = False,
     ) -> list[dict[str, Any]]:
-        """Lists rule-based research documents; with source_doc_ids, live-fetches document text for drilldown."""
+        """Fetches research briefings and can generate missing requested context on demand."""
         max_limit = max(1, min(int(limit), 20))
         clean_tickers = _clean_research_tickers(tickers)
         clean_cats = _clean_research_categories(categories)
-        clean_doc_ids = _clean_macro_research_ids(source_doc_ids)
-        loader = getattr(self.repo, "get_research_documents", None)
-        if callable(loader):
-            if refresh_missing and not clean_doc_ids:
-                ResearchDocumentService(settings=self.settings, repo=self.repo, tenant_id=self.tenant_id).refresh(
-                    tickers=clean_tickers or [],
-                    categories=clean_cats,
-                    limit=max_limit,
-                )
-            rows = loader(
-                source_doc_ids=clean_doc_ids,
-                tickers=clean_tickers,
-                categories=clean_cats,
-                limit=max_limit,
-                trading_mode=self.settings.trading_mode,
-                tenant_id=self.tenant_id,
-            )
-            if not rows and not clean_doc_ids:
-                ResearchDocumentService(settings=self.settings, repo=self.repo, tenant_id=self.tenant_id).refresh(
-                    tickers=clean_tickers or [],
-                    categories=clean_cats,
-                    limit=max_limit,
-                )
-                rows = loader(
-                    source_doc_ids=None,
-                    tickers=clean_tickers,
-                    categories=clean_cats,
-                    limit=max_limit,
-                    trading_mode=self.settings.trading_mode,
-                    tenant_id=self.tenant_id,
-                )
-            detail = str(detail_level or "list").strip().lower()
-            if clean_doc_ids or detail in {"read", "full"}:
-                out: list[dict[str, Any]] = []
-                updater = getattr(self.repo, "update_research_document_snapshot", None)
-                for row in rows[:max_limit]:
-                    if not isinstance(row, dict):
-                        continue
-                    item = _read_document_item(
-                        row,
-                        settings=self.settings,
-                        namespace="research",
-                        offset=offset,
-                        max_chars=max_chars,
-                    )
-                    _update_document_snapshot_best_effort(
-                        updater,
-                        row.get("source_doc_id"),
-                        content_hash=item.get("content_hash"),
-                        content_gcs_uri=item.get("content_gcs_uri"),
-                        text_char_count=item.get("text_char_count"),
-                        status="fetch_failed" if item.get("fetch_error") else "read",
-                        error_message=item.get("fetch_error"),
-                        trading_mode=self.settings.trading_mode,
-                        tenant_id=self.tenant_id,
-                    )
-                    out.append(item)
-                return out
-            return [_document_list_item(row) for row in rows[:max_limit] if isinstance(row, dict)]
-
-        # Legacy fallback for tests/local fakes that only expose generated briefings.
         rows = self._get_research_briefing_rows(
             clean_tickers=clean_tickers,
             clean_cats=clean_cats,
