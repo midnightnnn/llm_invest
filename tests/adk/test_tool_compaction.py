@@ -106,6 +106,68 @@ def test_compact_macro_research_briefing_preserves_full_text_for_model_context()
     assert out[0]["market_implication"] == long_implication
 
 
+def test_compact_research_briefing_preserves_briefing_content_for_model_context() -> None:
+    long_summary = ("SATL Gemini-grounded research context " * 80) + "SUMMARY_TAIL"
+    out = _compact_tool_result_for_prompt(
+        "get_research_briefing",
+        [
+            {
+                "briefing_id": "brf_satl",
+                "created_at": "2026-06-05T22:59:38+00:00",
+                "ticker": "SATL",
+                "category": "held",
+                "headline": "SATL defense contract inflection",
+                "summary": long_summary,
+                "detail_json": {
+                    "key_points": ["Q1 operating cash flow positive"],
+                    "risks": ["microcap volatility"],
+                    "confidence": 0.9,
+                },
+                "sources": [{"title": "SATL Q1 update", "url": "https://example.test/satl"}],
+            }
+        ],
+    )
+
+    assert out[0]["briefing_id"] == "brf_satl"
+    assert out[0]["headline"] == "SATL defense contract inflection"
+    assert out[0]["summary"] == long_summary
+    assert out[0]["detail_json"]["confidence"] == 0.9
+    assert out[0]["sources"][0]["title"] == "SATL Q1 update"
+
+
+def test_compact_research_briefing_preserves_content_with_memory_wrapper() -> None:
+    long_summary = ("PYPL Gemini research briefing " * 100) + "SUMMARY_TAIL"
+    out = _compact_tool_result_for_prompt(
+        "get_research_briefing",
+        {
+            "data": [
+                {
+                    "briefing_id": "brf_pypl",
+                    "ticker": "PYPL",
+                    "category": "held",
+                    "headline": "PYPL payments margin setup",
+                    "summary": long_summary,
+                }
+            ],
+            "_memory_context": [
+                {
+                    "event_id": "mem_pypl",
+                    "created_date": "2026-05-19",
+                    "ticker": "PYPL",
+                    "event_type": "trade_execution",
+                    "summary": "Prior PYPL trade context",
+                    "score": 0.75,
+                }
+            ],
+        },
+    )
+
+    assert out["data"][0]["briefing_id"] == "brf_pypl"
+    assert out["data"][0]["headline"] == "PYPL payments margin setup"
+    assert out["data"][0]["summary"] == long_summary
+    assert out["_memory_context"][0]["event_id"] == "mem_pypl"
+
+
 def test_compact_tool_result_technical_signals_multi_returns_summary_rows() -> None:
     out = _compact_tool_result_for_prompt(
         "technical_signals",

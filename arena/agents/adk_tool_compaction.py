@@ -738,12 +738,18 @@ def _compact_tool_result_for_prompt(
         compacted = _compact_rows(
             core,
             fields=(
+                "briefing_id",
+                "created_at",
                 "published_at",
                 "source",
                 "feed_id",
                 "category",
                 "market",
                 "ticker",
+                "headline",
+                "summary",
+                "detail_json",
+                "sources",
                 "publisher",
                 "title",
                 "source_url",
