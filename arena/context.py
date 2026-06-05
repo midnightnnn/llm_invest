@@ -434,73 +434,6 @@ class ContextBuilder:
             return []
         return rows
 
-    def _macro_research_market(self, target_market: str) -> str:
-        markets = set(parse_markets(target_market))
-        if markets & self._KOSPI_MARKETS:
-            return "kr"
-        if markets & self._US_MARKETS:
-            return "us"
-        return "all"
-
-    def _macro_research_thesis_rows(self, *, market: str, limit: int = 5) -> list[dict[str, Any]]:
-        loader = getattr(self.repo, "get_macro_research_theses", None)
-        if not callable(loader):
-            return []
-        try:
-            return list(
-                loader(
-                    market=market,
-                    status="active",
-                    limit=max(1, min(int(limit), 8)),
-                )
-            )
-        except Exception as exc:
-            logger.warning(
-                "[yellow]macro research thesis context skipped[/yellow] err=%s",
-                str(exc),
-                extra=failure_extra(
-                    "macro_research_thesis_context_skipped",
-                    exc,
-                    market=market,
-                ),
-            )
-            return []
-
-    def _compress_macro_research_thesis_context(self, rows: list[dict[str, Any]]) -> str:
-        if not rows:
-            return ""
-        lines = ["Macro Research Thesis Seeds:"]
-        for row in rows[:5]:
-            theme = self._trim_text(row.get("theme_key"), max_len=48)
-            horizon = self._trim_text(row.get("horizon"), max_len=24)
-            thesis = self._trim_text(self._single_line_text(row.get("thesis")), max_len=240)
-            if not thesis:
-                continue
-            parts = [part for part in [theme, horizon] if part]
-            prefix = f"[{' | '.join(parts)}] " if parts else ""
-            line = f"- {prefix}{thesis}"
-            queries = row.get("candidate_queries") if isinstance(row.get("candidate_queries"), list) else []
-            clean_queries = [
-                self._trim_text(self._single_line_text(item), max_len=56)
-                for item in queries[:3]
-                if self._single_line_text(item)
-            ]
-            if clean_queries:
-                line += f" queries={'; '.join(clean_queries)}"
-            watch = row.get("watch_indicators") if isinstance(row.get("watch_indicators"), list) else []
-            clean_watch = [
-                self._trim_text(self._single_line_text(item), max_len=56)
-                for item in watch[:2]
-                if self._single_line_text(item)
-            ]
-            if clean_watch:
-                line += f" watch={'; '.join(clean_watch)}"
-            source_doc_id = self._trim_text(row.get("source_doc_id"), max_len=72)
-            if source_doc_id:
-                line += f" src={source_doc_id}"
-            lines.append(line)
-        return "\n".join(lines) if len(lines) > 1 else ""
-
     def _active_thesis_factor_labels(self, value: Any, *, limit: int = 3) -> str:
         if not isinstance(value, list):
             return ""
@@ -2671,14 +2604,8 @@ class ContextBuilder:
             _target_market = self.settings.kis_target_market
         _is_us_market = _target_market.lower().strip() in {"us", "nasdaq", "nyse", "amex"}
         _fx = snapshot.usd_krw_rate if snapshot.usd_krw_rate > 0 else 0.0
-        macro_research_market = self._macro_research_market(_target_market)
-        macro_research_thesis_rows = self._macro_research_thesis_rows(
-            market=macro_research_market,
-            limit=5,
-        )
-        macro_research_thesis_context = self._compress_macro_research_thesis_context(
-            macro_research_thesis_rows,
-        )
+        macro_research_thesis_rows: list[dict[str, Any]] = []
+        macro_research_thesis_context = ""
 
         def _fmt_krw(v: float) -> str:
             try:

@@ -55,7 +55,7 @@ def test_context_builder_does_not_build_environment_queries_from_research_briefi
     assert not any("Shipping disruptions" in query for query in queries)
 
 
-def test_context_builder_injects_macro_research_thesis_context() -> None:
+def test_context_builder_does_not_inject_macro_research_thesis_context() -> None:
     repo = FakeRepo()
     repo.macro_research_theses = [
         {
@@ -81,12 +81,9 @@ def test_context_builder_injects_macro_research_thesis_context() -> None:
 
     context = builder.build(agent_id="gpt", snapshot=snapshot)
 
-    assert repo.macro_research_thesis_calls[0]["market"] == "kr"
-    assert context["macro_research_theses"][0]["theme_key"] == "climate_transition"
-    assert "Macro Research Thesis Seeds:" in context["macro_research_thesis_context"]
-    assert "climate_transition" in context["macro_research_thesis_context"]
-    assert "grid equipment" in context["macro_research_thesis_context"]
-    assert "bok:climate:1" in context["macro_research_thesis_context"]
+    assert repo.macro_research_thesis_calls == []
+    assert context["macro_research_theses"] == []
+    assert context["macro_research_thesis_context"] == ""
 
 
 def test_context_builder_hydrates_vector_hits_and_prefers_ticker_overlap() -> None:
