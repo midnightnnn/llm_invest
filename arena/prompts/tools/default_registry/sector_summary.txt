@@ -1,1 +1,0 @@
-Summarizes sector rotation so you can see which groups are leading, lagging, and attracting capital. Use market_scope='us' for US-only sector views and market_scope='kr' for Korean-stock sector views; omit market_scope only when the full configured market scope is intended.

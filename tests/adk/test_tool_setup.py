@@ -22,15 +22,15 @@ class _RepoForDisabledTools:
         return self.disabled
 
 
-def test_apply_tool_schema_metadata_prefers_registry_description() -> None:
+def test_apply_tool_schema_metadata_preserves_callable_docstring() -> None:
     def original_tool(ticker: str) -> dict[str, str]:
-        """Original docstring that should not leak to the model."""
+        """Original callable schema description visible to the model."""
         return {"ticker": ticker}
 
     entry = ToolEntry(
         tool_id="screen_market",
         name="screen_market",
-        description="Canonical registry description for the model schema.",
+        description="Registry UI description that must not override the schema.",
         category="quant",
         callable=original_tool,
     )
@@ -42,7 +42,7 @@ def test_apply_tool_schema_metadata_prefers_registry_description() -> None:
     )
 
     assert wrapped.__name__ == "screen_market"
-    assert wrapped.__doc__ == "Canonical registry description for the model schema."
+    assert wrapped.__doc__ == "Original callable schema description visible to the model."
 
 
 def test_build_tool_wrapper_awaits_async_callables() -> None:
@@ -193,6 +193,7 @@ def test_resolve_adk_tools_exposes_model_visible_function_declarations() -> None
     from arena.agents.adk_tool_helpers import noop_search_tool_memories, noop_update_candidate_ledger
 
     def sample_schema_tool(ticker: str, side: Literal["BUY", "SELL"] = "BUY") -> dict[str, str]:
+        """Callable docstring schema description visible to the model."""
         return {"ticker": ticker, "side": side}
 
     settings = load_settings()
@@ -202,7 +203,7 @@ def test_resolve_adk_tools_exposes_model_visible_function_declarations() -> None
             ToolEntry(
                 tool_id="sample_schema_tool",
                 name="sample_schema_tool",
-                description="Canonical schema description visible to the model.",
+                description="Registry catalog text that must not reach the model schema.",
                 category="test",
                 callable=sample_schema_tool,
             )
@@ -225,7 +226,7 @@ def test_resolve_adk_tools_exposes_model_visible_function_declarations() -> None
     assert len(resolution.tool_schemas) == 1
     schema = resolution.tool_schemas[0]
     assert schema["name"] == "sample_schema_tool"
-    assert schema["description"] == "Canonical schema description visible to the model."
+    assert schema["description"] == "Callable docstring schema description visible to the model."
     params = schema["parameters"]
     assert "ticker" in params["required"]
     assert params["properties"]["ticker"]["type"] == "STRING"

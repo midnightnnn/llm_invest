@@ -9,12 +9,7 @@ from typing import Any, Literal, Optional
 
 from arena.config import Settings, research_generation_status
 from arena.data.bq import BigQueryRepository
-from arena.macro_research_taxonomy import (
-    MACRO_RESEARCH_DOC_TYPES,
-    MACRO_RESEARCH_MARKETS,
-    MACRO_RESEARCH_SOURCES,
-    MACRO_RESEARCH_THEME_CODES,
-)
+from arena.macro_research_taxonomy import MACRO_RESEARCH_MARKETS, MACRO_RESEARCH_SOURCES
 from arena.market_feature_normalization import daily_history_sources
 from arena.market_sources import live_market_sources_for_markets
 from arena.memory.policy import (
@@ -29,12 +24,8 @@ from arena.tools._market_scope import MarketScope, MarketScopeError
 _PEER_LESSON_SOURCES = frozenset({"memory_compaction", "thesis_chain_compaction"})
 _PUBLIC_RESEARCH_CATEGORIES = ("global_market", "geopolitical", "sector_trends")
 ResearchCategory = Literal["global_market", "geopolitical", "sector_trends", "sector"]
-MacroResearchScope = Literal["latest", "week", "month", "quarter", "all"]
-MacroResearchDetailLevel = Literal["list", "compact", "read", "facts", "full"]
 MacroResearchMarket = Literal[*MACRO_RESEARCH_MARKETS]
 MacroResearchSource = Literal[*MACRO_RESEARCH_SOURCES]
-MacroResearchDocType = Literal[*MACRO_RESEARCH_DOC_TYPES]
-MacroResearchTheme = Literal[*MACRO_RESEARCH_THEME_CODES]
 logger = logging.getLogger(__name__)
 
 
@@ -100,19 +91,6 @@ def _clean_macro_research_ids(values: Optional[list[str]]) -> list[str] | None:
     return list(dict.fromkeys(clean)) or None
 
 
-def _macro_research_since(scope: str) -> datetime | None:
-    token = str(scope or "").strip().lower() or "week"
-    if token == "all":
-        return None
-    days = {
-        "latest": 3,
-        "week": 7,
-        "month": 31,
-        "quarter": 92,
-    }.get(token, 7)
-    return utc_now() - timedelta(days=days)
-
-
 def _tool_datetime(value: Any) -> Any:
     if isinstance(value, datetime):
         if value.tzinfo is None:
@@ -127,28 +105,6 @@ def _has_tool_value(value: Any) -> bool:
     if isinstance(value, str) and not value.strip():
         return False
     return True
-
-
-def _clip_tool_text(value: Any, *, max_len: int) -> str:
-    text = str(value or "").strip()
-    if len(text) <= max_len:
-        return text
-    return text[: max(0, max_len - 3)].rstrip() + "..."
-
-
-def _rich_macro_research_detail(row: dict[str, Any]) -> dict[str, Any]:
-    detail = _parse_json_field(row.get("detail_json"))
-    if not isinstance(detail, dict):
-        detail = {}
-    return {
-        "key_findings": detail.get("key_findings") or row.get("key_points"),
-        "methodology": detail.get("methodology"),
-        "macro_channels": detail.get("macro_channels"),
-        "asset_implications": detail.get("asset_implications"),
-        "watch_indicators": detail.get("watch_indicators"),
-        "caveats": detail.get("caveats") or row.get("risk_flags"),
-        "investment_theses": detail.get("investment_theses"),
-    }
 
 
 def _document_list_item(row: dict[str, Any], *, macro: bool = False) -> dict[str, Any]:
@@ -175,6 +131,8 @@ def _document_list_item(row: dict[str, Any], *, macro: bool = False) -> dict[str
         if field == "category" and macro:
             continue
         if field == "doc_type" and not macro:
+            continue
+        if field == "themes" and macro:
             continue
         value = row.get(field)
         if field == "published_at":
@@ -549,7 +507,11 @@ class _ContextTools:
         return bench_info
 
     def search_past_experiences(self, query: str, limit: int = 5) -> list[dict[str, Any]]:
-        """Search your own past trades, lessons, and manual notes. Use this for your personal history only. For other models' distilled lessons, use search_peer_lessons."""
+        """Search your own past trades, lessons, and manual notes.
+
+        Use this for your personal history only. For other models' distilled
+        lessons, use search_peer_lessons.
+        """
         if (
             not query
             or not query.strip()
@@ -572,7 +534,11 @@ class _ContextTools:
         return self._dedupe_memory_search_rows(rows or [], limit=max_limit)
 
     def search_peer_lessons(self, query: str, limit: int = 5) -> list[dict[str, Any]]:
-        """Search other agents' compacted lessons in the same tenant and mode. Use this for peer takeaways, not your own history."""
+        """Search compacted lessons from other models for peer takeaways.
+
+        Searches other agents' compacted lessons in the same tenant and mode.
+        Use this for peer takeaways, not your own history.
+        """
         if (
             not query
             or not query.strip()
@@ -645,7 +611,12 @@ class _ContextTools:
         limit: int = 5,
         refresh_missing: bool = False,
     ) -> list[dict[str, Any]]:
-        """Fetches research briefings and can generate missing requested context on demand."""
+        """Fetch cached or on-demand research context for broad market themes and single-name analysis.
+
+        When refresh_missing is true and research generation is available, this
+        can run the Gemini + Google Search research agent to fill missing
+        requested context before returning results.
+        """
         max_limit = max(1, min(int(limit), 20))
         clean_tickers = _clean_research_tickers(tickers)
         clean_cats = _clean_research_categories(categories)
@@ -795,101 +766,60 @@ class _ContextTools:
 
     async def get_macro_research_briefing(
         self,
-        scope: MacroResearchScope = "week",
         market: MacroResearchMarket = "all",
         sources: Optional[list[MacroResearchSource]] = None,
-        doc_types: Optional[list[MacroResearchDocType]] = None,
-        themes: Optional[list[MacroResearchTheme]] = None,
         source_doc_ids: Optional[list[str]] = None,
-        detail_level: MacroResearchDetailLevel = "compact",
         offset: int = 0,
-        max_chars: int = 12000,
         limit: int = 5,
     ) -> list[dict[str, Any]]:
-        """Lists official BOK/St. Louis Fed research documents; with source_doc_ids, live-fetches source text."""
+        """Browse official BOK and St. Louis Fed research documents from rule-based metadata.
+
+        Without source_doc_ids, returns a document list with source_doc_id,
+        source_url, title, source, market, and document type. With
+        source_doc_ids, live-fetches the linked source text and returns
+        content_text, content_hash, and next_offset when more text is
+        available. Use macro_snapshot instead for numeric FRED/ECOS indicators
+        and derived spreads.
+        """
         max_limit = max(1, min(int(limit), 12))
         clean_market = str(market or "").strip().lower() or "all"
         clean_doc_ids = _clean_macro_research_ids(source_doc_ids)
         doc_loader = getattr(self.repo, "get_macro_research_documents", None)
-        if callable(doc_loader):
-            rows = doc_loader(
-                source_doc_ids=clean_doc_ids,
-                sources=_clean_macro_research_tokens(sources),
-                doc_types=_clean_macro_research_tokens(doc_types),
-                themes=_clean_macro_research_tokens(themes),
-                market=clean_market,
-                since=None if clean_doc_ids else _macro_research_since(str(scope or "week")),
-                limit=max_limit,
-            )
-            detail = str(detail_level or "compact").strip().lower()
-            if clean_doc_ids or detail in {"read", "facts", "full"}:
-                out: list[dict[str, Any]] = []
-                updater = getattr(self.repo, "update_macro_research_document_snapshot", None)
-                for row in rows[:max_limit]:
-                    if not isinstance(row, dict):
-                        continue
-                    item = _read_document_item(
-                        row,
-                        settings=self.settings,
-                        namespace="macro",
-                        offset=offset,
-                        max_chars=max_chars,
-                    )
-                    if detail == "full" and row.get("detail_json") is not None:
-                        item["detail_json"] = _parse_json_field(row.get("detail_json"))
-                    _update_document_snapshot_best_effort(
-                        updater,
-                        row.get("source_doc_id"),
-                        content_hash=item.get("content_hash"),
-                        content_gcs_uri=item.get("content_gcs_uri"),
-                        text_char_count=item.get("text_char_count"),
-                        status="fetch_failed" if item.get("fetch_error") else "read",
-                        error_message=item.get("fetch_error"),
-                    )
-                    out.append(item)
-                return out
-            return [_document_list_item(row, macro=True) for row in rows[:max_limit] if isinstance(row, dict)]
-
-        loader = getattr(self.repo, "get_macro_research_briefings", None)
-        if not callable(loader):
+        if not callable(doc_loader):
             return []
-        rows = loader(
+
+        rows = doc_loader(
             source_doc_ids=clean_doc_ids,
             sources=_clean_macro_research_tokens(sources),
-            doc_types=_clean_macro_research_tokens(doc_types),
-            themes=_clean_macro_research_tokens(themes),
             market=clean_market,
-            since=None if clean_doc_ids else _macro_research_since(str(scope or "week")),
+            since=None,
             limit=max_limit,
         )
-        detail = str(detail_level or "compact").strip().lower()
+
+        if not clean_doc_ids:
+            return [_document_list_item(row, macro=True) for row in rows[:max_limit] if isinstance(row, dict)]
+
         out: list[dict[str, Any]] = []
+        updater = getattr(self.repo, "update_macro_research_document_snapshot", None)
         for row in rows[:max_limit]:
             if not isinstance(row, dict):
                 continue
-            item: dict[str, Any] = {
-                "published_at": _tool_datetime(row.get("published_at")),
-                "source": row.get("source"),
-                "doc_type": row.get("doc_type"),
-                "market": row.get("market"),
-                "title": row.get("title"),
-                "headline": row.get("headline"),
-                "summary": row.get("summary"),
-                "market_implication": row.get("market_implication"),
-                "themes": row.get("themes") or [],
-                "source_doc_id": row.get("source_doc_id"),
-            }
-            item = {key: value for key, value in item.items() if _has_tool_value(value)}
-            if detail in {"facts", "full"}:
-                rich_detail = _rich_macro_research_detail(row)
-                for key, value in rich_detail.items():
-                    if _has_tool_value(value):
-                        item[key] = value
-                for key in ("confidence", "source_url", "model"):
-                    if _has_tool_value(row.get(key)):
-                        item[key] = row.get(key)
-            if detail == "full" and row.get("detail_json") is not None:
-                item["detail_json"] = _parse_json_field(row.get("detail_json"))
+            item = _read_document_item(
+                row,
+                settings=self.settings,
+                namespace="macro",
+                offset=offset,
+                max_chars=30000,
+            )
+            _update_document_snapshot_best_effort(
+                updater,
+                row.get("source_doc_id"),
+                content_hash=item.get("content_hash"),
+                content_gcs_uri=item.get("content_gcs_uri"),
+                text_char_count=item.get("text_char_count"),
+                status="fetch_failed" if item.get("fetch_error") else "read",
+                error_message=item.get("fetch_error"),
+            )
             out.append(item)
         return out
 
@@ -1294,7 +1224,13 @@ class _ContextTools:
         return allocation
 
     def portfolio_diagnosis(self, mdd_days: int = 60, top_n: int = 8, benchmark_ticker: str = "") -> dict[str, Any]:
-        """Diagnoses current holdings and returns an HRP allocation view."""
+        """Diagnose current holdings without allocation advice.
+
+        Returns concentration (HHI), per-ticker risk contribution, portfolio
+        MDD, weighted momentum/volatility, benchmark excess return, and
+        current-holding joint-policy ranker scores. Use optimize_portfolio
+        afterwards if rebalancing weights are needed.
+        """
         weights, _, _ = self._portfolio_weights()
         if not weights:
             return {"error": "no active positions"}
@@ -1470,7 +1406,12 @@ class _ContextTools:
         return unrealized
 
     def trade_performance(self, lookback_days: int = 90, ticker: str = "") -> dict[str, Any]:
-        """Analyses closed round-trip trades and current unrealised P&L."""
+        """Analyze closed round-trip trades and current unrealized P&L.
+
+        Returns win rate, average return, holding period, behavioral patterns,
+        recent streaks, and current unrealized positions. Use this to review
+        your own track record before making new decisions.
+        """
         from datetime import timedelta
 
         target = str(ticker or "").strip().upper()

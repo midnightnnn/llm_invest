@@ -1059,7 +1059,32 @@ class MacroTools:
         include_series: bool = False,
         max_points: int = 24,
     ) -> dict[str, Any]:
-        """마켓에 따라 US(FRED) / KR(ECOS) 거시경제지표를 일괄 조회합니다."""
+        """Fetch a macro snapshot adapted to the agent market.
+
+        When macro history is available, prefer the 3-layer response:
+        regime_card, market_implications, grouped evidence, notable_movers, and
+        omitted count. Falls back to latest FRED/ECOS API data when history is
+        unavailable.
+
+        Call pattern:
+        - Start with macro_snapshot() or depth="brief" for normal trading-cycle context.
+        - Drill down with focus=[...] when a macro area matters.
+        - Use depth="full" with indicators=[...] and include_series=True only for specific time-series inspection.
+
+        Parameters:
+        - depth: "brief" (default), "standard", or "full".
+        - focus: optional list such as "rates_curve", "inflation", "growth_cycle", "credit_money", "fx_external", "risk_market", "sentiment", "housing", "construction", or "consumption".
+        - indicators: optional exact indicator keys such as "usd_krw", "kr_current_account", or "treasury_10y".
+        - lookback_days: historical window for changes and z-scores; default 540.
+        - max_indicators: cap on returned evidence indicators; default 30.
+        - include_series: when true and depth="full", includes recent points for requested indicators.
+        - max_points: cap on included series points; default 24.
+
+        Examples:
+        - macro_snapshot()
+        - macro_snapshot(depth="brief", focus=["fx_external"])
+        - macro_snapshot(depth="full", indicators=["usd_krw"], include_series=True, max_points=24)
+        """
         logger.info("[cyan]TOOL[/cyan] macro_snapshot")
 
         historical = self._historical_macro_snapshot(

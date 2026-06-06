@@ -1,1 +1,0 @@
-Returns RSI, MACD, Bollinger Bands, moving-average trend, volume analysis (volume ratio, OBV trend, price-volume confirmation), KOSPI investor flow signals (foreign/institutional net buy), and KOSPI short-selling ratio.

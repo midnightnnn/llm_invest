@@ -211,7 +211,7 @@ class SentimentTools:
         tickers: Optional[list[str]] = None,
         max_posts: int = 10,
     ) -> list[dict[str, Any]] | dict[str, Any]:
-        """Fetches recent Reddit posts mentioning ticker(s) from finance subreddits."""
+        """Fetch recent Reddit posts from finance subreddits for retail sentiment."""
         if not self._has_us_market():
             return [{"error": "fetch_reddit_sentiment is only available for US market agents."}]
         max_posts = max(1, min(int(max_posts), 25))
@@ -328,7 +328,7 @@ class SentimentTools:
         filing_type: str = "10-K",
         max_items: int = 5,
     ) -> list[dict[str, Any]] | dict[str, Any]:
-        """Fetches recent SEC filings for ticker(s) from EDGAR submissions API."""
+        """Fetch recent SEC filings such as 10-K, 10-Q, and 8-K from EDGAR."""
         if not self._has_us_market():
             return [{"error": "fetch_sec_filings is only available for US market agents."}]
         max_items = max(1, min(int(max_items), 15))
@@ -512,11 +512,12 @@ class SentimentTools:
             return None
 
     def fear_greed_index(self, lookback_days: int = 252) -> dict[str, Any]:
-        """Builds a composite market regime indicator from multiple signals.
+        """Build a composite market regime indicator from multiple signals.
 
-        KOSPI → VKOSPI + breadth + momentum + institutional flow
-        US    → VIX + breadth + momentum
-        Score: 0 = extreme fear / risk-off, 100 = extreme greed / risk-on.
+        Combines volatility index (VKOSPI/VIX), market breadth, momentum trend,
+        and institutional flow. Score: 0 = extreme fear / risk-off, 100 =
+        extreme greed / risk-on. Returns regime_label (risk_on, neutral, or
+        risk_off) with sub-component scores.
         """
         lookback = max(30, min(int(lookback_days), 1500))
         markets = self._effective_markets()
@@ -752,7 +753,11 @@ class SentimentTools:
         days_ahead: int = 14,
         limit: int = 30,
     ) -> dict[str, Any]:
-        """Fetches upcoming earnings/dividend events. KOSPI uses KIS API, US uses Nasdaq calendar."""
+        """Fetch upcoming earnings and dividend events.
+
+        US uses Nasdaq earnings calendar. KOSPI uses KIS dividend schedule and
+        consensus earnings estimates.
+        """
         days = max(1, min(int(days_ahead), 45))
         lim = max(1, min(int(limit), 200))
         tokens = _clean_ticker_tokens(ticker, tickers)

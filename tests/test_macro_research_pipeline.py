@@ -327,7 +327,7 @@ def test_macro_research_theme_phrases_are_canonicalized() -> None:
     ]
 
 
-class _RepoForMacroTool:
+class _RepoForMacroBriefingOnlyTool:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
 
@@ -375,6 +375,9 @@ class _RepoForMacroDocumentTool:
         self.calls: list[dict[str, Any]] = []
         self.updates: list[dict[str, Any]] = []
 
+    def get_macro_research_briefings(self, **kwargs: Any) -> list[dict[str, Any]]:
+        raise AssertionError("get_macro_research_briefings should not be used by the macro document tool")
+
     def get_macro_research_documents(self, **kwargs: Any) -> list[dict[str, Any]]:
         self.calls.append(kwargs)
         return [
@@ -410,17 +413,19 @@ def test_get_macro_research_briefing_lists_document_metadata_when_available() ->
 
     out = asyncio.run(
         tool.get_macro_research_briefing(
-            scope="week",
             market="kr",
             sources=["bok"],
-            doc_types=["issue_note"],
-            themes=["credit"],
             limit=1,
         )
     )
 
-    assert repo.calls[0]["sources"] == ["bok"]
-    assert repo.calls[0]["themes"] == ["credit"]
+    assert repo.calls[0] == {
+        "source_doc_ids": None,
+        "sources": ["bok"],
+        "market": "kr",
+        "since": None,
+        "limit": 1,
+    }
     assert out == [
         {
             "published_at": "2026-05-29T00:00:00+00:00",
@@ -430,7 +435,6 @@ def test_get_macro_research_briefing_lists_document_metadata_when_available() ->
             "market": "kr",
             "title": "Monetary Policy and Household Credit",
             "source_url": "https://www.bok.or.kr/portal/bbs/P0000559/view.do?nttId=1001&menuNo=201156",
-            "themes": ["monetary_policy", "credit"],
             "source_doc_id": "bok:bok_issue_notes:1001:201156",
             "text_char_count": 128,
             "status": "listed",
@@ -450,6 +454,7 @@ def test_get_macro_research_briefing_reads_live_source_by_doc_id(monkeypatch) ->
     tool.settings.trading_mode = "paper"
     tool.settings.macro_research_gcs_bucket = ""
     tool.tenant_id = "tenant-a"
+    body = "Official document body " * 20
 
     monkeypatch.setattr(
         adk_context_tools,
@@ -458,7 +463,7 @@ def test_get_macro_research_briefing_reads_live_source_by_doc_id(monkeypatch) ->
             source_url=url,
             final_url=url,
             content_type="text/html",
-            content_text="Official document body " * 20,
+            content_text=body,
             content_hash="hash-read",
             retrieved_at=datetime(2026, 5, 30, 0, 0, tzinfo=timezone.utc),
         ),
@@ -467,17 +472,15 @@ def test_get_macro_research_briefing_reads_live_source_by_doc_id(monkeypatch) ->
     out = asyncio.run(
         tool.get_macro_research_briefing(
             source_doc_ids=["bok:bok_issue_notes:1001:201156"],
-            detail_level="read",
             offset=0,
-            max_chars=80,
             limit=1,
         )
     )
 
     assert repo.calls[0]["source_doc_ids"] == ["bok:bok_issue_notes:1001:201156"]
     assert repo.calls[0]["since"] is None
-    assert out[0]["content_text"].startswith("Official document body")
-    assert out[0]["next_offset"] == 80
+    assert out[0]["content_text"] == body
+    assert "next_offset" not in out[0]
     assert out[0]["content_hash"] == "hash-read"
     assert repo.updates[0]["status"] == "read"
     assert repo.updates[0]["content_hash"] == "hash-read"
@@ -517,9 +520,7 @@ def test_get_macro_research_briefing_returns_read_response_when_snapshot_update_
     out = asyncio.run(
         tool.get_macro_research_briefing(
             source_doc_ids=["bok:bok_issue_notes:1001:201156"],
-            detail_level="read",
             offset=0,
-            max_chars=80,
             limit=1,
         )
     )
@@ -528,10 +529,10 @@ def test_get_macro_research_briefing_returns_read_response_when_snapshot_update_
     assert out[0]["content_hash"] == "hash-fresh"
 
 
-def test_get_macro_research_briefing_returns_compact_rows() -> None:
+def test_get_macro_research_briefing_does_not_fallback_to_summarized_briefings() -> None:
     from arena.agents.adk_agents import _ContextTools
 
-    repo = _RepoForMacroTool()
+    repo = _RepoForMacroBriefingOnlyTool()
     tool = _ContextTools.__new__(_ContextTools)
     tool.repo = repo
     tool.settings = load_settings()
@@ -540,136 +541,24 @@ def test_get_macro_research_briefing_returns_compact_rows() -> None:
 
     out = asyncio.run(
         tool.get_macro_research_briefing(
-            scope="week",
             market="kr",
             sources=["bok"],
-            doc_types=["issue_note"],
-            themes=["credit"],
-            detail_level="compact",
             limit=2,
         )
     )
 
-    assert "tenant_id" not in repo.calls[0]
-    assert repo.calls[0]["market"] == "kr"
-    assert repo.calls[0]["sources"] == ["bok"]
-    assert repo.calls[0]["doc_types"] == ["issue_note"]
-    assert repo.calls[0]["themes"] == ["credit"]
-    assert repo.calls[0]["since"] is not None
-    assert out == [
-        {
-            "published_at": "2026-05-29T00:00:00+00:00",
-            "source": "bok",
-            "doc_type": "issue_note",
-            "market": "kr",
-            "title": "Monetary Policy and Household Credit",
-            "headline": "BOK flags credit sensitivity",
-            "summary": "The note links household credit sensitivity to policy rates.",
-            "market_implication": "KR duration and bank credit risk should be monitored.",
-            "themes": ["monetary_policy", "credit"],
-            "source_doc_id": "bok:bok_issue_notes:1001:201156",
-        }
-    ]
+    assert out == []
+    assert repo.calls == []
 
 
-def test_get_macro_research_briefing_compact_preserves_full_summary() -> None:
-    from arena.agents.adk_agents import _ContextTools
-
-    long_summary = ("The official research summary keeps a decision-relevant mechanism. " * 14) + "SUMMARY_TAIL"
-    repo = _RepoForMacroTool()
-
-    def get_rows(**kwargs: Any) -> list[dict[str, Any]]:
-        repo.calls.append(kwargs)
-        rows = _RepoForMacroTool().get_macro_research_briefings(**kwargs)
-        rows[0]["summary"] = long_summary
-        return rows
-
-    repo.get_macro_research_briefings = get_rows  # type: ignore[method-assign]
-    tool = _ContextTools.__new__(_ContextTools)
-    tool.repo = repo
-    tool.settings = load_settings()
-    tool.settings.trading_mode = "paper"
-    tool.tenant_id = "tenant-a"
-
-    out = asyncio.run(
-        tool.get_macro_research_briefing(
-            scope="week",
-            market="kr",
-            detail_level="compact",
-            limit=1,
-        )
-    )
-
-    assert out[0]["summary"] == long_summary
-    assert out[0]["summary"].endswith("SUMMARY_TAIL")
-
-
-def test_get_macro_research_briefing_facts_returns_research_detail() -> None:
-    from arena.agents.adk_agents import _ContextTools
-
-    repo = _RepoForMacroTool()
-    tool = _ContextTools.__new__(_ContextTools)
-    tool.repo = repo
-    tool.settings = load_settings()
-    tool.settings.trading_mode = "paper"
-    tool.tenant_id = "tenant-a"
-
-    out = asyncio.run(
-        tool.get_macro_research_briefing(
-            scope="all",
-            market="kr",
-            sources=["bok"],
-            detail_level="facts",
-            limit=1,
-        )
-    )
-
-    assert out[0]["key_findings"] == ["Credit is rate-sensitive"]
-    assert out[0]["methodology"] == "Uses official household credit and mortgage-rate choice evidence."
-    assert out[0]["macro_channels"] == ["policy rates", "household credit"]
-    assert out[0]["asset_implications"] == ["KR duration risk should be monitored"]
-    assert out[0]["watch_indicators"] == ["BOK base rate"]
-    assert out[0]["caveats"] == ["Central-bank research note"]
-    assert out[0]["investment_theses"][0]["theme_key"] == "credit_transmission"
-    assert out[0]["confidence"] == 0.82
-
-
-def test_get_macro_research_briefing_accepts_source_doc_ids_for_drilldown() -> None:
-    from arena.agents.adk_agents import _ContextTools
-
-    repo = _RepoForMacroTool()
-    tool = _ContextTools.__new__(_ContextTools)
-    tool.repo = repo
-    tool.settings = load_settings()
-    tool.settings.trading_mode = "paper"
-    tool.tenant_id = "tenant-a"
-
-    out = asyncio.run(
-        tool.get_macro_research_briefing(
-            source_doc_ids=["bok:bok_issue_notes:1001:201156"],
-            detail_level="facts",
-            limit=1,
-        )
-    )
-
-    assert repo.calls[0]["source_doc_ids"] == ["bok:bok_issue_notes:1001:201156"]
-    assert out[0]["source_doc_id"] == "bok:bok_issue_notes:1001:201156"
-    assert out[0]["key_findings"] == ["Credit is rate-sensitive"]
-
-
-def test_get_macro_research_briefing_schema_exposes_filter_enums() -> None:
+def test_get_macro_research_briefing_schema_exposes_minimal_document_browser_params() -> None:
     from google.adk.tools.function_tool import FunctionTool
 
     from arena.agents.adk_agents import _ContextTools
-    from arena.macro_research_taxonomy import (
-        MACRO_RESEARCH_DOC_TYPES,
-        MACRO_RESEARCH_MARKETS,
-        MACRO_RESEARCH_SOURCES,
-        MACRO_RESEARCH_THEME_CODES,
-    )
+    from arena.macro_research_taxonomy import MACRO_RESEARCH_MARKETS, MACRO_RESEARCH_SOURCES
 
     tool = _ContextTools.__new__(_ContextTools)
-    tool.repo = _RepoForMacroTool()
+    tool.repo = _RepoForMacroBriefingOnlyTool()
     tool.settings = load_settings()
     tool.tenant_id = "tenant-a"
 
@@ -679,12 +568,9 @@ def test_get_macro_research_briefing_schema_exposes_filter_enums() -> None:
     )
     props = params["properties"]
 
-    assert props["scope"]["enum"] == ["latest", "week", "month", "quarter", "all"]
+    assert set(props) == {"market", "sources", "source_doc_ids", "offset", "limit"}
     assert props["market"]["enum"] == list(MACRO_RESEARCH_MARKETS)
     assert props["sources"]["items"]["enum"] == list(MACRO_RESEARCH_SOURCES)
-    assert props["doc_types"]["items"]["enum"] == list(MACRO_RESEARCH_DOC_TYPES)
-    assert props["themes"]["items"]["enum"] == list(MACRO_RESEARCH_THEME_CODES)
-    assert props["detail_level"]["enum"] == ["list", "compact", "read", "facts", "full"]
 
 
 def test_macro_research_schema_and_registry_are_exposed() -> None:
@@ -710,6 +596,9 @@ def test_macro_research_schema_and_registry_are_exposed() -> None:
     assert entry.tier == "optional"
     assert "FRED" not in entry.description.splitlines()[0]
     assert '["fred"]' not in entry.description
+    assert "detail_level" not in entry.description
+    assert "doc_types" not in entry.description
+    assert "themes" not in entry.description
     assert "FRED" not in entry.description_ko
     assert "source_doc_id" in entry.description
     assert "드릴다운" in entry.description_ko

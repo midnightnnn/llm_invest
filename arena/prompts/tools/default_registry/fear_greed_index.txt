@@ -1,1 +1,0 @@
-Composite market regime indicator (0=extreme fear/risk-off, 100=extreme greed/risk-on). Combines volatility index (VKOSPI/VIX), market breadth, momentum trend, and institutional flow. Returns regime_label (risk_on/neutral/risk_off) with sub-component scores.

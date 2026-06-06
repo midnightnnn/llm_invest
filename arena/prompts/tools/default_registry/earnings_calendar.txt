@@ -1,1 +1,0 @@
-Fetches upcoming earnings/dividend events. US: Nasdaq earnings calendar. KOSPI: KIS dividend schedule + consensus earnings estimates.

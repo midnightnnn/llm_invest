@@ -37,11 +37,8 @@ def _schema_safe_annotations(fn: Any) -> dict[str, Any] | None:
 
 def apply_tool_schema_metadata(fn: Any, *, entry: ToolEntry, sig: inspect.Signature) -> Any:
     name = str(entry.name or entry.tool_id or getattr(fn, "__name__", "tool")).strip() or "tool"
-    description = str(entry.description or "").strip()
     fn.__name__ = name
     fn.__qualname__ = name
-    if description:
-        fn.__doc__ = description
     safe_annotations = _schema_safe_annotations(fn)
     if safe_annotations is not None:
         fn.__annotations__ = safe_annotations

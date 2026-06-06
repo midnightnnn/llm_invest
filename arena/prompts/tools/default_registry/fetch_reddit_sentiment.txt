@@ -1,1 +1,0 @@
-Fetches recent Reddit posts from finance subreddits for retail sentiment.

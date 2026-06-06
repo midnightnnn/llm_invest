@@ -325,6 +325,7 @@ class ScratchWorkspace:
         self._context = _safe_json(context or {})
 
     def run_python(self, code: str, inputs: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+        """Run temporary Python analysis in the current cycle scratch workspace."""
         payload = {
             "code": str(code or ""),
             "inputs": _safe_json(inputs or {}),

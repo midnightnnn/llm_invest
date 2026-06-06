@@ -1,1 +1,0 @@
-Diagnoses current holdings: concentration (HHI), per-ticker risk contribution, portfolio MDD, weighted momentum/volatility, benchmark excess return, and current-holding joint-policy ranker scores. Pure diagnosis — no allocation advice. Use optimize_portfolio afterwards if you need rebalancing weights.

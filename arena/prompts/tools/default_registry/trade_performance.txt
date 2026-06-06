@@ -1,1 +1,0 @@
-Analyses your closed round-trip trades (win rate, avg return, holding period, behavioral patterns) and current unrealised P&L. Use to review your own track record before making new decisions.

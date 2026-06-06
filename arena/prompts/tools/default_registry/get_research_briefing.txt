@@ -1,1 +1,0 @@
-Fetches cached or on-demand research context for broad market themes and single-name analysis. When refresh_missing is true and research generation is available, it can run the Gemini + Google Search research agent to fill missing requested context before returning results.

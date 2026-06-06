@@ -1324,12 +1324,14 @@ class QuantTools:
         max_volatility: Optional[float] = None,
         market_scope: MarketScopeChoice = None,
     ) -> list[dict]:
-        """Discovers candidates across multiple styles inside the runtime universe.
+        """Low-level diagnostic candidate generator used by recommend_opportunities.
 
-        `bucket=None` (default) returns a balanced mix across momentum, pullback,
-        recovery, defensive, and value. Set `bucket` explicitly to focus on one
-        style. If `sort_by` is provided without a bucket, the tool falls back to
-        the legacy single-field ranking mode.
+        Surfaces raw screen-only rows across discovery buckets. Use this when
+        inspecting raw bucket screens; it is screen-only and does not provide
+        joint-policy confidence or per-signal ranker contributions. Use
+        market_scope='us' for US-only screening and market_scope='kr' for
+        Korean-stock screening; omit market_scope only when the full configured
+        market scope is intended.
         """
         bucket_token = str(bucket or "").strip().lower()
         if bucket_token in {"auto", "default", "none"}:
@@ -1569,18 +1571,19 @@ class QuantTools:
         max_score_age_hours: int = _OPPORTUNITY_DEFAULT_MAX_SCORE_AGE_HOURS,
         market_scope: MarketScopeChoice = None,
     ) -> dict[str, Any]:
-        """Returns precomputed regularized joint-policy opportunities from BigQuery.
+        """Find fresh buy and replacement ideas across the runtime universe.
 
-        Reads ``opportunity_ranker_scores_latest`` and classifies freshness by
-        market calendar. Latest previous-session rows are usable on weekends
-        and holidays; current-session gaps are surfaced as ``status='degraded'``.
-        Rows older than the latest reference trading session still return
-        ``status='unusable'``. There is no heuristic fallback by design —
-        silently substituting a different algorithm would hide failures.
-        ``profiles`` filters style buckets (aggressive/balanced/defensive/
-        value/tactical). ``buckets`` filters ranker-native buckets such as
-        momentum, pullback, and recovery; legacy profile tokens passed through
-        ``buckets`` are normalized to profiles.
+        Uses the latest regularized joint-policy ranker scores from shared prep,
+        combining price action, sentiment, forecast, technical, and fundamental
+        signals. Returns global recommendations plus strategy-profile context,
+        with action, model confidence, risk notes, and per-signal joint-policy
+        contributions explaining why each ticker surfaced. Useful when looking
+        for new positions, portfolio rotation candidates, or replacements for
+        weaker holdings. Freshness is market-calendar aware and stale or
+        incomplete prep is surfaced explicitly instead of silently falling back.
+        Use market_scope='us' for US-only requests and market_scope='kr' for
+        Korean-stock requests; omit market_scope only when the user wants the
+        agent/account's full configured market scope.
         """
         requested_max_age_hours = _bounded_hours(
             max_score_age_hours,
@@ -1751,13 +1754,19 @@ class QuantTools:
         min_weight: Optional[float] = None,
         cash_buffer: Optional[float] = None,
     ) -> dict:
-        """Runs portfolio optimization with backtest MDD.
+        """Answer one question: how much of each ticker to hold.
 
-        strategy: 'sharpe' (Max-Sharpe Markowitz), 'risk_parity' (HRP), 'forecast' (ML forecast-enhanced).
-        regime_scale: 0.5-1.0, scales all weights down for risk-off environments (default 1.0 = no scaling).
-        max_weight: per-name cap (e.g. 0.35). Excess redistributed pro-rata to uncapped names.
-        min_weight: drops names below threshold (e.g. 0.02), renormalizes remainder.
-        cash_buffer: final cash reserve in [0, 1]; equities scaled to (1 - cash_buffer).
+        Computes target weights for a basket (current holdings plus new
+        candidates) and emits portfolio-weight rebalance suggestions. Final
+        execution orders must still use explicit BUY/SELL quantity. Supports
+        forecast-enhanced, max-Sharpe, and HRP optimization modes. Gracefully
+        degrades: tickers with insufficient history are excluded in
+        data_quality.excluded; forecast strategy falls back to HRP when coverage
+        is below 50%; a single usable ticker returns weight=1.0. Optional
+        constraints: max_weight per-name cap, min_weight drop floor,
+        cash_buffer reserve, and regime_scale risk-off scaling. Returns
+        weights, rebalance_orders, backtest_mdd, data_quality, status,
+        decision_summary, and evidence_gaps.
         """
         strategy = str(strategy or "sharpe").strip().lower()
         if strategy not in {"sharpe", "risk_parity", "forecast"}:
@@ -1940,11 +1949,14 @@ class QuantTools:
         forecast_mode: ForecastModeChoice = "default",
         market_scope: MarketScopeChoice = None,
     ) -> list[dict]:
-        """Loads direction forecasts from 7-model ensemble (NBEATSx, NHITS, PatchTST, iTransformer, Chronos, TimesFM, Lag-Llama).
+        """Run seven time-series models and summarize model-implied return direction.
 
-        Returns prob_up (0~1), model_votes_up/total, model_direction label, and exp_return_period.
-        If *tickers* is omitted, prefers unresolved discovery candidates plus current holdings
-        from the active cycle context before falling back to the broader forecast universe.
+        Returns direction probability, vote counts, model_direction label, and
+        compact model details for each ticker. If tickers are omitted, defaults
+        to the self-discovered candidate basket plus current holdings. Use
+        market_scope='us' for US-only forecast requests and market_scope='kr'
+        for Korean-stock forecast requests; omit market_scope only when the
+        user wants the agent/account's full configured market scope.
         """
         _BQ_LIMIT = 500  # upper bound for BQ query; forecast table has ~50-60 rows
         mode = self._forecast_mode(forecast_mode)
@@ -2246,7 +2258,12 @@ class QuantTools:
         tickers: Optional[list[str]] = None,
         lookback_days: int = 180,
     ) -> dict[str, Any]:
-        """Calculates RSI/MACD/Bollinger/SMA signals for one or more tickers."""
+        """Return technical signals for one or more tickers.
+
+        Includes RSI, MACD, Bollinger Bands, moving-average trend, volume
+        analysis (volume ratio, OBV trend, price-volume confirmation), KOSPI
+        investor flow signals, and KOSPI short-selling ratio when available.
+        """
         raw_tokens: list[str] = []
 
         if tickers is not None:
@@ -2295,7 +2312,12 @@ class QuantTools:
         *,
         market_scope: MarketScopeChoice = None,
     ) -> list[dict]:
-        """Summarizes average return/volatility by sector from latest features."""
+        """Summarize sector rotation, leaders, laggards, and capital flow context.
+
+        Use market_scope='us' for US-only sector views and market_scope='kr' for
+        Korean-stock sector views; omit market_scope only when the full
+        configured market scope is intended.
+        """
         period_key = str(period).strip().lower()
         field = "ret_20d" if period_key in {"20d", "1m"} else "ret_5d"
         selection = self._resolve_tool_market_scope(market_scope)
@@ -2353,7 +2375,11 @@ class QuantTools:
         excd: str = "NAS",
         max_items: int = 10,
     ) -> dict[str, Any]:
-        """Fetches per-ticker valuation metrics. Auto-routes to US (PER/PBR/EPS/BPS) or KOSPI (EPS/BPS/ROE/부채비율) based on agent market."""
+        """Fetch valuation and fundamental metrics for a basket of tickers.
+
+        US stocks get PER/PBR/EPS/BPS. KOSPI stocks get EPS/BPS/ROE, debt
+        ratio, growth metrics, and analyst consensus when available.
+        """
         has_us = self._has_us_market()
         has_kospi = self._has_kospi_market()
 
@@ -2514,7 +2540,10 @@ class QuantTools:
         indices: Optional[list[IndexSymbol]] = None,
         lookback_days: int = 30,
     ) -> dict[str, Any]:
-        """주요 시장지수, 원자재, 채권 수익률 요약을 반환한다. 에이전트의 타겟 마켓에 따라 적절한 지수를 선택한다."""
+        """Fetch latest quotes and returns for market indices, commodities, and bond yields.
+
+        Automatically adapts to the agent's target market when indices is None.
+        """
         scope = self._scope()
         has_us = scope.has_us
         has_kospi = scope.has_kospi

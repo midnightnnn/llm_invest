@@ -127,29 +127,20 @@ def test_default_registry_can_enable_reddit_sentiment() -> None:
     assert "fetch_reddit_sentiment" in ids
 
 
-def test_default_registry_loads_model_descriptions_from_prompt_files(monkeypatch) -> None:
-    seen: list[tuple[str, ...]] = []
+def test_default_registry_does_not_load_model_descriptions_from_prompt_files(monkeypatch) -> None:
+    def fail_load_prompt_text(*parts: str) -> str:
+        raise AssertionError(f"tool model description prompt file should not be loaded: {parts}")
 
-    def fake_load_prompt_text(*parts: str) -> str:
-        seen.append(parts)
-        return f"loaded::{parts[-1]}"
-
-    monkeypatch.setattr(default_registry_module, "load_prompt_text", fake_load_prompt_text, raising=False)
+    monkeypatch.setattr(default_registry_module, "load_prompt_text", fail_load_prompt_text, raising=False)
 
     reg = default_registry_module.build_default_registry(repo=_FakeRepo(), settings=_settings())
     entries = {entry.tool_id: entry for entry in reg.list_entries(include_disabled=True)}
 
-    assert entries["scratch_run_python"].description == "loaded::scratch_run_python.txt"
-    assert entries["recommend_opportunities"].description == "loaded::recommend_opportunities.txt"
-    assert ("tools", "default_registry", "optimize_portfolio.txt") in seen
+    assert entries["scratch_run_python"].description
+    assert entries["recommend_opportunities"].description
 
 
-def test_default_registry_prompt_descriptions_reach_llm_tool_catalog(monkeypatch) -> None:
-    def fake_load_prompt_text(*parts: str) -> str:
-        return f"llm-visible::{parts[-1]}"
-
-    monkeypatch.setattr(default_registry_module, "load_prompt_text", fake_load_prompt_text, raising=False)
-
+def test_default_registry_catalog_uses_ui_description_not_schema_docstring(monkeypatch) -> None:
     registry = default_registry_module.build_default_registry(repo=_FakeRepo(), settings=_settings())
     payload = PromptPack.tool_catalog_payload(
         registry,
@@ -157,19 +148,20 @@ def test_default_registry_prompt_descriptions_reach_llm_tool_catalog(monkeypatch
     )
     rows = {str(row["tool_id"]): row for row in payload}
 
-    assert rows["optimize_portfolio"]["description"] == "llm-visible::optimize_portfolio.txt"
-    assert rows["recommend_opportunities"]["description"] == "llm-visible::recommend_opportunities.txt"
+    assert "how much of each ticker to hold" in rows["optimize_portfolio"]["description"]
+    assert "fresh buy and replacement ideas" in rows["recommend_opportunities"]["description"]
 
 
-def test_macro_snapshot_model_description_is_canonical_parameter_guide() -> None:
+def test_macro_snapshot_callable_docstring_is_canonical_parameter_guide() -> None:
     reg = build_default_registry(repo=_FakeRepo(), settings=_settings())
     entries = {entry.tool_id: entry for entry in reg.list_entries(include_disabled=True)}
     entry = entries["macro_snapshot"]
+    doc = str(entry.callable.__doc__ or "")
 
-    assert 'depth="brief"' in entry.description
-    assert 'focus=["fx_external"]' in entry.description
-    assert 'include_series=True' in entry.description
-    assert '"rates_curve"' in entry.description
+    assert 'depth="brief"' in doc
+    assert 'focus=["fx_external"]' in doc
+    assert 'include_series=True' in doc
+    assert '"rates_curve"' in doc
     assert "include_series" not in entry.description_ko
     assert "max_points" not in entry.description_ko
 
@@ -183,6 +175,7 @@ def test_default_registry_applies_tools_config_overlay() -> None:
                 "ui_label_ko": "포트 진단 오버라이드",
                 "ui_description_ko": "오버라이드 설명",
                 "model_description_override": "Override model description.",
+                "description": "English UI override.",
                 "sort_order": 5,
             },
             {
@@ -202,7 +195,7 @@ def test_default_registry_applies_tools_config_overlay() -> None:
     assert entries["recommend_opportunities"].enabled is True
     assert entries["portfolio_diagnosis"].label_ko == "포트 진단 오버라이드"
     assert entries["portfolio_diagnosis"].description_ko == "오버라이드 설명"
-    assert entries["portfolio_diagnosis"].description == "Override model description."
+    assert entries["portfolio_diagnosis"].description == "English UI override."
 
 
 def test_technical_signals_computes_indicators() -> None:
