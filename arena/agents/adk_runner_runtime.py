@@ -79,12 +79,25 @@ def _enrich_tool_memory_hit(memory_store: Any, memory: dict[str, Any]) -> dict[s
     return row
 
 
-def truncate_tool_result(value: Any, max_list: int = 30, max_str: int = 2000) -> Any:
+def truncate_tool_result(
+    value: Any,
+    max_list: int = 30,
+    max_str: int = 2000,
+    preserve_text_keys: set[str] | None = None,
+) -> Any:
     """Truncates large nested tool payloads before event logging."""
+    preserve_keys = preserve_text_keys or set()
     if isinstance(value, dict):
-        return {str(key): truncate_tool_result(val, max_list, max_str) for key, val in value.items()}
+        out: dict[str, Any] = {}
+        for key, val in value.items():
+            text_key = str(key)
+            if text_key in preserve_keys and isinstance(val, str):
+                out[text_key] = val
+            else:
+                out[text_key] = truncate_tool_result(val, max_list, max_str, preserve_keys)
+        return out
     if isinstance(value, list):
-        return [truncate_tool_result(val, max_list, max_str) for val in value[:max_list]]
+        return [truncate_tool_result(val, max_list, max_str, preserve_keys) for val in value[:max_list]]
     if isinstance(value, str) and len(value) > max_str:
         return value[:max_str] + "..."
     return value
@@ -118,14 +131,14 @@ def replace_last_tool_event_result(tool_events: list[dict[str, Any]], result: An
     """Rewrites the most recent tool result after prompt compaction."""
     if not tool_events:
         return
-    tool_events[-1]["result"] = _safe_json(truncate_tool_result(result))
+    tool_events[-1]["result"] = _safe_json(truncate_tool_result(result, preserve_text_keys={"summary"}))
 
 
 def set_last_tool_event_model_visible_result(tool_events: list[dict[str, Any]], result: Any) -> None:
     """Stores the exact model-visible result for audit/UI without changing compact summaries."""
     if not tool_events:
         return
-    tool_events[-1]["model_visible_result"] = _safe_json(truncate_tool_result(result))
+    tool_events[-1]["model_visible_result"] = _safe_json(truncate_tool_result(result, preserve_text_keys={"summary"}))
 
 
 def append_mcp_tool_event(

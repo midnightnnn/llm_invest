@@ -8,7 +8,11 @@ import pytest
 
 from arena.agents.adk_agents import _ADKDecisionRunner, _is_retryable_adk_error
 from arena.agents.cycle_supervisor import AgentCycleSupervisor
-from arena.agents.adk_runner_runtime import AdkToolBudgetExceeded, collect_response_text
+from arena.agents.adk_runner_runtime import (
+    AdkToolBudgetExceeded,
+    collect_response_text,
+    set_last_tool_event_model_visible_result,
+)
 
 
 class _AsyncRunnerForResponseCollection:
@@ -241,6 +245,30 @@ def test_collect_response_text_records_mcp_calls_and_token_usage() -> None:
             "source": "mcp",
         }
     ]
+
+
+def test_model_visible_tool_event_preserves_summary_without_truncating_other_text() -> None:
+    long_summary = ("research summary should keep its tail " * 120) + "SUMMARY_TAIL"
+    long_note = ("diagnostic note can be clipped " * 120) + "NOTE_TAIL"
+    tool_events = [{"tool": "get_research_briefing"}]
+
+    set_last_tool_event_model_visible_result(
+        tool_events,
+        {
+            "data": [
+                {
+                    "ticker": "SATL",
+                    "summary": long_summary,
+                    "note": long_note,
+                }
+            ]
+        },
+    )
+
+    row = tool_events[0]["model_visible_result"]["data"][0]
+    assert row["summary"] == long_summary
+    assert row["note"].endswith("...")
+    assert "NOTE_TAIL" not in row["note"]
 
 
 def test_collect_response_text_aborts_when_tool_budget_exceeded() -> None:
