@@ -214,7 +214,7 @@ class MemoryStore:
             report = data.get("report")
             ticker = str(intent.get("ticker") or "").strip().upper() if isinstance(intent, dict) else ""
             status = str(report.get("status") or "").strip().upper() if isinstance(report, dict) else ""
-            return bool(ticker and status in {"FILLED", "SIMULATED"})
+            return bool(ticker and status in {"FILLED", "PARTIAL_FILLED", "SIMULATED"})
         if kind in CANDIDATE_MEMORY_EVENT_TYPES:
             ticker = str(data.get("ticker") or "").strip().upper()
             source = str(data.get("source") or "").strip().lower()
@@ -293,7 +293,7 @@ class MemoryStore:
         """Tracks the lifecycle of an investment thesis alongside execution memories."""
         _ = decision
         status = str(report.status.value or "").strip().upper()
-        if status not in {"FILLED", "SIMULATED"}:
+        if status not in {"FILLED", "PARTIAL_FILLED", "SIMULATED"}:
             return
         ticker = str(intent.ticker or "").strip().upper()
         if not ticker:
@@ -415,7 +415,7 @@ class MemoryStore:
 
     @staticmethod
     def _execution_importance_score(report: ExecutionReport) -> float:
-        filled = report.status.value in {"FILLED", "SIMULATED"}
+        filled = report.status.value in {"FILLED", "PARTIAL_FILLED", "SIMULATED"}
         return 0.75 if filled else 0.35
 
     @staticmethod
@@ -423,6 +423,8 @@ class MemoryStore:
         status = report.status.value
         if status in {"FILLED", "SIMULATED"}:
             return 0.5
+        if status == "PARTIAL_FILLED":
+            return 0.45
         if status == "SUBMITTED":
             return 0.4
         return 0.25
@@ -635,7 +637,7 @@ class MemoryStore:
             outcome_score=outcome_score,
         )
 
-        filled = report.status.value in {"FILLED", "SIMULATED"}
+        filled = report.status.value in {"FILLED", "PARTIAL_FILLED", "SIMULATED"}
         if filled and intent.side.value == "SELL":
             self._feedback_buy_score(intent, report)
 

@@ -257,6 +257,15 @@ def format_execution_summary(
             avg_price = float(report.avg_price_krw or intent.price_krw or 0.0)
             lines.append(f"- {display_ticker} {intent.side.value} {filled_qty:g}주 {status} 체결가 @₩{avg_price:,.0f}")
             continue
+        if status == "PARTIAL_FILLED":
+            filled_qty = max(float(report.filled_qty or 0.0), 0.0)
+            remaining_qty = max(float(intent.quantity or 0.0) - filled_qty, 0.0)
+            avg_price = float(report.avg_price_krw or intent.price_krw or 0.0)
+            lines.append(
+                f"- {display_ticker} {intent.side.value} {filled_qty:g}주 PARTIAL_FILLED "
+                f"(잔량 {remaining_qty:g}주) 체결가 @₩{avg_price:,.0f}"
+            )
+            continue
         if status == "SUBMITTED":
             ref_price = float(report.avg_price_krw or intent.price_krw or 0.0)
             price_text = f" 주문가 @₩{ref_price:,.0f}" if ref_price > 0 else ""

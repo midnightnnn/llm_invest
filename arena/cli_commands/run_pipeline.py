@@ -274,12 +274,14 @@ def _batch_tenant_work(
             orchestrator=orchestrator,
             tenant=tenant,
         )
-        executed = sum(1 for report in reports if report.status.value in {"SIMULATED", "FILLED"})
+        executed = sum(1 for report in reports if report.status.value in {"SIMULATED", "FILLED", "PARTIAL_FILLED"})
+        partial = sum(1 for report in reports if report.status.value == "PARTIAL_FILLED")
         submitted = sum(1 for report in reports if report.status.value == "SUBMITTED")
         logger.info(
-            "[bold green]Batch done[/bold green] tenant=%s executed=%d submitted=%d total_reports=%d",
+            "[bold green]Batch done[/bold green] tenant=%s executed=%d partial=%d submitted=%d total_reports=%d",
             tenant,
             executed,
+            partial,
             submitted,
             len(reports),
             extra=event_extra(
@@ -287,6 +289,7 @@ def _batch_tenant_work(
                 tenant_id=tenant,
                 phase=phase,
                 executed=executed,
+                partial=partial,
                 submitted=submitted,
                 total_reports=len(reports),
             ),

@@ -1214,7 +1214,7 @@ class StateReconciliationService:
         if not since:
             return issues
 
-        # 1. FILLED executions with missing fx_rate or avg_price_native
+        # 1. Realized executions with missing fx_rate or avg_price_native
         try:
             sql = f"""
             SELECT order_id, agent_id, ticker, side, filled_qty, avg_price_krw, avg_price_native, fx_rate, created_at
@@ -1222,7 +1222,7 @@ class StateReconciliationService:
             WHERE tenant_id = @tenant_id
               AND agent_id IN UNNEST(@agent_ids)
               AND created_at >= @since
-              AND status = 'FILLED'
+              AND status IN ('FILLED', 'PARTIAL_FILLED')
               AND (fx_rate IS NULL OR fx_rate = 0 OR avg_price_native IS NULL)
             ORDER BY created_at ASC
             LIMIT 50
@@ -1283,7 +1283,7 @@ class StateReconciliationService:
             WHERE e.tenant_id = @tenant_id
               AND e.agent_id IN UNNEST(@agent_ids)
               AND e.created_at >= @since
-              AND e.status = 'FILLED'
+              AND e.status IN ('FILLED', 'PARTIAL_FILLED')
               AND e.avg_price_krw > 0
               AND ABS(e.avg_price_krw - b.wavg_native * COALESCE(NULLIF(b.broker_fx, 0), NULLIF(e.fx_rate, 0), 1))
                   / GREATEST(e.avg_price_krw, 1) > 0.01

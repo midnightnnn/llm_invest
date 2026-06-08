@@ -288,6 +288,29 @@ class ExecutionGateway:
                     "avg_price_krw": report.avg_price_krw,
                 },
             )
+        elif report.status == ExecutionStatus.PARTIAL_FILLED:
+            remaining_qty = max(float(intent.quantity or 0.0) - float(report.filled_qty or 0.0), 0.0)
+            logger.info(
+                "[cyan]ORDER PARTIAL[/cyan] tenant=%s intent=%s order=%s filled=%.4f remaining=%.4f",
+                tenant,
+                intent.intent_id,
+                report.order_id,
+                float(report.filled_qty or 0.0),
+                remaining_qty,
+                extra={
+                    "event": "order_partial_filled",
+                    "tenant_id": tenant,
+                    "intent_id": intent.intent_id,
+                    "agent_id": intent.agent_id,
+                    "ticker": intent.ticker,
+                    "side": intent.side.value,
+                    "order_id": report.order_id,
+                    "status": report.status.value,
+                    "filled_qty": report.filled_qty,
+                    "remaining_qty": remaining_qty,
+                    "avg_price_krw": report.avg_price_krw,
+                },
+            )
         elif report.status == ExecutionStatus.SUBMITTED:
             logger.info(
                 "[cyan]ORDER SUBMITTED[/cyan] tenant=%s intent=%s order=%s",
@@ -388,11 +411,14 @@ class ExecutionGateway:
                 continue
 
             status = report.status.value
-            if status not in {"FILLED", "SIMULATED", "REJECTED", "ERROR"}:
+            if status not in {"FILLED", "PARTIAL_FILLED", "SIMULATED", "REJECTED", "ERROR"}:
                 continue
 
             req_qty = float(row.get("requested_qty") or 0.0)
             if req_qty <= 0:
+                continue
+            existing_filled = max(float(row.get("filled_qty") or 0.0), 0.0)
+            if status == "PARTIAL_FILLED" and report.filled_qty <= existing_filled:
                 continue
             side = str(row.get("side") or "BUY").strip().upper()
             if side not in {"BUY", "SELL"}:

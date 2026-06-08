@@ -488,7 +488,7 @@ class LocalSleeveStore:
         positions = self._positions_from_payload(seed_positions)
         baseline = cash + sum(pos.quantity * pos.avg_price_krw for pos in positions.values())
 
-        statuses = ["FILLED"]
+        statuses = ["FILLED", "PARTIAL_FILLED"]
         if include_simulated:
             statuses.append("SIMULATED")
         params: dict[str, Any] = {
@@ -701,7 +701,7 @@ class LocalSleeveStore:
                      SUM(CASE WHEN side = 'BUY' THEN filled_qty ELSE -filled_qty END) AS net_qty
               FROM execution_reports
               WHERE tenant_id = $tenant_id
-                AND status IN ('FILLED', 'SIMULATED')
+                AND status IN ('FILLED', 'PARTIAL_FILLED', 'SIMULATED')
               GROUP BY ticker
             )
             WHERE net_qty > 0

@@ -70,6 +70,8 @@ _MEMORY_TICKER_STOPWORDS = {
     "SELL",
     "HOLD",
     "FILLED",
+    "PARTIAL",
+    "PARTIAL_FILLED",
     "SUBMITTED",
     "REJECTED",
     "SIMULATED",

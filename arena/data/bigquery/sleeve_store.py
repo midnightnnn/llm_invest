@@ -488,7 +488,7 @@ class SleeveStore:
                  SUM(CASE WHEN side = 'BUY' THEN filled_qty ELSE -filled_qty END) AS net_qty
           FROM `{self.session.dataset_fqn}.execution_reports`
           WHERE tenant_id = @tenant_id
-            AND status IN ('FILLED', 'SIMULATED')
+            AND status IN ('FILLED', 'PARTIAL_FILLED', 'SIMULATED')
           GROUP BY ticker
         )
         WHERE net_qty > 0
@@ -2193,7 +2193,7 @@ class SleeveStore:
         sell_wins = 0
         worst_trade: dict[str, Any] | None = None
 
-        statuses = ["FILLED"]
+        statuses = ["FILLED", "PARTIAL_FILLED"]
         if include_simulated:
             statuses.append("SIMULATED")
 
@@ -2575,7 +2575,7 @@ class SleeveStore:
             if t and qty > 0:
                 positions[t] = positions.get(t, 0.0) + qty
 
-        statuses = ["FILLED"]
+        statuses = ["FILLED", "PARTIAL_FILLED"]
         if include_simulated:
             statuses.append("SIMULATED")
 

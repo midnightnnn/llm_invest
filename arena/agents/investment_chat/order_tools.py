@@ -678,7 +678,12 @@ def _build_order_tool_entries(
         write_lock = tenant_lock(tenant)
         with write_lock, repo_tenant_scope(repo, tenant):
             report = gateway.process(intent, snapshot)
-        submitted_statuses = {ExecutionStatus.FILLED, ExecutionStatus.SIMULATED, ExecutionStatus.SUBMITTED}
+        submitted_statuses = {
+            ExecutionStatus.FILLED,
+            ExecutionStatus.PARTIAL_FILLED,
+            ExecutionStatus.SIMULATED,
+            ExecutionStatus.SUBMITTED,
+        }
         response_status = "submitted" if report.status in submitted_statuses else report.status.value.lower()
         audit_status = "ok" if response_status == "submitted" else "error"
         memory_warnings: list[str] = []

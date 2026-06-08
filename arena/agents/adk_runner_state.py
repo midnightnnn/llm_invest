@@ -12,7 +12,7 @@ ANALYSIS_TOOLS: frozenset[str] = frozenset(
     }
 )
 ORDERABLE_SIDES: frozenset[str] = frozenset({"BUY", "SELL"})
-EXECUTED_REPORT_STATUSES: frozenset[str] = frozenset({"FILLED", "SIMULATED"})
+EXECUTED_REPORT_STATUSES: frozenset[str] = frozenset({"FILLED", "PARTIAL_FILLED", "SIMULATED"})
 
 
 def tickers_from_tool_args(args: dict[str, Any]) -> list[str]:

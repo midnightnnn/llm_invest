@@ -26,7 +26,7 @@ class LocalExecutionStore:
 
     @staticmethod
     def _active_statuses(*, include_simulated: bool = True, include_submitted: bool = True) -> list[str]:
-        statuses = ["FILLED"]
+        statuses = ["FILLED", "PARTIAL_FILLED"]
         if include_submitted:
             statuses.append("SUBMITTED")
         if include_simulated:
@@ -43,19 +43,19 @@ class LocalExecutionStore:
         return (
             "COALESCE(trading_mode, CASE "
             "WHEN status = 'SIMULATED' THEN 'paper' "
-            "WHEN status IN ('FILLED', 'SUBMITTED', 'ERROR') THEN 'live' "
+            "WHEN status IN ('FILLED', 'PARTIAL_FILLED', 'SUBMITTED', 'ERROR') THEN 'live' "
             "ELSE 'paper' END)"
         )
 
     @staticmethod
     def _normalize_history_statuses(statuses: list[str] | tuple[str, ...] | None) -> list[str]:
-        allowed = {"FILLED", "SIMULATED", "SUBMITTED", "ERROR", "REJECTED"}
+        allowed = {"FILLED", "PARTIAL_FILLED", "SIMULATED", "SUBMITTED", "ERROR", "REJECTED"}
         out: list[str] = []
-        for raw in statuses or ["FILLED", "SIMULATED", "SUBMITTED"]:
+        for raw in statuses or ["FILLED", "PARTIAL_FILLED", "SIMULATED", "SUBMITTED"]:
             token = str(raw or "").strip().upper()
             if token in allowed and token not in out:
                 out.append(token)
-        return out or ["FILLED", "SIMULATED", "SUBMITTED"]
+        return out or ["FILLED", "PARTIAL_FILLED", "SIMULATED", "SUBMITTED"]
 
     @staticmethod
     def _normalize_history_scope(scope: str | None) -> str:
@@ -96,7 +96,7 @@ class LocalExecutionStore:
         rows = self.session.fetch_rows(
             f"""
             SELECT COALESCE(SUM(ABS(
-              (CASE WHEN status = 'SUBMITTED' THEN requested_qty ELSE filled_qty END) * avg_price_krw
+              (CASE WHEN status IN ('SUBMITTED', 'PARTIAL_FILLED') THEN requested_qty ELSE filled_qty END) * avg_price_krw
             )), 0.0) AS turnover
             FROM execution_reports
             WHERE {' AND '.join(filters)}
@@ -274,9 +274,10 @@ class LocalExecutionStore:
         }
         filters = [
             "tenant_id = $tenant_id",
-            "status = 'SUBMITTED'",
+            "status IN (SELECT unnest($statuses))",
             "created_at >= current_timestamp - ($lookback_hours * INTERVAL '1 hour')",
         ]
+        params["statuses"] = ["SUBMITTED", "PARTIAL_FILLED"]
         mode = self._normalize_trading_mode_token(trading_mode)
         if mode:
             filters.append(f"{self._mode_expr()} = $trading_mode")
@@ -374,7 +375,7 @@ class LocalExecutionStore:
         include_simulated: bool = False,
     ) -> list[dict[str, Any]]:
         tenant = self._tenant_token(tenant_id)
-        statuses = ["FILLED"]
+        statuses = ["FILLED", "PARTIAL_FILLED"]
         if include_simulated:
             statuses.append("SIMULATED")
         params: dict[str, Any] = {"tenant_id": tenant, "since": since, "statuses": statuses}

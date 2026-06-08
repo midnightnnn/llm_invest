@@ -132,7 +132,7 @@ class ArenaOrchestrator:
         instrument_id: str = "",
     ) -> None:
         """Applies a simulated/fill report to local snapshot state for same-cycle consistency."""
-        if report.status.value not in {"SIMULATED", "FILLED"}:
+        if report.status.value not in {"SIMULATED", "FILLED", "PARTIAL_FILLED"}:
             return
 
         notional = report.filled_qty * report.avg_price_krw

@@ -339,9 +339,16 @@ def cmd_run_cycle(live: bool) -> None:
         logger.warning("[yellow]No recent market_features rows[/yellow] run 'sync-market' first")
 
     reports = orchestrator.run_cycle(snapshot=snapshot)
-    executed = sum(1 for report in reports if report.status.value in {"SIMULATED", "FILLED"})
+    executed = sum(1 for report in reports if report.status.value in {"SIMULATED", "FILLED", "PARTIAL_FILLED"})
+    partial = sum(1 for report in reports if report.status.value == "PARTIAL_FILLED")
     submitted = sum(1 for report in reports if report.status.value == "SUBMITTED")
-    logger.info("[bold green]Arena cycle done[/bold green] executed=%d submitted=%d total=%d", executed, submitted, len(reports))
+    logger.info(
+        "[bold green]Arena cycle done[/bold green] executed=%d partial=%d submitted=%d total=%d",
+        executed,
+        partial,
+        submitted,
+        len(reports),
+    )
 
 
 def _run_agent_cycle_once_guarded(
@@ -570,7 +577,8 @@ def _run_agent_cycle_once(
             orchestrator=orchestrator,
             tenant=tenant,
         )
-        executed = sum(1 for report in reports if report.status.value in {"SIMULATED", "FILLED"})
+        executed = sum(1 for report in reports if report.status.value in {"SIMULATED", "FILLED", "PARTIAL_FILLED"})
+        partial = sum(1 for report in reports if report.status.value == "PARTIAL_FILLED")
         submitted = sum(1 for report in reports if report.status.value == "SUBMITTED")
         rejected = sum(1 for report in reports if report.status.value == "REJECTED")
         errored = sum(1 for report in reports if report.status.value == "ERROR")
@@ -599,6 +607,7 @@ def _run_agent_cycle_once(
                 "live": bool(live),
                 "report_count": len(reports),
                 "executed_count": executed,
+                "partial_count": partial,
                 "submitted_count": submitted,
                 "rejected_count": rejected,
                 "error_count": errored,

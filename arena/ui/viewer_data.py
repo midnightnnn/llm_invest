@@ -870,7 +870,7 @@ def build_viewer_data_helpers(
         params: dict[str, Any] = {
             "tenant_id": tenant,
             "start": start,
-            "statuses": ["FILLED", "SIMULATED"],
+            "statuses": ["FILLED", "PARTIAL_FILLED", "SIMULATED"],
         }
         if agent_ids:
             filters.append("LOWER(agent_id) IN UNNEST(@agent_ids)")
@@ -996,7 +996,7 @@ def build_viewer_data_helpers(
         params: dict[str, Any] = {
             "tenant_id": tenant,
             "start": start,
-            "statuses": ["FILLED", "SIMULATED"],
+            "statuses": ["FILLED", "PARTIAL_FILLED", "SIMULATED"],
         }
         if agent_ids:
             filters.append("LOWER(agent_id) IN UNNEST(@agent_ids)")
