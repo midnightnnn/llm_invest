@@ -68,13 +68,10 @@ def _economical_memory_model(provider: str, model_id: str) -> str:
 
     if canonical == "claude":
         if "opus" in token:
-            derived = token.replace("opus", "sonnet", 1)
-            # Keep derived defaults conservative. Some forward-looking Opus
-            # aliases appear in tenant configs before the matching Sonnet
-            # helper model is available on the direct API.
-            if derived.startswith("claude-sonnet-4-7"):
-                return "claude-sonnet-4-6"
-            return derived
+            # Opus aliases can advance before a matching Sonnet helper model is
+            # available on the direct API. Use the stable Sonnet default unless
+            # the tenant explicitly configures a memory_compaction_model.
+            return "claude-sonnet-4-6"
         return token
 
     if canonical == "gemini":

@@ -774,6 +774,11 @@ class _ContextTools:
     ) -> list[dict[str, Any]]:
         """Browse official BOK and St. Louis Fed research documents from rule-based metadata.
 
+        Official macro research is not a summary feed. Use it when policy,
+        credit, consumption, labor, productivity, housing, liquidity, or
+        external-sector shifts could become forward-looking trends before they are obvious in prices or indicators.
+        Choose documents freely; read only what seems decision-relevant.
+
         Without source_doc_ids, returns a document list with source_doc_id,
         source_url, title, source, market, and document type. With
         source_doc_ids, live-fetches the linked source text and returns

@@ -19,6 +19,21 @@ def test_memory_compaction_agent_follows_configured_single_agent_provider() -> N
     assert agent.model == "anthropic/claude-sonnet-4-6"
 
 
+def test_memory_compaction_agent_maps_claude_opus_to_stable_sonnet_default() -> None:
+    repo = _FakeRepo()
+    memory_store = _FakeMemoryStore()
+    settings = _settings()
+    settings.agent_ids = ["claude"]
+    settings.gemini_api_key = ""
+    settings.anthropic_api_key = "test-anthropic-key"
+    settings.anthropic_model = "claude-opus-4-8"
+
+    agent = MemoryCompactionAgent(settings=settings, repo=repo, memory_store=memory_store)
+
+    assert agent.provider == "claude"
+    assert agent.model == "anthropic/claude-sonnet-4-6"
+
+
 def test_memory_compaction_agent_prefers_direct_key_provider_over_non_direct_fallback() -> None:
     repo = _FakeRepo()
     memory_store = _FakeMemoryStore()

@@ -573,6 +573,23 @@ def test_get_macro_research_briefing_schema_exposes_minimal_document_browser_par
     assert props["sources"]["items"]["enum"] == list(MACRO_RESEARCH_SOURCES)
 
 
+def test_get_macro_research_briefing_description_frames_forward_looking_reading_value() -> None:
+    from google.adk.tools.function_tool import FunctionTool
+
+    from arena.agents.adk_agents import _ContextTools
+
+    tool = _ContextTools.__new__(_ContextTools)
+    tool.repo = _RepoForMacroBriefingOnlyTool()
+    tool.settings = load_settings()
+    tool.tenant_id = "tenant-a"
+
+    description = FunctionTool(tool.get_macro_research_briefing)._get_declaration().description
+
+    assert "forward-looking" in description
+    assert "before they are obvious in prices or indicators" in description
+    assert "Choose documents freely" in description
+
+
 def test_macro_research_schema_and_registry_are_exposed() -> None:
     from arena.data.local.schema import table_specs
     from arena.tools.default_registry import build_default_registry

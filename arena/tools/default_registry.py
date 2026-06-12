@@ -81,9 +81,9 @@ def _base_entries(
             tool_id="get_macro_research_briefing",
             category="macro",
             tier="optional",
-            description="Browse official BOK and St. Louis Fed research documents, then drill down by source_doc_id.",
+            description="Browse official BOK and St. Louis Fed research documents, then drill down by source_doc_id to read forward-looking policy, credit, labor, productivity, housing, liquidity, and external-sector trend signals before they are obvious in prices or indicators.",
             label_ko="거시 연구 브리핑",
-            description_ko="BOK와 St. Louis Fed의 공식 이슈노트·연구자료·논문을 룰 기반 메타데이터로 리스트업합니다. 목록에서 source_doc_id를 고른 뒤 같은 도구로 원문 링크를 드릴다운해 읽습니다. 수치형 거시 지표가 아니라 공식 연구 문서 원문을 참고할 때 사용합니다.",
+            description_ko="BOK와 St. Louis Fed의 공식 이슈노트·연구자료·논문을 룰 기반 메타데이터로 리스트업합니다. 목록에서 source_doc_id를 고른 뒤 같은 도구로 원문 링크를 드릴다운해 읽습니다. 요약자료가 아니라 전문을 통해 아직 가격·지표·섹터 로테이션에 충분히 선반영되지 않은 정책·신용·소비·노동·생산성·주택·유동성 변화의 초기 단서를 볼 때 사용합니다. 어떤 문서를 읽을지는 에이전트가 자유롭게 고릅니다.",
             sort_order=32,
         ),
         _tool(
