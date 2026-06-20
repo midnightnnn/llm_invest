@@ -1133,10 +1133,11 @@ class _ADKDecisionRunner:
 
     def _persist_candidate_memories(self, *, cycle_id: str = "") -> int:
         writer = getattr(self._memory_store, "record_candidate_memories", None)
+        watch_writer = getattr(self._memory_store, "record_candidate_watch_items", None)
         if not callable(writer) or not self._candidate_ledger:
             return 0
         try:
-            return int(
+            written = int(
                 writer(
                     agent_id=self.agent_id,
                     candidate_ledger=self._candidate_ledger,
@@ -1146,6 +1147,22 @@ class _ADKDecisionRunner:
                 )
                 or 0
             )
+            if callable(watch_writer):
+                try:
+                    watch_writer(
+                        agent_id=self.agent_id,
+                        candidate_ledger=self._candidate_ledger,
+                        held_tickers=self._held_tickers_cache,
+                        cycle_id=str(cycle_id or "").strip(),
+                        phase=self._current_phase,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "[yellow]Candidate watch item write failed[/yellow] agent=%s err=%s",
+                        self.agent_id,
+                        str(exc),
+                    )
+            return written
         except Exception as exc:
             logger.warning(
                 "[yellow]Candidate memory write failed[/yellow] agent=%s err=%s",
@@ -1242,7 +1259,16 @@ class _ADKDecisionRunner:
             schema = (
                 '{\n'
                 '  "explore_summary": "지금까지 확인한 핵심 근거와 주문 판단",\n'
-                '  "orders": []\n'
+                '  "orders": [],\n'
+                '  "research_takeaways": [\n'
+                '    {\n'
+                '      "source_doc_id": "BOK / FRED source_doc_id",\n'
+                '      "takeaway": "원문에서 건진 앞으로 볼 포인트",\n'
+                '      "watch_indicators": ["관찰 지표"],\n'
+                '      "horizon_days": 90\n'
+                '    }\n'
+                '  ],\n'
+                '  "watch_updates": []\n'
                 '}'
             )
         return "\n".join(
@@ -1722,7 +1748,28 @@ class AdkTradingAgent:
             ),
         )
 
-        explore_summary, orders = extract_decision_payload(decision)
+        explore_summary, orders, research_takeaways, watch_updates = extract_decision_payload(decision)
+
+        memory_store = getattr(self.runner, "_memory_store", None)
+        if phase == "execution":
+            record_research_takeaways = getattr(memory_store, "record_research_takeaways", None) if memory_store else None
+            if callable(record_research_takeaways) and research_takeaways:
+                record_research_takeaways(
+                    agent_id=self.agent_id,
+                    takeaways=research_takeaways,
+                    cycle_id=cycle_id,
+                    llm_call_id=llm_call_id,
+                    source_phase=phase,
+                )
+            record_watch_updates = getattr(memory_store, "record_watch_updates", None) if memory_store else None
+            if callable(record_watch_updates) and watch_updates:
+                record_watch_updates(
+                    agent_id=self.agent_id,
+                    watch_updates=watch_updates,
+                    cycle_id=cycle_id,
+                    llm_call_id=llm_call_id,
+                    source_phase=phase,
+                )
 
         # Explore phase is board-sync only: never emit intents.
         # Preserve session_id so execution can continue the same conversation.

@@ -24,13 +24,19 @@ def execution_resume_session_id(*, phase: str, explore_session_id: str | None) -
     return explore_session_id if phase == "execution" else None
 
 
-def extract_decision_payload(decision: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
-    """Extracts normalized explore summary and order list from model output."""
+def _dict_list(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+
+def extract_decision_payload(decision: dict[str, Any]) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """Extracts normalized summary, orders, research takeaways, and watch updates from model output."""
     explore_summary = str(decision.get("explore_summary", "")).strip()[:200]
-    orders = decision.get("orders", [])
-    if not isinstance(orders, list):
-        orders = []
-    return explore_summary, orders
+    orders = _dict_list(decision.get("orders"))
+    research_takeaways = _dict_list(decision.get("research_takeaways"))
+    watch_updates = _dict_list(decision.get("watch_updates"))
+    return explore_summary, orders, research_takeaways, watch_updates
 
 
 def mentioned_tickers(orders: list[dict[str, Any]]) -> list[str]:

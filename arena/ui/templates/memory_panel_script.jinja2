@@ -8,8 +8,10 @@ if(!tabButtons.length){return;}
 var tabPanels = {
   map: document.querySelector('[data-memory-tab-panel="map"]'),
   activity: document.querySelector('[data-memory-tab-panel="activity"]'),
+  watch: document.querySelector('[data-memory-tab-panel="watch"]'),
 };
 var activityHost = document.getElementById("memory-activity-content");
+var watchHost = document.getElementById("memory-watch-content");
 var panelForm = document.getElementById("memory-panel-form");
 var panelTitle = document.getElementById("memory-panel-title");
 var panelDot = document.getElementById("memory-panel-dot");
@@ -29,6 +31,7 @@ var KIND_BRIDGE = {memory_event:"event_types",order_intent:"event_types",executi
 var uiState = {
   activeTab: "map",
   activity: null, activityLoaded: false, activityLoading: false,
+  watch: null, watchLoaded: false, watchLoading: false,
   memoryLayerVisible: true,
   networkNodes: [], networkLinks: [], bridgeLinks: [],
   networkLoaded: false, networkLoading: false,
@@ -359,6 +362,61 @@ async function loadActivity(force){
   }
 }
 
+function watchOverviewCard(){
+  return '<div class="rounded-2xl border border-slate-100 bg-gradient-to-br from-white via-slate-50/40 to-violet-50/20 p-5 shadow-sm"><h3 class="text-base font-bold text-slate-900">Watch Items</h3><p class="mt-1.5 text-sm leading-relaxed text-slate-500">원문을 읽고 남은 교훈, 추적할 후보, 매도 후에 다시 볼 항목을 남깁니다.</p></div>';
+}
+function watchBadgeTone(kind,status){
+  if(kind==="macro_takeaway"){return"bg-violet-50 text-violet-700 ring-violet-200/70";}
+  if(kind==="post_exit"){return"bg-amber-50 text-amber-700 ring-amber-200/70";}
+  if(status==="resolved"||status==="archived"){return"bg-slate-100 text-slate-600 ring-slate-200/70";}
+  return"bg-cyan-50 text-cyan-700 ring-cyan-200/70";
+}
+function renderWatch(){
+  if(!watchHost)return;
+  if(uiState.watchLoading){watchHost.innerHTML='<div class="rounded-xl border border-slate-100 bg-white px-6 py-8 text-center text-sm text-slate-500">불러오는 중...</div>';return;}
+  var payload=uiState.watch||{};
+  var stats=payload.stats||{};
+  var kindCounts=stats.counts_by_kind||{};
+  var statusCounts=stats.counts_by_status||{};
+  var examples=Array.isArray(payload.examples)?payload.examples:[];
+  var kindPills=Object.entries(kindCounts).sort(function(a,b){return Number(b[1]||0)-Number(a[1]||0);}).slice(0,8).map(function(e){return softBadge(e[0]+" "+formatNumber(e[1]),watchBadgeTone(String(e[0]||""),""));}).join("");
+  var statusPills=Object.entries(statusCounts).sort(function(a,b){return Number(b[1]||0)-Number(a[1]||0);}).slice(0,6).map(function(e){return softBadge(e[0]+" "+formatNumber(e[1]),watchBadgeTone("",String(e[0]||"")));}).join("");
+  var exampleCards=examples.length?examples.map(function(item){
+    var kind=String(item.watch_kind||"").toLowerCase();
+    var status=String(item.watch_status||"").toLowerCase();
+    var badges=[
+      item.ticker?softBadge(item.ticker,"bg-slate-900 text-white ring-slate-900/10"):"",
+      item.watch_kind?softBadge(item.watch_kind,watchBadgeTone(kind,status)):"",
+      item.watch_status?softBadge(item.watch_status,watchBadgeTone(kind,status)):"",
+      item.source_doc_id?softBadge(item.source_doc_id,"bg-slate-50 text-slate-500 ring-slate-200/70"):"",
+      Number(item.time_horizon_days||0)>0?softBadge(String(item.time_horizon_days)+"d","bg-slate-50 text-slate-500 ring-slate-200/70"):"",
+    ].filter(Boolean).join("");
+    var extra=Array.isArray(item.badges)?item.badges.slice(0,4).map(function(tag){return softBadge(tag);}).join(""):"";
+    var note=item.observed_note?'<p class="mt-2 text-xs leading-relaxed text-slate-500">'+escapeHtml(item.observed_note)+'</p>':"";
+    var resolved=item.resolution?'<span>Resolution <span class="font-semibold text-slate-700">'+escapeHtml(item.resolution)+'</span></span>':"";
+    return '<article class="rounded-xl border border-slate-100 bg-white p-4"><div class="flex items-start justify-between gap-3"><div class="min-w-0"><p class="text-xs text-slate-500">'+escapeHtml(item.agent_id||"-")+' · '+escapeHtml(item.watch_kind||"-")+' · '+escapeHtml(item.watch_status||"-")+'</p><p class="mt-1 text-sm font-semibold text-slate-900">'+escapeHtml(item.title||item.summary||"(watch 없음)")+'</p><p class="mt-1 text-sm leading-relaxed text-slate-600">'+escapeHtml(item.summary||"")+'</p>'+note+'</div><div class="shrink-0 text-right"><p class="text-xs text-slate-500">Priority</p><p class="text-base font-bold text-slate-900">'+escapeHtml(formatScore(item.priority_score))+'</p><p class="mt-1 text-xs text-slate-500">'+escapeHtml(item.time_horizon_days?String(item.time_horizon_days)+"d":"-")+'</p></div></div><div class="mt-2 flex flex-wrap gap-1.5">'+badges+extra+'</div><div class="mt-3 flex flex-wrap gap-4 text-xs text-slate-500"><span>Created <span class="font-semibold text-slate-700">'+escapeHtml(formatTimestamp(item.created_at))+'</span></span><span>Updated <span class="font-semibold text-slate-700">'+escapeHtml(formatTimestamp(item.updated_at))+'</span></span><span>Review <span class="font-semibold text-slate-700">'+escapeHtml(formatTimestamp(item.next_review_at))+'</span></span>'+resolved+'</div></article>';
+  }).join(""):'<div class="rounded-xl border border-dashed border-slate-200 bg-white px-6 py-8 text-center text-sm text-slate-500">아직 표시할 watch 항목이 없습니다.</div>';
+  watchHost.innerHTML=[watchOverviewCard(),'<div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">'+metricCard("총 watch",formatNumber(stats.total_items||0),"","border-slate-100 bg-white")+metricCard("활성",formatNumber(stats.active_items||0),"","border-slate-100 bg-white")+metricCard("종료",formatNumber(stats.resolved_items||0),"","border-slate-100 bg-white")+metricCard("보관",formatNumber(stats.archived_items||0),"","border-slate-100 bg-white")+'</div>','<div class="grid gap-4 xl:grid-cols-[minmax(0,1.3fr)_minmax(240px,0.7fr)]"><div class="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm"><h3 class="text-sm font-bold text-slate-900">Recent Watch Items</h3><div class="mt-3 space-y-2">'+exampleCards+'</div></div><div class="space-y-3"><div class="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm"><h3 class="text-sm font-bold text-slate-900">Kinds</h3><div class="mt-3 flex flex-wrap gap-1.5">'+(kindPills||'<span class="text-sm text-slate-400">데이터 없음</span>')+'</div></div><div class="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm"><h3 class="text-sm font-bold text-slate-900">Status</h3><div class="mt-3 flex flex-wrap gap-1.5">'+(statusPills||'<span class="text-sm text-slate-400">데이터 없음</span>')+'</div><div class="mt-3 flex gap-4 text-xs text-slate-500"><span>최근 업데이트 <span class="font-semibold text-slate-700">'+escapeHtml(formatTimestamp(stats.last_updated_at))+'</span></span></div></div></div></div>'].join("");
+}
+async function loadWatch(force){
+  if(uiState.watchLoading)return;
+  if(uiState.watchLoaded&&!force){renderWatch();return;}
+  uiState.watchLoading=true;
+  renderWatch();
+  try{
+    var res=await fetch("/api/memory/watch-items?tenant_id="+encodeURIComponent(tenantId()));
+    var data=await res.json();
+    if(!res.ok)throw new Error(String((data&&data.error)||"watch load failed"));
+    uiState.watch=data;
+    uiState.watchLoaded=true;
+  }catch(err){
+    if(watchHost)watchHost.innerHTML='<div class="rounded-xl border border-red-100 bg-red-50/70 px-6 py-8 text-center text-sm text-red-700">'+escapeHtml(err&&err.message?err.message:"watch load failed")+'</div>';
+  }finally{
+    uiState.watchLoading=false;
+    if(uiState.watchLoaded)renderWatch();
+  }
+}
+
 /* ── Tab activation ── */
 function activateTab(nextTab){
   uiState.activeTab=nextTab;
@@ -377,6 +435,10 @@ function activateTab(nextTab){
   }
   if(nextTab==="activity"){
     loadActivity(false);
+    return;
+  }
+  if(nextTab==="watch"){
+    loadWatch(false);
   }
 }
 

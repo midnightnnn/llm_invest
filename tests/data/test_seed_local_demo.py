@@ -4,6 +4,7 @@ import pytest
 
 from arena.cli_commands.local_demo import cmd_seed_local_demo
 from arena.data.local.repository import LocalRepository
+from arena.prompts.memory_defaults import default_memory_compaction_prompt
 
 
 pytest.importorskip("duckdb")
@@ -29,3 +30,10 @@ def test_seed_local_demo_populates_market_tables(tmp_path, monkeypatch):
 
     assert set(prices) == {"AAPL", "MSFT"}
     assert names["AAPL"] == "Apple Inc."
+
+    repo = LocalRepository(tenant_id="local", db_path=str(db_path))
+    try:
+        assert repo.get_config("global", "memory_compactor_prompt") == default_memory_compaction_prompt("global")
+        assert repo.get_config("local", "memory_compactor_prompt") == default_memory_compaction_prompt("local")
+    finally:
+        repo.session.close()

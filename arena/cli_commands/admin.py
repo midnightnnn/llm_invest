@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+from datetime import datetime, timezone
 
 from arena.memory.policy import (
     MEMORY_POLICY_CONFIG_KEY,
@@ -10,6 +12,7 @@ from arena.memory.policy import (
     serialize_memory_policy,
 )
 from arena.memory.candidate_structured import backfill_candidate_memory_structures
+from arena.memory.watch_items import build_watch_record
 from arena.memory.tuning import run_memory_forgetting_tuner
 
 logger = logging.getLogger(__name__)
@@ -153,6 +156,190 @@ def _derive_market_from_agents_config(agents_config_raw: str) -> str:
             if market not in tokens:
                 tokens.append(market)
     return ",".join(tokens)
+
+
+_WATCH_TICKER_RE = re.compile(r"\b([A-Z]{1,5}|\d{6})\b")
+
+
+def _json_object(value: object) -> dict[str, object]:
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return {}
+        try:
+            parsed = json.loads(text)
+        except Exception:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _json_list(value: object) -> list[object]:
+    if isinstance(value, list):
+        return list(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return []
+        try:
+            parsed = json.loads(text)
+        except Exception:
+            return []
+        return list(parsed) if isinstance(parsed, list) else []
+    return []
+
+
+def _parse_dt(value: object) -> datetime | None:
+    if isinstance(value, datetime):
+        dt = value
+    else:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        try:
+            dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _parse_int(value: object) -> int | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return int(float(text))
+    except (TypeError, ValueError):
+        return None
+
+
+def _sql_text(value: object) -> str:
+    return "'" + str(value or "").replace("'", "''") + "'"
+
+
+def _extract_ticker(payload: dict[str, object], summary: str) -> str:
+    intent = payload.get("intent") if isinstance(payload.get("intent"), dict) else {}
+    for candidate in (
+        payload.get("ticker"),
+        intent.get("ticker") if isinstance(intent, dict) else "",
+    ):
+        token = str(candidate or "").strip().upper()
+        if token:
+            return token
+    match = _WATCH_TICKER_RE.search(summary or "")
+    return str(match.group(1) or "").strip().upper() if match else ""
+
+
+def _candidate_watch_record(row: dict[str, object], *, agent_id: str, source_phase: str) -> dict[str, object] | None:
+    summary = str(row.get("summary") or "").strip()
+    payload = _json_object(row.get("payload_json"))
+    event_type = str(row.get("event_type") or "").strip().lower()
+    if not summary and not payload:
+        return None
+    ticker = _extract_ticker(payload, summary)
+    source_doc_ids = _json_list(payload.get("source_doc_ids"))
+    if not source_doc_ids:
+        source_doc_id = str(payload.get("source_doc_id") or "").strip()
+        if source_doc_id:
+            source_doc_ids = [source_doc_id]
+    status_map = {
+        "candidate_screen_hit": "active",
+        "candidate_watchlist": "active",
+        "candidate_thesis": "active",
+        "candidate_rejected": "archived",
+    }
+    horizon_map = {
+        "candidate_screen_hit": 14,
+        "candidate_watchlist": 30,
+        "candidate_thesis": 60,
+        "candidate_rejected": 45,
+    }
+    priority_map = {
+        "candidate_screen_hit": 0.25,
+        "candidate_watchlist": 0.38,
+        "candidate_thesis": 0.55,
+        "candidate_rejected": 0.32,
+    }
+    watch_payload = {
+        "source": "candidate_memory_backfill",
+        "memory_event_id": str(row.get("event_id") or "").strip(),
+        "memory_event_type": event_type,
+        "payload": payload,
+    }
+    watch_indicators = _json_list(payload.get("suggested_next_checks"))
+    if not watch_indicators:
+        watch_indicators = _json_list(payload.get("source_tools"))
+    if not watch_indicators:
+        watch_indicators = _json_list(payload.get("analyzed_by"))
+    context_tags = {"watch_indicators": [str(item).strip() for item in watch_indicators if str(item).strip()]}
+    record = build_watch_record(
+        agent_id=agent_id,
+        watch_kind="candidate",
+        summary=summary or f"{ticker or 'candidate'} watch",
+        title=str(payload.get("title") or f"{ticker or 'candidate'} candidate watch").strip(),
+        status=status_map.get(event_type, "active"),
+        ticker=ticker or None,
+        source_doc_id=str(payload.get("source_doc_id") or "").strip() or None,
+        source_doc_ids=[str(item or "").strip() for item in source_doc_ids if str(item or "").strip()],
+        payload=watch_payload,
+        cycle_id=str(row.get("cycle_id") or payload.get("cycle_id") or "").strip(),
+        llm_call_id=str(row.get("llm_call_id") or payload.get("llm_call_id") or "").strip(),
+        source_phase=source_phase,
+        source_event=event_type or "candidate_backfill",
+        priority_score=priority_map.get(event_type, 0.35),
+        time_horizon_days=horizon_map.get(event_type, 30),
+        created_at=_parse_dt(row.get("created_at")),
+        updated_at=_parse_dt(row.get("updated_at")),
+        context_tags=context_tags,
+    )
+    return record
+
+
+def _post_exit_watch_record(row: dict[str, object], *, agent_id: str, source_phase: str) -> dict[str, object] | None:
+    summary = str(row.get("summary") or "").strip()
+    payload = _json_object(row.get("payload_json"))
+    event_type = str(row.get("event_type") or "").strip().lower()
+    if event_type not in {"thesis_invalidated", "thesis_realized"}:
+        return None
+    intent = payload.get("intent") if isinstance(payload.get("intent"), dict) else {}
+    decision = payload.get("decision") if isinstance(payload.get("decision"), dict) else {}
+    report = payload.get("report") if isinstance(payload.get("report"), dict) else {}
+    ticker = _extract_ticker(payload, summary)
+    record = build_watch_record(
+        agent_id=agent_id,
+        watch_kind="post_exit",
+        summary=summary or f"{ticker or 'post exit'} watch",
+        title=str(payload.get("title") or f"{ticker or 'post exit'} {event_type}").strip(),
+        status="resolved",
+        ticker=ticker or None,
+        payload={
+            "source": "thesis_lifecycle_backfill",
+            "memory_event_id": str(row.get("event_id") or "").strip(),
+            "memory_event_type": event_type,
+            "payload": payload,
+            "decision": decision,
+            "report": report,
+        },
+        cycle_id=str(row.get("cycle_id") or payload.get("cycle_id") or "").strip(),
+        llm_call_id=str(row.get("llm_call_id") or payload.get("llm_call_id") or "").strip(),
+        source_phase=source_phase,
+        source_event=event_type,
+        priority_score=0.78 if event_type == "thesis_invalidated" else 0.74,
+        time_horizon_days=_parse_int(payload.get("time_horizon_days")),
+        resolved_at=_parse_dt(row.get("updated_at") or row.get("created_at")),
+        resolution=event_type,
+        created_at=_parse_dt(row.get("created_at")),
+        updated_at=_parse_dt(row.get("updated_at")),
+        context_tags={
+            "thesis_id": str(payload.get("thesis_id") or "").strip(),
+            "position_action": str(payload.get("position_action") or "").strip(),
+        },
+    )
+    return record
 
 
 def cmd_promote_tenant_live(
@@ -373,6 +560,138 @@ def cmd_backfill_candidate_memory_structures(
         skipped,
         dry_run,
         quality_counts,
+    )
+
+
+def cmd_backfill_watch_items(
+    *,
+    tenant_ids: list[str] | None = None,
+    agent_ids: list[str] | None = None,
+    live: bool = False,
+    dry_run: bool = False,
+    include_existing: bool = False,
+    limit_per_agent: int = 1000,
+) -> None:
+    """Backfills durable watch items from candidate and thesis memory history."""
+    cli = _cli()
+    settings = cli.load_settings()
+    if live:
+        settings.trading_mode = "live"
+    cli.configure_logging(settings.log_level, settings.log_format)
+    repo = cli._repo_or_exit(settings, tenant_id="local")
+    repo.ensure_dataset()
+    repo.ensure_tables()
+
+    explicit_tenants = [str(token or "").strip().lower() for token in (tenant_ids or []) if str(token or "").strip()]
+    if explicit_tenants:
+        tenants = list(dict.fromkeys(explicit_tenants))
+    else:
+        tenants = list(repo.list_runtime_tenants(limit=2000))
+    if not tenants:
+        tenants = ["local"]
+
+    explicit_agents = [str(token or "").strip() for token in (agent_ids or []) if str(token or "").strip()]
+    agents = list(dict.fromkeys(explicit_agents or [str(agent or "").strip() for agent in settings.agent_ids if str(agent or "").strip()]))
+    if not agents:
+        raise SystemExit("No agent ids configured; pass --agent")
+
+    limit = max(1, int(limit_per_agent or 1000))
+    total_scanned = 0
+    total_written = 0
+    total_skipped = 0
+
+    for tenant in tenants:
+        tenant_scanned = 0
+        tenant_written = 0
+        tenant_skipped = 0
+        for agent in agents:
+            candidate_rows = []
+            candidate_loader = getattr(repo, "candidate_memory_events_for_structured_backfill", None)
+            if callable(candidate_loader):
+                try:
+                    candidate_rows = candidate_loader(
+                        agent_id=agent,
+                        trading_mode=settings.trading_mode,
+                        tenant_id=tenant,
+                        limit=limit,
+                        include_existing=True,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "[yellow]watch candidate backfill failed[/yellow] tenant=%s agent=%s err=%s",
+                        tenant,
+                        agent,
+                        str(exc),
+                    )
+                    candidate_rows = []
+            thesis_rows = []
+            try:
+                thesis_rows = repo.fetch_rows(
+                    f"""
+                    SELECT event_id, created_at, updated_at, agent_id, event_type, summary, cycle_id, llm_call_id, payload_json
+                    FROM `{repo.dataset_fqn}.agent_memory_events`
+                    WHERE tenant_id = {_sql_text(tenant)}
+                      AND agent_id = {_sql_text(agent)}
+                      AND trading_mode = {_sql_text(settings.trading_mode)}
+                      AND event_type IN ('thesis_invalidated', 'thesis_realized')
+                    ORDER BY created_at DESC
+                    LIMIT {limit}
+                    """,
+                    None,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[yellow]watch thesis backfill failed[/yellow] tenant=%s agent=%s err=%s",
+                    tenant,
+                    agent,
+                    str(exc),
+                )
+                thesis_rows = []
+
+            for row in list(candidate_rows or []) + list(thesis_rows or []):
+                if not isinstance(row, dict):
+                    continue
+                event_type = str(row.get("event_type") or "").strip().lower()
+                if event_type.startswith("candidate_"):
+                    record = _candidate_watch_record(row, agent_id=agent, source_phase="backfill")
+                else:
+                    record = _post_exit_watch_record(row, agent_id=agent, source_phase="backfill")
+                if record is None:
+                    continue
+                tenant_scanned += 1
+                watch_key = str(record.get("watch_key") or "").strip()
+                if watch_key and not include_existing:
+                    try:
+                        existing = repo.watch_item_by_key(watch_key=watch_key, tenant_id=tenant)
+                    except Exception:
+                        existing = None
+                    if existing:
+                        tenant_skipped += 1
+                        continue
+                if not dry_run:
+                    repo.upsert_watch_item(record, tenant_id=tenant)
+                tenant_written += 1
+
+        total_scanned += tenant_scanned
+        total_written += tenant_written
+        total_skipped += tenant_skipped
+        logger.info(
+            "[green]Watch backfill[/green] tenant=%s scanned=%d written=%d skipped=%d dry_run=%s",
+            tenant,
+            tenant_scanned,
+            tenant_written,
+            tenant_skipped,
+            dry_run,
+        )
+
+    logger.info(
+        "[bold green]Watch backfill done[/bold green] tenants=%d agents=%d scanned=%d written=%d skipped=%d dry_run=%s",
+        len(tenants),
+        len(agents),
+        total_scanned,
+        total_written,
+        total_skipped,
+        dry_run,
     )
 
 

@@ -3,6 +3,7 @@
     <div class="inline-flex rounded-full border border-slate-200 bg-slate-50/80 p-1">
       <button type="button" data-memory-tab="map" class="memory-tab-btn rounded-full bg-slate-900 px-4 py-1.5 text-xs font-semibold text-white transition-all">Map</button>
       <button type="button" data-memory-tab="activity" class="memory-tab-btn rounded-full px-4 py-1.5 text-xs font-semibold text-slate-500 transition-all hover:bg-white hover:text-slate-700">Activity</button>
+      <button type="button" data-memory-tab="watch" class="memory-tab-btn rounded-full px-4 py-1.5 text-xs font-semibold text-slate-500 transition-all hover:bg-white hover:text-slate-700">Watch</button>
     </div>
   </div>
 
@@ -101,6 +102,11 @@
   {# ── Activity Tab ── #}
   <div data-memory-tab-panel="activity" class="hidden p-4">
     <div id="memory-activity-content" class="space-y-4"></div>
+  </div>
+
+  {# ── Watch Tab ── #}
+  <div data-memory-tab-panel="watch" class="hidden p-4">
+    <div id="memory-watch-content" class="space-y-4"></div>
   </div>
 </section>
 

@@ -8,9 +8,11 @@ import re
 from typing import Any
 
 from arena.data.bq import BigQueryRepository
+from arena.agents.adk_runner_state import candidate_cases
 from arena.memory.candidates import CANDIDATE_MEMORY_EVENT_TYPES, candidate_memory_records
 from arena.memory.graph import ensure_memory_event_graph_ids, infer_memory_event_causal_chain_id, memory_event_node_id
 from arena.models import ExecutionReport, MemoryEvent, OrderIntent, RiskDecision, utc_now
+from arena.memory.watch_items import build_watch_record, watch_item_key
 from arena.memory.policy import (
     memory_event_enabled,
     memory_hierarchy_enabled,
@@ -402,6 +404,39 @@ class MemoryStore:
             payload=payload,
             semantic_key=thesis_id,
         )
+        if event_type in {"thesis_invalidated", "thesis_realized"}:
+            watch_update = {
+                "action": "resolve",
+                "watch_kind": "post_exit",
+                "ticker": ticker,
+                "title": f"{ticker} {event_type}",
+                "summary": summary,
+                "watch_status": "resolved",
+                "resolution": event_type,
+                "priority_score": 0.78 if event_type == "thesis_invalidated" else 0.74,
+                "time_horizon_days": getattr(intent, "time_horizon_days", None),
+                "cycle_id": str(intent.cycle_id or "").strip(),
+                "source_phase": "execution",
+                "source_event": event_type,
+                "payload": {
+                    "source": "thesis_lifecycle",
+                    "thesis_id": thesis_id,
+                    "intent": intent.model_dump(mode="json"),
+                    "decision": decision.model_dump(mode="json"),
+                    "report": report.model_dump(mode="json"),
+                    "event_type": event_type,
+                    "position_action": position_action,
+                    "quantity_before": quantity_before,
+                    "quantity_after": quantity_after,
+                    "summary": summary,
+                },
+            }
+            self.record_watch_updates(
+                agent_id=intent.agent_id,
+                watch_updates=[watch_update],
+                cycle_id=str(intent.cycle_id or "").strip(),
+                source_phase="execution",
+            )
         logger.info(
             "[cyan]Thesis memory[/cyan] agent=%s ticker=%s event=%s thesis_id=%s action=%s qty_before=%.4f qty_after=%.4f",
             intent.agent_id,
@@ -848,6 +883,218 @@ class MemoryStore:
         if written:
             logger.info("[cyan]Candidate memory[/cyan] agent=%s written=%d", agent_id, written)
         return written
+
+    def _upsert_watch_item(self, row: dict[str, Any]) -> bool:
+        writer = getattr(self.repo, "upsert_watch_item", None)
+        if not callable(writer):
+            return False
+        tenant = self._tenant()
+        try:
+            writer(row, tenant_id=tenant)
+            return True
+        except Exception as exc:
+            logger.warning(
+                "[yellow]Watch item write failed[/yellow] tenant=%s kind=%s key=%s err=%s",
+                tenant,
+                str(row.get("watch_kind") or "").strip(),
+                str(row.get("watch_key") or "").strip() or "-",
+                str(exc),
+            )
+            return False
+
+    def record_research_takeaways(
+        self,
+        *,
+        agent_id: str,
+        takeaways: list[dict[str, Any]],
+        cycle_id: str = "",
+        llm_call_id: str = "",
+        source_phase: str = "execution",
+    ) -> int:
+        """Persists takeaways from official macro research as watch items."""
+        written = 0
+        for takeaway in takeaways or []:
+            if not isinstance(takeaway, dict):
+                continue
+            summary = str(takeaway.get("takeaway") or takeaway.get("summary") or "").strip()
+            if not summary:
+                continue
+            source_doc_id = str(takeaway.get("source_doc_id") or "").strip() or None
+            source_doc_ids = takeaway.get("source_doc_ids")
+            if not isinstance(source_doc_ids, list):
+                source_doc_ids = [source_doc_id] if source_doc_id else []
+            time_horizon_days = None
+            try:
+                horizon_raw = takeaway.get("horizon_days")
+                if str(horizon_raw or "").strip():
+                    time_horizon_days = int(float(horizon_raw))
+            except (TypeError, ValueError):
+                time_horizon_days = None
+            record = build_watch_record(
+                agent_id=agent_id,
+                watch_kind="macro_takeaway",
+                summary=summary,
+                title=str(takeaway.get("title") or source_doc_id or "Macro takeaway").strip() or "Macro takeaway",
+                status="active",
+                source_doc_id=source_doc_id,
+                source_doc_ids=[str(item or "").strip() for item in source_doc_ids if str(item or "").strip()],
+                payload={
+                    "source": "read_official_macro_research",
+                    **dict(takeaway),
+                },
+                cycle_id=cycle_id,
+                llm_call_id=llm_call_id,
+                source_phase=source_phase,
+                source_event="macro_research_takeaway",
+                priority_score=float(takeaway.get("confidence") or takeaway.get("priority_score") or 0.45),
+                time_horizon_days=time_horizon_days,
+                context_tags={
+                    "watch_indicators": takeaway.get("watch_indicators") if isinstance(takeaway.get("watch_indicators"), list) else [],
+                },
+            )
+            if self._upsert_watch_item(record):
+                written += 1
+        if written:
+            logger.info("[cyan]Macro research watch items[/cyan] agent=%s written=%d", agent_id, written)
+        return written
+
+    def record_watch_updates(
+        self,
+        *,
+        agent_id: str,
+        watch_updates: list[dict[str, Any]],
+        cycle_id: str = "",
+        llm_call_id: str = "",
+        source_phase: str = "execution",
+    ) -> int:
+        """Persists explicit watch instructions emitted by the model."""
+        written = 0
+        for update in watch_updates or []:
+            if not isinstance(update, dict):
+                continue
+            kind = str(update.get("watch_kind") or update.get("kind") or "").strip().lower()
+            if not kind:
+                if update.get("source_doc_id") or update.get("source_doc_ids"):
+                    kind = "macro_takeaway"
+                elif str(update.get("ticker") or "").strip():
+                    kind = "candidate"
+                else:
+                    kind = "post_exit"
+            action = str(update.get("action") or "add").strip().lower()
+            summary = str(update.get("summary") or update.get("takeaway") or update.get("reason") or update.get("title") or "").strip()
+            if not summary:
+                continue
+            source_doc_ids = update.get("source_doc_ids")
+            if not isinstance(source_doc_ids, list):
+                source_doc_ids = []
+                source_doc_id = str(update.get("source_doc_id") or "").strip()
+                if source_doc_id:
+                    source_doc_ids = [source_doc_id]
+            else:
+                source_doc_ids = [str(item or "").strip() for item in source_doc_ids if str(item or "").strip()]
+            time_horizon_days = None
+            try:
+                horizon_raw = update.get("time_horizon_days")
+                if str(horizon_raw or "").strip():
+                    time_horizon_days = int(float(horizon_raw))
+            except (TypeError, ValueError):
+                time_horizon_days = None
+            status = str(update.get("watch_status") or "").strip().lower()
+            if action == "resolve":
+                status = "resolved"
+            if not status:
+                status = "active"
+            payload = dict(update)
+            payload.setdefault("source", "adk_watch_update")
+            record = build_watch_record(
+                agent_id=agent_id,
+                watch_kind=kind,
+                summary=summary,
+                title=str(update.get("title") or update.get("headline") or summary).strip() or summary,
+                status=status,
+                ticker=update.get("ticker"),
+                source_doc_id=update.get("source_doc_id"),
+                source_doc_ids=source_doc_ids,
+                payload=payload,
+                cycle_id=cycle_id or update.get("cycle_id"),
+                llm_call_id=llm_call_id or update.get("llm_call_id"),
+                source_phase=source_phase or str(update.get("source_phase") or "").strip(),
+                source_event=str(update.get("source_event") or action).strip() or action,
+                priority_score=update.get("priority_score"),
+                time_horizon_days=time_horizon_days,
+                next_review_at=update.get("next_review_at") if isinstance(update.get("next_review_at"), datetime) else None,
+                expires_at=update.get("expires_at") if isinstance(update.get("expires_at"), datetime) else None,
+                resolved_at=update.get("resolved_at") if isinstance(update.get("resolved_at"), datetime) else None,
+                resolution=str(update.get("resolution") or "").strip() or None,
+                observed_return_krw=update.get("observed_return_krw"),
+                observed_return_ratio=update.get("observed_return_ratio"),
+                observed_price_krw=update.get("observed_price_krw"),
+                observed_note=update.get("observed_note"),
+                context_tags=update.get("context_tags") if isinstance(update.get("context_tags"), dict) else None,
+                watch_key=update.get("watch_key"),
+            )
+            if self._upsert_watch_item(record):
+                written += 1
+        if written:
+            logger.info("[cyan]Watch updates[/cyan] agent=%s written=%d", agent_id, written)
+        return written
+
+    def record_candidate_watch_items(
+        self,
+        *,
+        agent_id: str,
+        candidate_ledger: dict[str, dict[str, Any]],
+        held_tickers: set[str] | None = None,
+        cycle_id: str = "",
+        phase: str = "",
+        limit: int = 5,
+    ) -> int:
+        """Persists candidate watch items as durable watch-list entries."""
+        _ = held_tickers
+        rows = candidate_cases(candidate_ledger, limit=limit)
+        updates: list[dict[str, Any]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            ticker = str(row.get("ticker") or "").strip().upper()
+            if not ticker:
+                continue
+            workflow_status = str(row.get("workflow_status") or "").strip().lower()
+            candidate_status = str(row.get("candidate_status") or row.get("status") or "candidate").strip().lower()
+            action = "resolve" if workflow_status in {"executed", "skipped"} else "add"
+            summary = str(row.get("case_for") or row.get("case_risk") or "candidate watch").strip()
+            updates.append(
+                {
+                    "action": action,
+                    "watch_kind": "candidate",
+                    "ticker": ticker,
+                    "title": f"{ticker} candidate watch",
+                    "summary": summary,
+                    "watch_status": "resolved" if action == "resolve" else "active",
+                    "resolution": workflow_status if action == "resolve" else "",
+                    "priority_score": 0.35 if candidate_status == "candidate" else 0.5,
+                    "time_horizon_days": 30,
+                    "cycle_id": cycle_id,
+                    "source_phase": phase,
+                    "source_event": "candidate_ledger",
+                    "payload": {
+                        "case_for": row.get("case_for"),
+                        "case_risk": row.get("case_risk"),
+                        "source_tools": row.get("source_tools"),
+                        "analyzed_by": row.get("analyzed_by"),
+                        "workflow_status": workflow_status,
+                        "candidate_status": candidate_status,
+                        "evidence_level": row.get("evidence_level"),
+                        "discovery_buckets": row.get("discovery_buckets"),
+                    },
+                }
+            )
+        return self.record_watch_updates(
+            agent_id=agent_id,
+            watch_updates=updates,
+            cycle_id=cycle_id,
+            source_phase=phase,
+        )
 
     def record_reflection(
         self,

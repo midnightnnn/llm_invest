@@ -92,6 +92,40 @@ TABLE_DDLS: tuple[str, ...] = (
     CLUSTER BY tenant_id, agent_id, event_type
     """,
     """
+    CREATE TABLE IF NOT EXISTS `{project}.{dataset}.agent_watch_items` (
+      tenant_id STRING NOT NULL,
+      watch_key STRING NOT NULL,
+      created_at TIMESTAMP NOT NULL,
+      updated_at TIMESTAMP NOT NULL,
+      agent_id STRING NOT NULL,
+      watch_kind STRING NOT NULL,
+      watch_status STRING NOT NULL,
+      ticker STRING,
+      source_doc_id STRING,
+      source_doc_ids_json JSON,
+      title STRING,
+      summary STRING NOT NULL,
+      payload_json JSON,
+      cycle_id STRING,
+      llm_call_id STRING,
+      source_phase STRING,
+      source_event STRING,
+      priority_score FLOAT64,
+      time_horizon_days INT64,
+      next_review_at TIMESTAMP,
+      expires_at TIMESTAMP,
+      resolved_at TIMESTAMP,
+      resolution STRING,
+      observed_return_krw FLOAT64,
+      observed_return_ratio FLOAT64,
+      observed_price_krw FLOAT64,
+      observed_note STRING,
+      context_tags_json JSON
+    )
+    PARTITION BY DATE(created_at)
+    CLUSTER BY tenant_id, agent_id, watch_kind, watch_status
+    """,
+    """
     CREATE TABLE IF NOT EXISTS `{project}.{dataset}.memory_access_events` (
       tenant_id STRING NOT NULL,
       access_id STRING NOT NULL,

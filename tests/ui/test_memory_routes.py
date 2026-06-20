@@ -44,6 +44,7 @@ def test_memory_settings_page_uses_compact_prompt_copy(monkeypatch) -> None:
     assert "Memory Map" in response.text
     assert "Map" in response.text
     assert "Activity" in response.text
+    assert 'data-memory-tab="watch"' in response.text
     assert "Network" in response.text
     assert "회고 정리 안내문" in response.text
     assert "투자 논리 시작" in response.text
@@ -213,6 +214,99 @@ def test_api_memory_activity_returns_examples(monkeypatch) -> None:
     assert payload["examples"][0]["ticker"] == "AAPL"
     assert payload["examples"][0]["prompt_uses"] == 2
     assert "bull" in payload["examples"][0]["badges"]
+
+
+def test_api_memory_watch_items_returns_examples(monkeypatch) -> None:
+    class _MemoryWatchRepo(_DummyRepo):
+        def fetch_rows(self, sql: str, params: dict | None = None) -> list[dict]:
+            self.fetch_calls.append((sql, params))
+            if "COUNT(1) AS total_items" in sql:
+                return [
+                    {
+                        "total_items": 2,
+                        "active_items": 1,
+                        "resolved_items": 1,
+                        "archived_items": 0,
+                        "last_updated_at": "2026-03-15T11:12:13Z",
+                    }
+                ]
+            if "FROM `proj.ds.agent_watch_items`" in sql:
+                return [
+                    {
+                        "watch_key": "candidate:gpt:AAPL:123",
+                        "created_at": "2026-03-14T08:00:00Z",
+                        "updated_at": "2026-03-15T09:00:00Z",
+                        "agent_id": "gpt",
+                        "watch_kind": "candidate",
+                        "watch_status": "active",
+                        "ticker": "AAPL",
+                        "title": "AAPL candidate watch",
+                        "summary": "quality pullback worth tracking",
+                        "source_doc_id": "",
+                        "source_doc_ids_json": json.dumps([]),
+                        "payload_json": json.dumps({"reason": "quality pullback"}),
+                        "cycle_id": "cycle_1",
+                        "llm_call_id": "",
+                        "source_phase": "execution",
+                        "source_event": "add",
+                        "priority_score": 0.42,
+                        "time_horizon_days": 30,
+                        "next_review_at": "2026-03-20T00:00:00Z",
+                        "expires_at": None,
+                        "resolved_at": None,
+                        "resolution": "",
+                        "observed_return_krw": None,
+                        "observed_return_ratio": None,
+                        "observed_price_krw": None,
+                        "observed_note": "",
+                        "context_tags_json": json.dumps({"watch_indicators": ["earnings", "guidance"]}),
+                    },
+                    {
+                        "watch_key": "post_exit:gpt:AAPL:456",
+                        "created_at": "2026-03-12T08:00:00Z",
+                        "updated_at": "2026-03-15T10:00:00Z",
+                        "agent_id": "gpt",
+                        "watch_kind": "post_exit",
+                        "watch_status": "resolved",
+                        "ticker": "AAPL",
+                        "title": "AAPL thesis invalidated",
+                        "summary": "exit followed by a sharp drop",
+                        "source_doc_id": "",
+                        "source_doc_ids_json": json.dumps([]),
+                        "payload_json": json.dumps({"resolution": "thesis_invalidated"}),
+                        "cycle_id": "cycle_2",
+                        "llm_call_id": "",
+                        "source_phase": "execution",
+                        "source_event": "resolve",
+                        "priority_score": 0.8,
+                        "time_horizon_days": 20,
+                        "next_review_at": None,
+                        "expires_at": None,
+                        "resolved_at": "2026-03-15T10:00:00Z",
+                        "resolution": "thesis_invalidated",
+                        "observed_return_krw": -10000,
+                        "observed_return_ratio": -0.04,
+                        "observed_price_krw": 25000,
+                        "observed_note": "kept running after exit",
+                        "context_tags_json": json.dumps({"watch_indicators": ["post-exit"]}),
+                    },
+                ]
+            return []
+
+    monkeypatch.setenv("ARENA_UI_SETTINGS_ENABLED", "true")
+    monkeypatch.setenv("ARENA_UI_AUTH_ENABLED", "false")
+    app = _build_app(repo=_MemoryWatchRepo(), settings=load_settings())
+    client = DirectRouteClient(app)
+
+    response = client.get("/api/memory/watch-items", params={"tenant_id": "local"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["stats"]["total_items"] == 2
+    assert payload["stats"]["active_items"] == 1
+    assert payload["examples"][0]["ticker"] == "AAPL"
+    assert payload["examples"][0]["watch_kind"] == "candidate"
+    assert payload["examples"][1]["watch_status"] == "resolved"
 
 
 def test_api_memory_network_returns_nodes_and_links(monkeypatch) -> None:

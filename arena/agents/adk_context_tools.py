@@ -774,10 +774,12 @@ class _ContextTools:
     ) -> list[dict[str, Any]]:
         """Browse and read official BOK and St. Louis Fed macro research documents.
 
-        Official macro research is not a summary feed. Use it when policy,
-        credit, consumption, labor, productivity, housing, liquidity, or
-        external-sector shifts could become forward-looking trends before they are obvious in prices or indicators.
-        Choose documents freely; read only what seems decision-relevant.
+        Start by listing the available documents and source_doc_id values.
+        Then pick only the source_doc_ids that look decision-relevant and
+        read the original source text directly. This is the right tool when
+        policy, credit, consumption, labor, productivity, housing, liquidity,
+        or external-sector shifts may become forward-looking signals before
+        they are obvious in prices or indicators.
 
         Without source_doc_ids, returns a document list with source_doc_id,
         source_url, title, source, market, and document type. With

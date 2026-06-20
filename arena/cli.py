@@ -35,6 +35,7 @@ from arena.tenant_leases import FirestoreTenantLeaseStore
 from arena.cli_commands.admin import (
     cmd_approve_live_tenant,
     cmd_backfill_candidate_memory_structures,
+    cmd_backfill_watch_items,
     cmd_backfill_tenant_markets,
     cmd_enable_memory_forgetting,
     cmd_promote_tenant_live,
@@ -327,6 +328,17 @@ def build_parser() -> argparse.ArgumentParser:
     candidate_memory_backfill.add_argument("--include-existing", action="store_true", help="Rewrite rows that already have structured_memory")
     candidate_memory_backfill.add_argument("--limit-per-agent", type=int, default=1000, help="Maximum candidate memory rows per agent")
 
+    watch_items_backfill = sub.add_parser(
+        "backfill-watch-items",
+        help="Backfill durable watch items from candidate and thesis memory history",
+    )
+    watch_items_backfill.add_argument("--tenant", action="append", default=[], help="Optional tenant id (repeatable). Defaults to all runtime tenants")
+    watch_items_backfill.add_argument("--agent", action="append", default=[], help="Optional agent id (repeatable). Defaults to configured agents")
+    watch_items_backfill.add_argument("--live", action="store_true", help="Use live trading-mode memories")
+    watch_items_backfill.add_argument("--dry-run", action="store_true", help="Count rows without updating watch items")
+    watch_items_backfill.add_argument("--include-existing", action="store_true", help="Rewrite rows that already have watch items")
+    watch_items_backfill.add_argument("--limit-per-agent", type=int, default=1000, help="Maximum memory rows per agent")
+
     extract_rel = sub.add_parser(
         "extract-memory-relations",
         help="Extract semantic relation triples from stored memory sources",
@@ -451,6 +463,14 @@ def _dispatch_command(args: argparse.Namespace, parser: argparse.ArgumentParser)
             updated_by=str(getattr(ns, "updated_by", "") or "cli-memory-tuner"),
         ),
         "backfill-candidate-memory-structures": lambda ns: cmd_backfill_candidate_memory_structures(
+            tenant_ids=list(getattr(ns, "tenant", [])),
+            agent_ids=list(getattr(ns, "agent", [])),
+            live=bool(getattr(ns, "live", False)),
+            dry_run=bool(getattr(ns, "dry_run", False)),
+            include_existing=bool(getattr(ns, "include_existing", False)),
+            limit_per_agent=int(getattr(ns, "limit_per_agent", 1000) or 1000),
+        ),
+        "backfill-watch-items": lambda ns: cmd_backfill_watch_items(
             tenant_ids=list(getattr(ns, "tenant", [])),
             agent_ids=list(getattr(ns, "agent", [])),
             live=bool(getattr(ns, "live", False)),
