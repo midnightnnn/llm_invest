@@ -14,7 +14,7 @@ import requests
 
 from arena.config import Settings
 from arena.logging_utils import event_extra, failure_extra
-from arena.open_trading.domestic_master import fetch_kospi_master_rows
+from arena.open_trading.domestic_master import fetch_kosdaq_master_rows, fetch_kospi_master_rows
 from arena.open_trading.exchange_codes import normalize_us_order_exchange, target_market_default_us_order_exchange
 from arena.security.credential_store_env import load_local_secret_payload
 
@@ -1497,6 +1497,10 @@ class OpenTradingClient:
     def get_domestic_kospi_master_rows(self) -> list[dict[str, Any]]:
         """Returns official KIS KOSPI master rows sorted by market cap."""
         return fetch_kospi_master_rows(session=self.session, timeout=self.timeout_seconds)
+
+    def get_domestic_kosdaq_master_rows(self) -> list[dict[str, Any]]:
+        """Returns official KIS KOSDAQ master rows with raw industry metadata."""
+        return fetch_kosdaq_master_rows(session=self.session, timeout=self.timeout_seconds)
 
     def get_domestic_top_interest_stock(
         self,

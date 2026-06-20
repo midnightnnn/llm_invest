@@ -352,6 +352,10 @@ class LocalMarketStore:
                     "ticker_name": str(row.get("ticker_name") or row.get("name") or "").strip() or None,
                     "exchange_code": str(row.get("exchange_code") or "").strip() or "LOCAL",
                     "currency": str(row.get("currency") or row.get("quote_currency") or "").strip().upper() or None,
+                    "sector": str(row.get("sector") or "").strip() or None,
+                    "industry_code": str(row.get("industry_code") or "").strip() or None,
+                    "industry_name": str(row.get("industry_name") or "").strip() or None,
+                    "classification_source": str(row.get("classification_source") or "").strip() or None,
                     "lot_size": row.get("lot_size") if row.get("lot_size") is not None else 1,
                     "tick_size": row.get("tick_size"),
                     "tradable": bool(row.get("tradable", True)),
@@ -1834,7 +1838,8 @@ class LocalMarketStore:
             """
             WITH ranked AS (
               SELECT ticker, exchange_code, instrument_id, ticker_name,
-                     currency, lot_size, tick_size, tradable, status, updated_at,
+                     currency, sector, industry_code, industry_name, classification_source,
+                     lot_size, tick_size, tradable, status, updated_at,
                      ROW_NUMBER() OVER (
                        PARTITION BY ticker
                        ORDER BY updated_at DESC NULLS LAST
@@ -1843,7 +1848,8 @@ class LocalMarketStore:
               WHERE ticker IN (SELECT unnest($tickers))
             )
             SELECT ticker, exchange_code, instrument_id, ticker_name,
-                   currency, lot_size, tick_size, tradable, status, updated_at
+                   currency, sector, industry_code, industry_name, classification_source,
+                   lot_size, tick_size, tradable, status, updated_at
             FROM ranked
             WHERE rn = 1
             """,

@@ -16,7 +16,7 @@ def test_record_reflection_extracts_structured_tags_when_tagging_enabled() -> No
         "gpt",
         "Momentum breakouts work better in bull markets for AAPL.",
         score=0.72,
-        payload={"source": "memory_compaction", "tags": ["bull", "momentum", "breakout"]},
+        payload={"source": "memory_compaction", "tags": ["bull", "momentum", "breakout", "technology"]},
     )
 
     event = repo.events[0]

@@ -26,6 +26,27 @@ def test_sector_summary_groups() -> None:
     assert "avg_ret" in rows[0]
 
 
+def test_sector_summary_uses_instrument_master_classification() -> None:
+    class _Repo(FakeRepo):
+        def latest_instrument_map(self, tickers):
+            return {
+                "AAPL": {"sector": "Technology"},
+                "MSFT": {"sector": "Technology"},
+                "TSLA": {"sector": "Consumer Discretionary"},
+            }
+
+    settings = _settings()
+    settings.default_universe = ["AAPL", "MSFT", "TSLA", "PLTD"]
+    qt = QuantTools(repo=_Repo(), settings=settings)
+
+    rows = qt.sector_summary("20d")
+
+    by_sector = {row["sector"]: row for row in rows}
+    assert by_sector["Technology"]["tickers"] == ["AAPL", "MSFT"]
+    assert by_sector["Consumer Discretionary"]["tickers"] == ["TSLA"]
+    assert by_sector["Unknown"]["tickers"] == ["PLTD"]
+
+
 def test_sector_summary_market_scope_us_narrows_multi_market_agent() -> None:
     class _Repo(FakeRepo):
         def __init__(self):

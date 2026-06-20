@@ -47,8 +47,6 @@ from .allocation import (
     recompute_stats,
 )
 from .screening import build_discovery_rows, momentum_scores
-from .sector_map import SECTOR_BY_TICKER
-
 logger = logging.getLogger(__name__)
 
 _RECOMMEND_OPPORTUNITY_MAX_POOL = 500
@@ -2344,12 +2342,32 @@ class QuantTools:
             lookback_days=22,
         )
 
+        row_tickers = _dedupe_tokens(
+            [str(row.get("ticker") or "").strip().upper() for row in rows if str(row.get("ticker") or "").strip()]
+        )
+        sector_by_ticker: dict[str, str] = {}
+        instrument_loader = getattr(self.repo, "latest_instrument_map", None)
+        if callable(instrument_loader) and row_tickers:
+            try:
+                instrument_map = instrument_loader(row_tickers)
+            except Exception as exc:
+                logger.debug("instrument sector metadata lookup failed: %s", exc)
+                instrument_map = {}
+            if isinstance(instrument_map, dict):
+                for ticker, meta in instrument_map.items():
+                    token = str(ticker or "").strip().upper()
+                    if not token or not isinstance(meta, dict):
+                        continue
+                    sector = str(meta.get("sector") or "").strip()
+                    if sector:
+                        sector_by_ticker[token] = sector
+
         buckets: dict[str, list[dict]] = {}
         for r in rows:
             t = str(r.get("ticker", "")).strip().upper()
             if not t:
                 continue
-            sector = SECTOR_BY_TICKER.get(t, "Unknown")
+            sector = sector_by_ticker.get(t) or "Unknown"
             buckets.setdefault(sector, []).append(r)
 
         out: list[dict] = []

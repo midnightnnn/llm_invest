@@ -60,9 +60,9 @@ def test_compact_tool_result_reddit_drops_url_and_trims_text() -> None:
     assert len(out[0]["selftext_snippet"]) <= 140
 
 
-def test_compact_macro_research_briefing_keeps_source_doc_id_for_drilldown() -> None:
+def test_compact_official_macro_research_keeps_source_doc_id_for_drilldown() -> None:
     out = _compact_tool_result_for_prompt(
-        "get_macro_research_briefing",
+        "read_official_macro_research",
         [
             {
                 "published_at": "2026-05-22T15:00:00+00:00",
@@ -81,12 +81,12 @@ def test_compact_macro_research_briefing_keeps_source_doc_id_for_drilldown() -> 
     assert out[0]["source_doc_id"] == "stlouisfed:review:mortgage-denial-2018-2024"
 
 
-def test_compact_macro_research_briefing_preserves_full_text_for_model_context() -> None:
+def test_compact_official_macro_research_preserves_full_text_for_model_context() -> None:
     long_summary = ("Macro research transmission channel " * 12) + "SUMMARY_TAIL"
     long_implication = ("Portfolio implication from official research " * 12) + "IMPLICATION_TAIL"
 
     out = _compact_tool_result_for_prompt(
-        "get_macro_research_briefing",
+        "read_official_macro_research",
         [
             {
                 "published_at": "2026-05-22T15:00:00+00:00",

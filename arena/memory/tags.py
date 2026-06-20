@@ -3,8 +3,6 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from arena.tools.sector_map import SECTOR_BY_TICKER
-
 _REGIME_ALIASES = {
     "bull": "bull",
     "bullish": "bull",
@@ -120,7 +118,7 @@ def sector_tag_for_ticker(ticker: Any) -> str:
     token = str(ticker or "").strip().upper()
     if not token:
         return ""
-    return canonical_sector_tag(SECTOR_BY_TICKER.get(token, ""))
+    return ""
 
 
 def _collect_tickers_from_value(value: Any, tickers: list[str], *, depth: int = 0) -> None:

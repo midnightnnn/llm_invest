@@ -764,7 +764,7 @@ def _compact_tool_result_for_prompt(
             ),
             limit=8,
         )
-    elif token == "get_macro_research_briefing":
+    elif token == "read_official_macro_research":
         compacted = _compact_rows(
             core,
             fields=(

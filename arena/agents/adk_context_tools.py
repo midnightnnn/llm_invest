@@ -764,7 +764,7 @@ class _ContextTools:
             result = await result
         return bool(result)
 
-    async def get_macro_research_briefing(
+    async def read_official_macro_research(
         self,
         market: MacroResearchMarket = "all",
         sources: Optional[list[MacroResearchSource]] = None,
@@ -772,7 +772,7 @@ class _ContextTools:
         offset: int = 0,
         limit: int = 5,
     ) -> list[dict[str, Any]]:
-        """Browse official BOK and St. Louis Fed research documents from rule-based metadata.
+        """Browse and read official BOK and St. Louis Fed macro research documents.
 
         Official macro research is not a summary feed. Use it when policy,
         credit, consumption, labor, productivity, housing, liquidity, or

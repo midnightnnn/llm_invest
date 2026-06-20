@@ -2640,6 +2640,10 @@ class MarketStore:
                 "ticker_name": str(row.get("ticker_name") or "").strip() or None,
                 "exchange_code": exchange_code,
                 "currency": str(row.get("currency", "")).strip().upper() or None,
+                "sector": str(row.get("sector") or "").strip() or None,
+                "industry_code": str(row.get("industry_code") or "").strip() or None,
+                "industry_name": str(row.get("industry_name") or "").strip() or None,
+                "classification_source": str(row.get("classification_source") or "").strip() or None,
                 "lot_size": int(row.get("lot_size") or 1),
                 "tick_size": float(row["tick_size"]) if row.get("tick_size") is not None else None,
                 "tradable": bool(row.get("tradable")) if row.get("tradable") is not None else None,
@@ -2684,12 +2688,14 @@ class MarketStore:
         where = "WHERE " + " AND ".join(filters) if filters else ""
         sql = f"""
         WITH latest AS (
-          SELECT instrument_id, ticker, ticker_name, exchange_code, currency, lot_size, tick_size, tradable, status, updated_at,
+          SELECT instrument_id, ticker, ticker_name, exchange_code, currency, sector, industry_code, industry_name, classification_source,
+                 lot_size, tick_size, tradable, status, updated_at,
                  ROW_NUMBER() OVER (PARTITION BY instrument_id ORDER BY updated_at DESC) AS rn
           FROM `{self.session.dataset_fqn}.instrument_master`
           {where}
         )
-        SELECT instrument_id, ticker, ticker_name, exchange_code, currency, lot_size, tick_size, tradable, status, updated_at
+        SELECT instrument_id, ticker, ticker_name, exchange_code, currency, sector, industry_code, industry_name, classification_source,
+               lot_size, tick_size, tradable, status, updated_at
         FROM latest
         WHERE rn = 1
         ORDER BY updated_at DESC
