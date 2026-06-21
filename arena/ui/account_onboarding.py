@@ -4,7 +4,7 @@ import logging
 from copy import deepcopy
 from typing import Any, Callable
 
-from arena.agents.investment_chat.market_scope import account_market_override
+from arena.agents.investment_chat.market_scope import account_market_override, account_snapshot_market_scope
 from arena.agents.investment_chat.utils import repo_tenant_scope
 from arena.config import Settings
 from arena.logging_utils import failure_extra
@@ -29,9 +29,12 @@ def sync_account_snapshot_after_kis_save(
         account_settings = deepcopy(base_settings)
         account_settings.kis_target_market = market_scope
         with repo_tenant_scope(repo, tenant):
-            snapshot = open_trading_sync.AccountSyncService(settings=account_settings, repo=repo).sync_account_snapshot()
+            snapshot = open_trading_sync.AccountSyncService(settings=account_settings, repo=repo).sync_account_snapshot(
+                market_scope=account_snapshot_market_scope()
+            )
         detail = {
             "target_market": market_scope,
+            "snapshot_market_scope": account_snapshot_market_scope(),
             "cash_krw": float(getattr(snapshot, "cash_krw", 0.0) or 0.0),
             "total_equity_krw": float(getattr(snapshot, "total_equity_krw", 0.0) or 0.0),
             "position_count": len(getattr(snapshot, "positions", {}) or {}),

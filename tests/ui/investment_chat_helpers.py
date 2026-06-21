@@ -64,8 +64,8 @@ class _ChatOrderRepo(_DummyRepo):
     def resolve_tenant_id(self, tenant_id: str | None = None) -> str:
         return str(tenant_id or self.tenant_id or "local").strip().lower() or "local"
 
-    def latest_account_snapshot(self, *, tenant_id: str | None = None):
-        _ = tenant_id
+    def latest_account_snapshot(self, *, tenant_id: str | None = None, market_scope: str | None = None):
+        _ = tenant_id, market_scope
         return self.account_snapshot
 
     def build_agent_sleeve_snapshot(self, *, agent_id, sources=None, include_simulated=True, tenant_id=None):

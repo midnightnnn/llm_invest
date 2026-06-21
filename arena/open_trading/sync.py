@@ -2702,7 +2702,7 @@ class AccountSyncService:
     def _has_kospi_market(self) -> bool:
         return bool(self._parsed_markets() & {"kospi", "kosdaq"})
 
-    def sync_account_snapshot(self) -> AccountSnapshot:
+    def sync_account_snapshot(self, *, market_scope: str | None = None) -> AccountSnapshot:
         """Fetches account balance and writes latest snapshot."""
         has_us = self._has_us_market()
         has_kr = self._has_kospi_market()
@@ -2728,9 +2728,9 @@ class AccountSyncService:
         else:
             raise ValueError(f"unsupported target market for account sync: {self.settings.kis_target_market}")
 
-        market_scope = str(self.settings.kis_target_market or "").strip().lower()
+        write_market_scope = str(market_scope or self.settings.kis_target_market or "").strip().lower()
         try:
-            self.repo.write_account_snapshot(snapshot, market_scope=market_scope)
+            self.repo.write_account_snapshot(snapshot, market_scope=write_market_scope)
         except TypeError:
             self.repo.write_account_snapshot(snapshot)
         logger.info(
@@ -2741,6 +2741,7 @@ class AccountSyncService:
             extra={
                 "event": "account_sync_done",
                 "target_market": self.settings.kis_target_market,
+                "market_scope": write_market_scope,
                 "cash_krw": snapshot.cash_krw,
                 "total_equity_krw": snapshot.total_equity_krw,
                 "positions": len(snapshot.positions),

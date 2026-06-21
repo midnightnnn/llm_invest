@@ -5,7 +5,7 @@ from typing import Any, Literal
 
 from arena.agents.investment_chat.audit import append_chat_audit
 from arena.agents.investment_chat.context import normalize_tenant
-from arena.agents.investment_chat.market_scope import account_market_override, account_scope_settings
+from arena.agents.investment_chat.market_scope import account_scope_settings, account_snapshot_market_scope
 from arena.agents.investment_chat.utils import (
     latest_account_snapshot,
     repo_tenant_scope,
@@ -129,10 +129,6 @@ def _tenant_has_kis_credentials(repo: Any, *, tenant_id: str) -> bool:
     return bool(str((row or {}).get("kis_secret_name") or "").strip())
 
 
-def _account_market_override(repo: Any, *, tenant_id: str) -> str:
-    return account_market_override(repo, tenant_id=tenant_id)
-
-
 def _account_sync_settings(repo: Any, *, tenant_id: str, settings: Settings) -> Settings:
     return account_scope_settings(repo, tenant_id=tenant_id, settings=settings)
 
@@ -140,7 +136,7 @@ def _account_sync_settings(repo: Any, *, tenant_id: str, settings: Settings) -> 
 def _account_scope_payload(repo: Any, *, tenant_id: str) -> dict[str, str]:
     return {
         "scope": "account",
-        "market_scope": _account_market_override(repo, tenant_id=tenant_id),
+        "market_scope": account_snapshot_market_scope(),
     }
 
 
@@ -158,7 +154,7 @@ def build_account_tool_entries(*, repo: Any, settings: Settings, tenant_id: str)
                 "requested_source": source_token,
                 "available_agent_ids": available_agent_ids,
             }
-        market_scope = _account_market_override(repo, tenant_id=tenant)
+        market_scope = account_snapshot_market_scope()
         snapshot = latest_account_snapshot(repo, tenant_id=tenant, market_scope=market_scope)
         if snapshot is None:
             return {
@@ -192,7 +188,9 @@ def build_account_tool_entries(*, repo: Any, settings: Settings, tenant_id: str)
         try:
             account_settings = _account_sync_settings(repo, tenant_id=tenant, settings=settings)
             with repo_tenant_scope(repo, tenant):
-                snapshot = AccountSyncService(settings=account_settings, repo=repo).sync_account_snapshot()
+                snapshot = AccountSyncService(settings=account_settings, repo=repo).sync_account_snapshot(
+                    market_scope=account_snapshot_market_scope()
+                )
         except Exception as exc:
             logger.warning(
                 "[yellow]Investment chat account refresh failed[/yellow] tenant=%s err=%s",
@@ -226,6 +224,7 @@ def build_account_tool_entries(*, repo: Any, settings: Settings, tenant_id: str)
             detail={
                 "position_count": len(getattr(snapshot, "positions", {}) or {}),
                 "target_market": str(getattr(account_settings, "kis_target_market", "") or ""),
+                "snapshot_market_scope": account_snapshot_market_scope(),
             },
         )
         payload = snapshot_payload(snapshot, tenant_id=tenant, max_positions=max_positions)
