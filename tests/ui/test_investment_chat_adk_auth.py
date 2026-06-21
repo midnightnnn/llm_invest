@@ -83,15 +83,20 @@ def test_investment_chat_adk_mobile_overrides_hide_debug_chrome() -> None:
     assert "margin-top: 0" in css
     assert "app-root" in css
     assert "app-eval-tab" in css
+    assert "body.arena-chat-composer-collapsed" in css
+    assert "touch-action: pan-y" in css
     assert "installArenaMobileChromeRemoval" in script
     assert "installArenaMobileTopGapRemoval" in script
+    assert "installArenaMobileMessageClickShield" in script
+    assert "installArenaMessageCardClickSuppression" in script
+    assert "setComposerCollapsed" in script
+    assert "arena-chat-composer-collapsed" in script
     assert "app-toolbar" in script
     assert "trace-tab" in script
     assert "filter" in script.lower()
     assert "streaming" in script.lower()
     assert "mat-button-toggle" in script
     assert "DEBUG_CONTROL_TEXT" in script
-    assert "installArenaMobileMessageClickShield" in script
 
 
 def test_investment_chat_adk_api_requires_ui_auth(monkeypatch) -> None:

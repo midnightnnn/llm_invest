@@ -27,6 +27,9 @@ def test_adk_browser_overrides_blur_chat_input_after_mobile_submit() -> None:
     assert "textarea.chat-input-box" in script
     assert "button.send-message-btn" in script
     assert "active.blur()" in script
+    assert "setComposerCollapsed" in script
+    assert "arena-chat-composer-collapsed" in script
+    assert "pointerdown" in script
     assert "keydown" in script
     assert "Enter" in script
 
@@ -39,9 +42,40 @@ def test_adk_browser_mobile_chat_input_uses_compact_bottom_spacing() -> None:
     assert ".chat-input-container { padding: 0 !important; }" in css
     assert ".chat-input {\n    width: 100% !important;\n    padding: 6px 10px 0 !important;" in css
     assert ".chat-input-actions { margin-top: 4px !important;" in css
+    assert "body.arena-chat-composer-collapsed .chat-input-actions" in css
+    assert "height: 42px !important;" in css
+    assert "touch-action: pan-y !important;" in css
     assert "padding-bottom: 0 !important;" in css
     assert "safe area / viewport sizing" in css
     assert "max(16px, env(safe-area-inset-bottom))" not in css
+
+
+def test_adk_browser_message_bubbles_keep_mobile_scroll_gestures() -> None:
+    from arena.ui import investment_chat_adk
+
+    script = investment_chat_adk._MOBILE_KEYBOARD_DISMISSAL_SCRIPT
+    shield_block = script.split("(function installArenaMobileMessageClickShield()", 1)[1].split(
+        "(function installArenaMessageCardClickSuppression()", 1
+    )[0]
+    suppression_block = script.split("(function installArenaMessageCardClickSuppression()", 1)[1].split(
+        "(function installArenaMobileKeyboardDismissal()", 1
+    )[0]
+
+    assert "click', 'auxclick', 'contextmenu'" in shield_block
+    assert "touchstart" not in shield_block
+    assert "touchend" not in shield_block
+    assert "pointerdown" not in shield_block
+    assert "pointerup" not in shield_block
+    assert "mousedown" not in shield_block
+    assert "mouseup" not in shield_block
+
+    assert "click', 'auxclick', 'contextmenu'" in suppression_block
+    assert "touchstart" not in suppression_block
+    assert "touchend" not in suppression_block
+    assert "pointerdown" not in suppression_block
+    assert "pointerup" not in suppression_block
+    assert "mousedown" not in suppression_block
+    assert "mouseup" not in suppression_block
 
 
 def test_adk_browser_overrides_hide_live_call_controls() -> None:
