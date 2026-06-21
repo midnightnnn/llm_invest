@@ -236,6 +236,7 @@ def build_account_tool_entries(*, repo: Any, settings: Settings, tenant_id: str)
         """Reads one batch agent sleeve snapshot so chat advice can distinguish total account vs sleeve scope."""
         requested_agent = str(agent_id or "").strip().lower()
         agent, current_available_agent_ids = _resolve_available_agent_id(settings, requested_agent)
+        include_simulated = str(getattr(settings, "trading_mode", "") or "").strip().lower() != "live"
         if not requested_agent:
             return {
                 "status": "error",
@@ -261,14 +262,14 @@ def build_account_tool_entries(*, repo: Any, settings: Settings, tenant_id: str)
             snapshot, baseline_equity_krw, meta = builder(
                 agent_id=agent,
                 sources=sources_for_settings(settings),
-                include_simulated=True,
+                include_simulated=include_simulated,
                 tenant_id=tenant,
             )
         except TypeError:
             snapshot, baseline_equity_krw, meta = builder(
                 agent_id=agent,
                 sources=sources_for_settings(settings),
-                include_simulated=True,
+                include_simulated=include_simulated,
             )
         payload = snapshot_payload(snapshot, tenant_id=tenant, max_positions=max_positions)
         payload.update(

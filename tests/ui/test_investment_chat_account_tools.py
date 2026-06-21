@@ -143,6 +143,23 @@ def test_investment_chat_sleeve_tool_rejects_unknown_agent_id() -> None:
     assert repo.sleeve_calls == []
 
 
+def test_investment_chat_sleeve_tool_disables_simulated_rows_in_live_mode() -> None:
+    from arena.agents.investment_chat.account_tools import build_account_tool_entries
+
+    settings = load_settings()
+    settings.trading_mode = "live"
+    repo = _ChatOrderRepo()
+    tools = {
+        entry.name: entry.callable
+        for entry in build_account_tool_entries(repo=repo, settings=settings, tenant_id="local")
+    }
+
+    payload = tools["get_agent_sleeve_snapshot"](agent_id="gpt")
+
+    assert payload["status"] == "ok"
+    assert repo.sleeve_calls[-1]["include_simulated"] is False
+
+
 def test_refresh_account_snapshot_tool_calls_sync_service(monkeypatch) -> None:
     from arena.agents.investment_chat import account_tools
 
