@@ -792,6 +792,82 @@ TABLE_DDLS: tuple[str, ...] = (
     CLUSTER BY market, ticker
     """,
     """
+    CREATE TABLE IF NOT EXISTS `{project}.{dataset}.signal_daily_values_v2` (
+      as_of_date DATE NOT NULL,
+      created_at TIMESTAMP NOT NULL,
+      calibration_run_id STRING,
+      ticker STRING NOT NULL,
+      market STRING,
+      exchange_code STRING,
+      instrument_id STRING,
+      source STRING,
+      bucket STRING,
+      profile STRING,
+      signal_momentum_20d FLOAT64,
+      signal_pullback FLOAT64,
+      signal_meanrev_5d FLOAT64,
+      signal_lowvol FLOAT64,
+      signal_sentiment FLOAT64,
+      signal_forecast_er FLOAT64,
+      signal_forecast_prob FLOAT64,
+      signal_rsi_reversal FLOAT64,
+      signal_ma_crossover FLOAT64,
+      signal_bollinger_position FLOAT64,
+      signal_ep FLOAT64,
+      signal_bp FLOAT64,
+      signal_sp FLOAT64,
+      signal_roe FLOAT64,
+      signal_revenue_growth FLOAT64,
+      signal_eps_growth FLOAT64,
+      signal_low_debt FLOAT64,
+      ret_5d FLOAT64,
+      ret_20d FLOAT64,
+      volatility_20d FLOAT64,
+      sentiment_score FLOAT64,
+      close_price_krw FLOAT64,
+      fwd_return_20d FLOAT64,
+      fwd_benchmark_return_20d FLOAT64,
+      fwd_excess_return_20d FLOAT64,
+      fwd_mdd_20d FLOAT64,
+      label_ready BOOL NOT NULL,
+      signal_quality_json JSON
+    )
+    PARTITION BY as_of_date
+    CLUSTER BY market, ticker, calibration_run_id
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS `{project}.{dataset}.signal_calibration_runs` (
+      run_id STRING NOT NULL,
+      created_at TIMESTAMP NOT NULL,
+      market STRING,
+      status STRING NOT NULL,
+      promoted BOOL NOT NULL,
+      active BOOL NOT NULL,
+      score_source STRING NOT NULL,
+      baseline_score_source STRING,
+      active_score_source STRING,
+      validation_metrics_json JSON,
+      transform_specs_json JSON,
+      detail_json JSON
+    )
+    PARTITION BY DATE(created_at)
+    CLUSTER BY market, status, active
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS `{project}.{dataset}.signal_transform_specs` (
+      calibration_run_id STRING NOT NULL,
+      created_at TIMESTAMP NOT NULL,
+      market STRING,
+      signal_name STRING NOT NULL,
+      transform_name STRING NOT NULL,
+      params_json JSON,
+      validation_metrics_json JSON,
+      active BOOL NOT NULL
+    )
+    PARTITION BY DATE(created_at)
+    CLUSTER BY market, signal_name, active
+    """,
+    """
     CREATE TABLE IF NOT EXISTS `{project}.{dataset}.signal_daily_ic` (
       as_of_date DATE NOT NULL,
       created_at TIMESTAMP NOT NULL,

@@ -28,6 +28,13 @@ from arena.recommendation.macro_interactions import (
     MACRO_CONDITIONING_PAIRS,
     macro_factor_frame_for_rows,
 )
+from arena.recommendation.signal_calibration import (
+    PromotionMetrics,
+    TransformCandidate,
+    apply_signal_formula_specs,
+    calibrate_signal_formula_specs,
+    evaluate_promotion_gate,
+)
 from arena.recommendation.signals import ALL_SIGNALS, SignalDef
 
 logger = logging.getLogger(__name__)
@@ -73,6 +80,12 @@ class MacroConditionedPolicyFit:
     factor_values: dict[str, float]
     active_pairs: list[dict[str, Any]]
     training_dates: int
+
+
+@dataclass(frozen=True, slots=True)
+class _PolicyValidation:
+    metrics: PromotionMetrics
+    fold_rank_ics: list[float]
 
 
 def _utc_now() -> datetime:
@@ -213,8 +226,14 @@ def _overlay_latest_forecasts_for_scoring_rows(
     }
 
 
-def _policy_version(*, as_of_date: date, signals_count: int) -> str:
-    seed = f"joint-policy:{POLICY_VARIANT}:{as_of_date.isoformat()}:{signals_count}:{SCORE_SOURCE}"
+def _policy_version(
+    *,
+    as_of_date: date,
+    signals_count: int,
+    policy_variant: str = POLICY_VARIANT,
+    score_source: str = SCORE_SOURCE,
+) -> str:
+    seed = f"joint-policy:{policy_variant}:{as_of_date.isoformat()}:{signals_count}:{score_source}"
     digest = hashlib.sha1(seed.encode("utf-8")).hexdigest()[:12]
     return f"opportunity_ranker_joint_policy_{as_of_date.isoformat().replace('-', '')}_{digest}"
 
@@ -546,6 +565,8 @@ def _score_rows(
     params: JointPolicyParams,
     signals: tuple[SignalDef, ...] = POLICY_SIGNALS,
     macro_conditioning: MacroConditionedPolicyFit | None = None,
+    score_source: str = SCORE_SOURCE,
+    policy_variant: str = POLICY_VARIANT,
 ) -> list[dict[str, Any]]:
     if not scoring_rows:
         return []
@@ -574,7 +595,7 @@ def _score_rows(
                 "as_of_date": as_of_date.isoformat(),
                 "computed_at": computed_at.isoformat(),
                 "ranker_version": ranker_version,
-                "score_source": SCORE_SOURCE,
+                "score_source": score_source,
                 "ticker": ticker,
                 "market": row.get("market"),
                 "exchange_code": row.get("exchange_code"),
@@ -596,7 +617,7 @@ def _score_rows(
                     "model_family": "regularized_joint_policy_macro_interactions"
                     if macro_conditioning is not None
                     else "regularized_joint_policy",
-                    "policy_variant": POLICY_VARIANT if macro_conditioning is not None else "base",
+                    "policy_variant": policy_variant if macro_conditioning is not None else "base",
                     "policy_coefficients": {
                         name: round(float(value), 8) for name, value in fit.coefficients.items()
                     },
@@ -634,6 +655,450 @@ def _score_rows(
     for rank, row in enumerate(staged, start=1):
         row["recommendation_rank"] = rank
     return staged
+
+
+def _rank_values(values: list[float]) -> list[float]:
+    order = sorted(range(len(values)), key=lambda idx: (values[idx], idx))
+    ranks = [0.0] * len(values)
+    pos = 0
+    while pos < len(order):
+        end = pos + 1
+        while end < len(order) and values[order[end]] == values[order[pos]]:
+            end += 1
+        avg = (pos + end - 1) / 2.0
+        for idx in order[pos:end]:
+            ranks[idx] = avg
+        pos = end
+    return ranks
+
+
+def _pearson_corr(left: list[float], right: list[float]) -> float | None:
+    if len(left) != len(right) or len(left) < 3:
+        return None
+    left_mean = sum(left) / float(len(left))
+    right_mean = sum(right) / float(len(right))
+    num = 0.0
+    left_var = 0.0
+    right_var = 0.0
+    for left_value, right_value in zip(left, right):
+        dl = left_value - left_mean
+        dr = right_value - right_mean
+        num += dl * dr
+        left_var += dl * dl
+        right_var += dr * dr
+    den = math.sqrt(left_var * right_var)
+    if den <= 0.0:
+        return None
+    return float(num / den)
+
+
+def _rank_corr(left: list[float], right: list[float]) -> float | None:
+    return _pearson_corr(_rank_values(left), _rank_values(right))
+
+
+def _validation_dates(rows: list[dict[str, Any]], *, signals: tuple[SignalDef, ...]) -> list[date]:
+    grouped: dict[date, int] = {}
+    for row in rows:
+        if _finite_float(row.get("fwd_excess_return_20d")) is None:
+            continue
+        signal_count = sum(1 for signal in signals if _finite_float(row.get(signal.column)) is not None)
+        if signal_count <= 0:
+            continue
+        grouped[_date_key(row.get("as_of_date"))] = grouped.get(_date_key(row.get("as_of_date")), 0) + 1
+    return [as_of for as_of, count in sorted(grouped.items()) if count >= 3]
+
+
+def _score_policy_validation_day(
+    *,
+    day_rows: list[dict[str, Any]],
+    fit: JointPolicyFit,
+    params: JointPolicyParams,
+    signals: tuple[SignalDef, ...],
+) -> list[tuple[float, float]]:
+    usable_rows = [row for row in day_rows if _finite_float(row.get("fwd_excess_return_20d")) is not None]
+    if len(usable_rows) < 3:
+        return []
+    x, _ = _policy_feature_matrix(usable_rows, params=params, signals=signals)
+    if x.shape[0] < 3 or x.shape[1] == 0:
+        return []
+    coefs = np.asarray([fit.coefficients.get(signal.name, 0.0) for signal in signals], dtype=float)
+    scores = x @ coefs
+    pairs: list[tuple[float, float]] = []
+    for idx, row in enumerate(usable_rows):
+        target = _finite_float(row.get("fwd_excess_return_20d"))
+        score = float(scores[idx])
+        if target is not None and math.isfinite(score):
+            pairs.append((score, float(target)))
+    return pairs
+
+
+def _walk_forward_policy_validation(
+    rows: list[dict[str, Any]],
+    *,
+    params: JointPolicyParams,
+    signals: tuple[SignalDef, ...],
+) -> _PolicyValidation:
+    dates = _validation_dates(rows, signals=signals)
+    min_train_dates = max(5, int(params.min_training_dates))
+    if len(dates) <= min_train_dates:
+        return _PolicyValidation(
+            metrics=PromotionMetrics(
+                mean_rank_ic=0.0,
+                rank_ic_std=0.0,
+                top_bucket_excess_return_20d=0.0,
+                hit_rate=0.0,
+                coverage=0.0,
+                folds_total=0,
+                folds_won=0,
+                ranking_churn=0.0,
+            ),
+            fold_rank_ics=[],
+        )
+    by_date: dict[date, list[dict[str, Any]]] = {}
+    for row in rows:
+        by_date.setdefault(_date_key(row.get("as_of_date")), []).append(row)
+
+    rank_ics: list[float] = []
+    top_returns: list[float] = []
+    validation_rows = 0
+    scored_rows = 0
+    validation_dates = dates[min_train_dates:]
+    max_folds = 12
+    if len(validation_dates) > max_folds:
+        step = (len(validation_dates) - 1) / float(max_folds - 1)
+        indices = [round(idx * step) for idx in range(max_folds)]
+        validation_dates = [validation_dates[idx] for idx in indices]
+
+    for val_date in validation_dates:
+        train_rows = [
+            row
+            for train_date in dates
+            if train_date < val_date
+            for row in by_date.get(train_date, [])
+        ]
+        char_returns, training_dates, _ = _characteristic_returns_by_date(
+            train_rows,
+            params=params,
+            signals=signals,
+        )
+        if len(training_dates) < int(params.min_training_dates):
+            continue
+        try:
+            fit = fit_turnover_regularized_policy(
+                char_returns,
+                signal_names=tuple(signal.name for signal in signals),
+                params=params,
+            )
+        except ValueError:
+            continue
+        day_rows = by_date.get(val_date, [])
+        validation_rows += sum(1 for row in day_rows if _finite_float(row.get("fwd_excess_return_20d")) is not None)
+        pairs = _score_policy_validation_day(
+            day_rows=day_rows,
+            fit=fit,
+            params=params,
+            signals=signals,
+        )
+        scored_rows += len(pairs)
+        if len(pairs) < 3:
+            continue
+        scores = [pair[0] for pair in pairs]
+        targets = [pair[1] for pair in pairs]
+        rank_ic = _rank_corr(scores, targets)
+        if rank_ic is not None:
+            rank_ics.append(rank_ic)
+        ordered = sorted(pairs, key=lambda item: item[0], reverse=True)
+        top_n = max(1, int(math.ceil(len(ordered) * 0.20)))
+        top_returns.append(sum(target for _, target in ordered[:top_n]) / float(top_n))
+
+    mean_rank_ic = sum(rank_ics) / float(len(rank_ics)) if rank_ics else 0.0
+    if len(rank_ics) > 1:
+        rank_ic_std = math.sqrt(sum((value - mean_rank_ic) ** 2 for value in rank_ics) / float(len(rank_ics) - 1))
+    else:
+        rank_ic_std = 0.0
+    return _PolicyValidation(
+        metrics=PromotionMetrics(
+            mean_rank_ic=float(mean_rank_ic),
+            rank_ic_std=float(rank_ic_std),
+            top_bucket_excess_return_20d=float(sum(top_returns) / float(len(top_returns))) if top_returns else 0.0,
+            hit_rate=float(sum(1 for value in rank_ics if value > 0.0) / float(len(rank_ics))) if rank_ics else 0.0,
+            coverage=float(scored_rows / validation_rows) if validation_rows else 0.0,
+            folds_total=len(rank_ics),
+            folds_won=0,
+            ranking_churn=0.0,
+        ),
+        fold_rank_ics=rank_ics,
+    )
+
+
+def _metrics_json(metrics: PromotionMetrics) -> dict[str, Any]:
+    return {
+        "mean_rank_ic": metrics.mean_rank_ic,
+        "rank_ic_std": metrics.rank_ic_std,
+        "top_bucket_excess_return_20d": metrics.top_bucket_excess_return_20d,
+        "hit_rate": metrics.hit_rate,
+        "coverage": metrics.coverage,
+        "folds_total": metrics.folds_total,
+        "folds_won": metrics.folds_won,
+        "ranking_churn": metrics.ranking_churn,
+    }
+
+
+def _transform_spec_rows(
+    *,
+    calibration_run_id: str,
+    created_at: datetime,
+    market: str,
+    specs: list[TransformCandidate],
+    active: bool,
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "calibration_run_id": calibration_run_id,
+            "created_at": created_at.isoformat(),
+            "market": market or None,
+            "signal_name": spec.signal_name,
+            "transform_name": spec.transform_name,
+            "params_json": spec.params,
+            "validation_metrics_json": spec.metrics,
+            "active": bool(active),
+        }
+        for spec in specs
+    ]
+
+
+def _maybe_record_signal_v2_calibration(
+    *,
+    repo: Any,
+    market: str,
+    now: datetime,
+    training_rows: list[dict[str, Any]],
+    scoring_rows: list[dict[str, Any]],
+    params: JointPolicyParams,
+    horizon_days: int,
+    macro_training_diagnostics: dict[str, Any],
+    macro_scoring_diagnostics: dict[str, Any],
+) -> dict[str, Any] | None:
+    calibration_writer = getattr(repo, "insert_signal_calibration_run", None)
+    if not callable(calibration_writer):
+        return None
+
+    run_id = "sigcal_" + uuid.uuid4().hex[:24]
+    try:
+        specs = calibrate_signal_formula_specs(training_rows, signals=POLICY_SIGNALS)
+        transformed_training = apply_signal_formula_specs(
+            training_rows,
+            specs,
+            signals=POLICY_SIGNALS,
+        )
+        transformed_scoring = apply_signal_formula_specs(
+            scoring_rows,
+            specs,
+            signals=POLICY_SIGNALS,
+        )
+        baseline_validation = _walk_forward_policy_validation(
+            training_rows,
+            params=params,
+            signals=POLICY_SIGNALS,
+        )
+        candidate_validation = _walk_forward_policy_validation(
+            transformed_training,
+            params=params,
+            signals=POLICY_SIGNALS,
+        )
+        folds_won = sum(
+            1
+            for candidate_ic, baseline_ic in zip(
+                candidate_validation.fold_rank_ics,
+                baseline_validation.fold_rank_ics,
+            )
+            if candidate_ic > baseline_ic
+        )
+        candidate_metrics = PromotionMetrics(
+            mean_rank_ic=candidate_validation.metrics.mean_rank_ic,
+            rank_ic_std=candidate_validation.metrics.rank_ic_std,
+            top_bucket_excess_return_20d=candidate_validation.metrics.top_bucket_excess_return_20d,
+            hit_rate=candidate_validation.metrics.hit_rate,
+            coverage=candidate_validation.metrics.coverage,
+            folds_total=candidate_validation.metrics.folds_total,
+            folds_won=folds_won,
+            ranking_churn=0.0,
+        )
+        baseline_metrics = PromotionMetrics(
+            mean_rank_ic=baseline_validation.metrics.mean_rank_ic,
+            rank_ic_std=baseline_validation.metrics.rank_ic_std,
+            top_bucket_excess_return_20d=baseline_validation.metrics.top_bucket_excess_return_20d,
+            hit_rate=baseline_validation.metrics.hit_rate,
+            coverage=baseline_validation.metrics.coverage,
+            folds_total=baseline_validation.metrics.folds_total,
+            folds_won=0,
+            ranking_churn=0.0,
+        )
+        decision = evaluate_promotion_gate(candidate=candidate_metrics, baseline=baseline_metrics)
+
+        scores_written = 0
+        version = ""
+        if decision.promote:
+            from arena.recommendation.ranker import _append_run
+
+            char_returns, training_dates, observations = _characteristic_returns_by_date(
+                transformed_training,
+                params=params,
+                signals=POLICY_SIGNALS,
+            )
+            if len(training_dates) >= int(params.min_training_dates) and transformed_scoring:
+                fit = fit_turnover_regularized_policy(
+                    char_returns,
+                    signal_names=POLICY_SIGNAL_NAMES,
+                    params=params,
+                )
+                as_of_date = max(
+                    (_date_key(row.get("as_of_date")) for row in transformed_scoring),
+                    default=now.date(),
+                )
+                version = _policy_version(
+                    as_of_date=as_of_date,
+                    signals_count=len(POLICY_SIGNAL_NAMES),
+                    policy_variant="signal_formula_calibrated_v2_1",
+                    score_source="joint_policy_v2",
+                )
+                output_rows = _score_rows(
+                    scoring_rows=transformed_scoring,
+                    fit=fit,
+                    computed_at=now,
+                    as_of_date=as_of_date,
+                    ranker_version=version,
+                    params=params,
+                    signals=POLICY_SIGNALS,
+                    macro_conditioning=None,
+                    score_source="joint_policy_v2",
+                    policy_variant="signal_formula_calibrated_v2_1",
+                )
+                scores_written = int(repo.insert_opportunity_ranker_scores_latest(output_rows) or 0)
+                _append_run(
+                    repo,
+                    "ranker_v2_" + uuid.uuid4().hex[:20],
+                    now,
+                    version,
+                    "ok" if scores_written > 0 else "unusable",
+                    list(POLICY_SIGNAL_NAMES),
+                    observations,
+                    len(training_dates),
+                    len(transformed_scoring),
+                    candidate_metrics.mean_rank_ic,
+                    candidate_metrics.hit_rate,
+                    {
+                        "score_source": "joint_policy_v2",
+                        "market": market,
+                        "signal_calibration_run_id": run_id,
+                        "transform_specs": [
+                            {
+                                "signal_name": spec.signal_name,
+                                "transform_name": spec.transform_name,
+                                "params": spec.params,
+                                "metrics": spec.metrics,
+                            }
+                            for spec in specs
+                        ],
+                        "macro_conditioning": {
+                            "training": macro_training_diagnostics,
+                            "scoring": macro_scoring_diagnostics,
+                        },
+                    },
+                    score_source="joint_policy_v2",
+                )
+            if scores_written <= 0:
+                decision = evaluate_promotion_gate(
+                    candidate=PromotionMetrics(
+                        mean_rank_ic=candidate_metrics.mean_rank_ic,
+                        rank_ic_std=candidate_metrics.rank_ic_std,
+                        top_bucket_excess_return_20d=candidate_metrics.top_bucket_excess_return_20d,
+                        hit_rate=candidate_metrics.hit_rate,
+                        coverage=0.0,
+                        folds_total=candidate_metrics.folds_total,
+                        folds_won=candidate_metrics.folds_won,
+                        ranking_churn=candidate_metrics.ranking_churn,
+                    ),
+                    baseline=baseline_metrics,
+                )
+                candidate_metrics = PromotionMetrics(
+                    mean_rank_ic=candidate_metrics.mean_rank_ic,
+                    rank_ic_std=candidate_metrics.rank_ic_std,
+                    top_bucket_excess_return_20d=candidate_metrics.top_bucket_excess_return_20d,
+                    hit_rate=candidate_metrics.hit_rate,
+                    coverage=0.0,
+                    folds_total=candidate_metrics.folds_total,
+                    folds_won=candidate_metrics.folds_won,
+                    ranking_churn=candidate_metrics.ranking_churn,
+                )
+
+        transform_specs_json = [
+            {
+                "signal_name": spec.signal_name,
+                "transform_name": spec.transform_name,
+                "params": spec.params,
+                "metrics": spec.metrics,
+            }
+            for spec in specs
+        ]
+        spec_writer = getattr(repo, "insert_signal_transform_specs", None)
+        if callable(spec_writer):
+            spec_writer(
+                _transform_spec_rows(
+                    calibration_run_id=run_id,
+                    created_at=now,
+                    market=market,
+                    specs=specs,
+                    active=decision.promote,
+                )
+            )
+        calibration_row = {
+            "run_id": run_id,
+            "created_at": now.isoformat(),
+            "market": market or None,
+            "status": "approved" if decision.promote else "rejected",
+            "promoted": bool(decision.promote),
+            "active": bool(decision.promote),
+            "score_source": "joint_policy_v2" if decision.promote else "joint_policy_v1",
+            "baseline_score_source": "joint_policy_v1",
+            "active_score_source": "joint_policy_v2" if decision.promote else None,
+            "validation_metrics_json": {
+                "baseline": _metrics_json(baseline_metrics),
+                "candidate": _metrics_json(candidate_metrics),
+                "promotion_reasons": list(decision.reasons),
+                "v2_scores_written": scores_written,
+            },
+            "transform_specs_json": transform_specs_json,
+            "detail_json": {
+                "horizon_days": horizon_days,
+                "policy_variant": "signal_formula_calibrated_v2_1",
+                "calibration": "walk_forward_formula_policy_validation",
+            },
+        }
+        calibration_writer(calibration_row)
+        return calibration_row
+    except Exception as exc:  # pragma: no cover - v2 calibration must not mask v1 ranker output
+        logger.warning("[yellow]Signal V2 calibration failed[/yellow] err=%s", str(exc)[:200], exc_info=True)
+        try:
+            calibration_writer(
+                {
+                    "run_id": run_id,
+                    "created_at": now.isoformat(),
+                    "market": market or None,
+                    "status": "failed",
+                    "promoted": False,
+                    "active": False,
+                    "score_source": "joint_policy_v1",
+                    "baseline_score_source": "joint_policy_v1",
+                    "active_score_source": None,
+                    "validation_metrics_json": {},
+                    "transform_specs_json": [],
+                    "detail_json": {"error": str(exc)[:300]},
+                }
+            )
+        except Exception:
+            logger.warning("Signal V2 calibration failure metadata write failed", exc_info=True)
+        return None
 
 
 def build_and_store_joint_policy_ranker(
@@ -893,6 +1358,17 @@ def build_and_store_joint_policy_ranker(
             None,
             detail,
             score_source=SCORE_SOURCE,
+        )
+        _maybe_record_signal_v2_calibration(
+            repo=repo,
+            market=market,
+            now=now,
+            training_rows=training_rows,
+            scoring_rows=scoring_rows,
+            params=active_params,
+            horizon_days=horizon_days,
+            macro_training_diagnostics=macro_training_frame.diagnostics,
+            macro_scoring_diagnostics=macro_scoring_frame.diagnostics,
         )
         return OpportunityRankerBuildResult(
             status=status,

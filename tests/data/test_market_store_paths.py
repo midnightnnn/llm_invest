@@ -164,6 +164,10 @@ def test_load_signal_policy_training_rows_reads_label_ready_values() -> None:
     assert "fwd_excess_return_20d IS NOT NULL" in sql
     assert "signal_momentum_20d" in sql
     assert "signal_low_debt" in sql
+    assert "ret_5d" in sql
+    assert "ret_20d" in sql
+    assert "volatility_20d" in sql
+    assert "sentiment_score" in sql
     assert params["lookback_days"] == 180
     assert params["market"] == "us"
 
@@ -207,6 +211,72 @@ def test_insert_opportunity_ranker_scores_latest_appends_json_rows() -> None:
     assert table_id == "proj.ds.opportunity_ranker_scores_latest"
     assert rows[0]["ticker"] == "AAPL"
     assert rows[0]["feature_json"] == {"ret_20d": 0.1}
+
+
+def test_insert_signal_calibration_run_appends_json_payload() -> None:
+    store = _make_market_write_store()
+
+    inserted = store.insert_signal_calibration_run(
+        {
+            "run_id": "cal_20260627",
+            "created_at": "2026-06-27T00:00:00+00:00",
+            "market": "us",
+            "status": "approved",
+            "promoted": True,
+            "active": True,
+            "score_source": "joint_policy_v2",
+            "baseline_score_source": "joint_policy_v1",
+            "validation_metrics_json": {"mean_rank_ic": 0.024},
+            "detail_json": {"folds": 6},
+        }
+    )
+
+    assert inserted == 1
+    table_id, rows = store.session.client.loads[-1]
+    assert table_id == "proj.ds.signal_calibration_runs"
+    assert rows[0]["run_id"] == "cal_20260627"
+    assert rows[0]["promoted"] is True
+    assert rows[0]["validation_metrics_json"] == {"mean_rank_ic": 0.024}
+
+
+def test_insert_signal_transform_specs_appends_json_payloads() -> None:
+    store = _make_market_write_store()
+
+    inserted = store.insert_signal_transform_specs(
+        [
+            {
+                "calibration_run_id": "cal_20260627",
+                "created_at": "2026-06-27T00:00:00+00:00",
+                "market": "us",
+                "signal_name": "momentum_20d",
+                "transform_name": "negated",
+                "params_json": {},
+                "validation_metrics_json": {"mean_rank_ic": 0.04},
+                "active": True,
+            }
+        ]
+    )
+
+    assert inserted == 1
+    table_id, rows = store.session.client.loads[-1]
+    assert table_id == "proj.ds.signal_transform_specs"
+    assert rows[0]["signal_name"] == "momentum_20d"
+    assert rows[0]["validation_metrics_json"] == {"mean_rank_ic": 0.04}
+
+
+def test_latest_approved_signal_calibration_run_queries_active_promoted_run() -> None:
+    store = _make_market_store([[{"run_id": "cal", "score_source": "joint_policy_v2"}]])
+
+    rows = store.latest_approved_signal_calibration_run(market="us", max_age_hours=72)
+
+    assert rows["run_id"] == "cal"
+    sql, params = store.session.call_pairs[-1]
+    assert "signal_calibration_runs" in sql
+    assert "status = 'approved'" in sql
+    assert "promoted" in sql
+    assert "active" in sql
+    assert params["market"] == "us"
+    assert params["max_age_hours"] == 72
 
 
 def test_latest_fundamentals_snapshot_does_not_retry_on_empty_rows() -> None:

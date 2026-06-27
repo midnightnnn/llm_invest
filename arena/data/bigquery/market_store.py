@@ -1486,6 +1486,10 @@ class MarketStore:
                 "ticker",
                 "market",
                 *signal_columns,
+                "ret_5d",
+                "ret_20d",
+                "volatility_20d",
+                "sentiment_score",
                 "fwd_excess_return_20d",
                 "label_ready",
             ]
@@ -1638,6 +1642,62 @@ class MarketStore:
                 except json.JSONDecodeError:
                     data[key] = {"raw": value} if key == "detail_json" else [value]
         return self._append_json_rows_via_load_job(table_id, [data])
+
+    def insert_signal_calibration_run(self, row: dict[str, Any]) -> int:
+        if not row:
+            return 0
+        table_id = f"{self.session.dataset_fqn}.signal_calibration_runs"
+        data = dict(row)
+        for key in ("validation_metrics_json", "transform_specs_json", "detail_json"):
+            value = data.get(key)
+            if isinstance(value, str):
+                try:
+                    data[key] = json.loads(value)
+                except json.JSONDecodeError:
+                    data[key] = {"raw": value}
+        return self._append_json_rows_via_load_job(table_id, [data])
+
+    def insert_signal_transform_specs(self, rows: list[dict[str, Any]]) -> int:
+        if not rows:
+            return 0
+        table_id = f"{self.session.dataset_fqn}.signal_transform_specs"
+        payloads: list[dict[str, Any]] = []
+        for row in rows:
+            data = dict(row)
+            for key in ("params_json", "validation_metrics_json"):
+                value = data.get(key)
+                if isinstance(value, str):
+                    try:
+                        data[key] = json.loads(value)
+                    except json.JSONDecodeError:
+                        data[key] = {"raw": value}
+            payloads.append(data)
+        return self._append_json_rows_via_load_job(table_id, payloads)
+
+    def latest_approved_signal_calibration_run(
+        self,
+        *,
+        market: str | None = None,
+        max_age_hours: int = 24 * 14,
+    ) -> dict[str, Any] | None:
+        market_token = str(market or "").strip().lower() or None
+        params: dict[str, Any] = {
+            "market": market_token,
+            "max_age_hours": max(1, min(int(max_age_hours or (24 * 14)), 24 * 365)),
+        }
+        sql = f"""
+        SELECT *
+        FROM `{self.session.dataset_fqn}.signal_calibration_runs`
+        WHERE status = 'approved'
+          AND promoted
+          AND active
+          AND created_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @max_age_hours HOUR)
+          AND (@market IS NULL OR market = @market OR market IS NULL)
+        ORDER BY created_at DESC, run_id DESC
+        LIMIT 1
+        """
+        rows = self.session.fetch_rows(sql, params)
+        return dict(rows[0]) if rows else None
 
     def insert_shared_prep_session(self, row: dict[str, Any]) -> int:
         """Records one shared-prep session marker (slow or fast) used by the
