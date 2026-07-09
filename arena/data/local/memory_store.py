@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any
 
 from arena.memory.graph import ensure_memory_event_graph_ids
+from arena.memory.watch_items import build_watch_record, parse_watch_row
 from arena.data.local.session import DuckDBSession
 from arena.models import BoardPost, MemoryEvent, utc_now
 
@@ -17,6 +18,14 @@ _MEMORY_SELECT_COLUMNS = (
     "semantic_key, context_tags_json, primary_regime, primary_strategy_tag, primary_sector, "
     "access_count, last_accessed_at, decay_score, effective_score, graph_node_id, causal_chain_id, "
     "cycle_id, llm_call_id"
+)
+
+_WATCH_SELECT_COLUMNS = (
+    "watch_key, created_at, updated_at, agent_id, watch_kind, watch_status, ticker, "
+    "source_doc_id, source_doc_ids_json, title, summary, payload_json, cycle_id, llm_call_id, "
+    "source_phase, source_event, priority_score, time_horizon_days, next_review_at, expires_at, "
+    "resolved_at, resolution, observed_return_krw, observed_return_ratio, observed_price_krw, "
+    "observed_note, context_tags_json"
 )
 
 
@@ -1114,3 +1123,156 @@ class LocalMemoryStore:
                     next_row[key] = self._json_dumps(next_row[key])
             payload_rows.append(next_row)
         self.session.insert_dicts("memory_relation_tuning_runs", payload_rows)
+
+    # ------------------------------------------------------------------
+    # Watch items
+    # ------------------------------------------------------------------
+
+    def watch_item_by_key(
+        self,
+        *,
+        watch_key: str,
+        tenant_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        tenant = self.session.resolve_tenant_id(tenant_id)
+        token = str(watch_key or "").strip()
+        if not token:
+            return None
+        rows = self.session.fetch_rows(
+            f"""
+            SELECT {_WATCH_SELECT_COLUMNS}
+            FROM agent_watch_items
+            WHERE tenant_id = $tenant_id
+              AND watch_key = $watch_key
+            LIMIT 1
+            """,
+            {"tenant_id": tenant, "watch_key": token},
+        )
+        return parse_watch_row(rows[0]) if rows else None
+
+    def watch_items(
+        self,
+        *,
+        agent_id: str,
+        limit: int = 24,
+        watch_kinds: list[str] | None = None,
+        watch_statuses: list[str] | None = None,
+        ticker: str | None = None,
+        source_doc_id: str | None = None,
+        active_only: bool = False,
+        tenant_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        tenant = self.session.resolve_tenant_id(tenant_id)
+        conditions = ["tenant_id = $tenant_id", "agent_id = $agent_id"]
+        params: dict[str, Any] = {
+            "tenant_id": tenant,
+            "agent_id": str(agent_id or "").strip(),
+            "limit": max(1, int(limit)),
+        }
+        if active_only:
+            conditions.append("watch_status = $watch_status")
+            params["watch_status"] = "active"
+        elif watch_statuses:
+            clean_statuses = [str(item or "").strip().lower() for item in watch_statuses if str(item or "").strip()]
+            if clean_statuses:
+                conditions.append("watch_status IN (SELECT unnest($watch_statuses))")
+                params["watch_statuses"] = clean_statuses
+        if watch_kinds:
+            clean_kinds = [str(item or "").strip().lower() for item in watch_kinds if str(item or "").strip()]
+            if clean_kinds:
+                conditions.append("watch_kind IN (SELECT unnest($watch_kinds))")
+                params["watch_kinds"] = clean_kinds
+        if ticker:
+            conditions.append("ticker = $ticker")
+            params["ticker"] = str(ticker or "").strip().upper()
+        if source_doc_id:
+            conditions.append("source_doc_id = $source_doc_id")
+            params["source_doc_id"] = str(source_doc_id or "").strip()
+        rows = self.session.fetch_rows(
+            f"""
+            SELECT {_WATCH_SELECT_COLUMNS}
+            FROM agent_watch_items
+            WHERE {' AND '.join(conditions)}
+            ORDER BY
+              CASE watch_status WHEN 'active' THEN 0 WHEN 'resolved' THEN 1 ELSE 2 END ASC,
+              COALESCE(updated_at, created_at) DESC,
+              created_at DESC
+            LIMIT $limit
+            """,
+            params,
+        )
+        return [parse_watch_row(row) for row in rows]
+
+    def active_watch_items(
+        self,
+        *,
+        agent_id: str,
+        limit: int = 24,
+        watch_kinds: list[str] | None = None,
+        ticker: str | None = None,
+        source_doc_id: str | None = None,
+        tenant_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        return self.watch_items(
+            agent_id=agent_id,
+            limit=limit,
+            watch_kinds=watch_kinds,
+            ticker=ticker,
+            source_doc_id=source_doc_id,
+            active_only=True,
+            tenant_id=tenant_id,
+        )
+
+    def upsert_watch_item(self, row: dict[str, Any], *, tenant_id: str | None = None) -> None:
+        tenant = self.session.resolve_tenant_id(tenant_id)
+        watch_key = str(row.get("watch_key") or "").strip()
+        if not watch_key:
+            raise ValueError("watch_key is required")
+        existing = self.watch_item_by_key(watch_key=watch_key, tenant_id=tenant)
+        created_at = (existing or {}).get("created_at") or row.get("created_at")
+        built = build_watch_record(
+            agent_id=str(row.get("agent_id") or "").strip(),
+            watch_kind=str(row.get("watch_kind") or "").strip(),
+            summary=str(row.get("summary") or "").strip(),
+            title=str(row.get("title") or "").strip() or None,
+            status=str(row.get("watch_status") or row.get("status") or "active"),
+            ticker=row.get("ticker"),
+            source_doc_id=row.get("source_doc_id"),
+            source_doc_ids=row.get("source_doc_ids") if isinstance(row.get("source_doc_ids"), list) else None,
+            payload=row.get("payload") if isinstance(row.get("payload"), dict) else row.get("payload_json"),
+            cycle_id=row.get("cycle_id"),
+            llm_call_id=row.get("llm_call_id"),
+            source_phase=row.get("source_phase"),
+            source_event=row.get("source_event"),
+            priority_score=row.get("priority_score"),
+            time_horizon_days=row.get("time_horizon_days"),
+            next_review_at=row.get("next_review_at"),
+            expires_at=row.get("expires_at"),
+            resolved_at=row.get("resolved_at"),
+            resolution=row.get("resolution"),
+            observed_return_krw=row.get("observed_return_krw"),
+            observed_return_ratio=row.get("observed_return_ratio"),
+            observed_price_krw=row.get("observed_price_krw"),
+            observed_note=row.get("observed_note"),
+            context_tags=row.get("context_tags") if isinstance(row.get("context_tags"), dict) else row.get("context_tags_json"),
+            watch_key=watch_key,
+            created_at=created_at if isinstance(created_at, datetime) else None,
+            updated_at=row.get("updated_at") if isinstance(row.get("updated_at"), datetime) else None,
+        )
+        built["tenant_id"] = tenant
+        self.session.execute(
+            """
+            DELETE FROM agent_watch_items
+            WHERE tenant_id = $tenant_id
+              AND watch_key = $watch_key
+            """,
+            {"tenant_id": tenant, "watch_key": watch_key},
+        )
+        self.session.insert_dict("agent_watch_items", built)
+
+    def upsert_watch_items(self, rows: list[dict[str, Any]], *, tenant_id: str | None = None) -> None:
+        if not rows:
+            return
+        for row in rows:
+            if isinstance(row, dict):
+                self.upsert_watch_item(row, tenant_id=tenant_id)

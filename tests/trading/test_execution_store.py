@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from arena.data.bigquery.execution_store import ExecutionStore
 from arena.models import OrderIntent, RiskDecision, Side
 from tests.helpers.bigquery import FakeBigQuerySession
@@ -56,3 +58,27 @@ def test_recent_trade_history_joins_execution_reports_to_order_intents() -> None
     assert params["days"] == 30
     assert params["limit"] == 5
     assert params["statuses"] == ["SIMULATED"]
+
+
+def test_recent_submitted_reports_scans_partial_fills() -> None:
+    session = FakeBigQuerySession(fetch_result=[])
+    store = ExecutionStore(session)
+
+    store.recent_submitted_reports(limit=25, lookback_hours=24, trading_mode="live")
+
+    sql, params = session.fetched[0]
+    assert "status IN UNNEST(@statuses)" in sql
+    assert params["statuses"] == ["SUBMITTED", "PARTIAL_FILLED"]
+    assert params["trading_mode"] == "live"
+
+
+def test_filled_execution_reports_since_replays_partial_fills() -> None:
+    session = FakeBigQuerySession(fetch_result=[])
+    store = ExecutionStore(session)
+    since = datetime(2026, 6, 5, 5, 41, tzinfo=timezone.utc)
+
+    store.filled_execution_reports_since(since=since, tenant_id="cxznms")
+
+    _sql, params = session.fetched[0]
+    assert params["tenant_id"] == "cxznms"
+    assert params["statuses"] == ["FILLED", "PARTIAL_FILLED"]

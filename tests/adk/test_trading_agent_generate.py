@@ -69,6 +69,53 @@ class _FailRunner:
         raise RuntimeError("runner boom")
 
 
+class _WatchMemoryStore:
+    def __init__(self) -> None:
+        self.vector_store = None
+        self.research_calls: list[dict] = []
+        self.watch_calls: list[dict] = []
+
+    def record_research_takeaways(self, **kwargs) -> int:
+        self.research_calls.append(kwargs)
+        return 1
+
+    def record_watch_updates(self, **kwargs) -> int:
+        self.watch_calls.append(kwargs)
+        return 1
+
+
+class _WatchRunner:
+    def __init__(self) -> None:
+        self.board_calls: list[tuple[str, str, str]] = []
+
+    def decide_orders(self, *, context, default_universe, resume_session_id=None):
+        _ = (context, default_universe, resume_session_id)
+        return (
+            {
+                "explore_summary": "macro reviewed",
+                "orders": [],
+                "research_takeaways": [
+                    {
+                        "source_doc_id": "bok:note:1",
+                        "takeaway": "credit transmission still matters",
+                        "watch_indicators": ["base rate"],
+                        "horizon_days": 90,
+                    }
+                ],
+                "watch_updates": [
+                    {
+                        "action": "add",
+                        "watch_kind": "candidate",
+                        "ticker": "AAPL",
+                        "summary": "keep watching",
+                        "time_horizon_days": 30,
+                    }
+                ],
+            },
+            "sid_watch",
+        )
+
+
 def _settings_for_market(market: str, *, trading_mode: str = "paper", universe: list[str]) -> object:
     settings = load_settings()
     settings.trading_mode = trading_mode
@@ -308,3 +355,41 @@ def test_generate_skips_mixed_us_order_when_exchange_is_unresolved(monkeypatch: 
     )
 
     assert out.intents == []
+
+
+def test_generate_skips_watch_persistence_in_explore_phase(monkeypatch: pytest.MonkeyPatch) -> None:
+    agent = _agent(
+        monkeypatch,
+        _WatchRunner(),
+        _settings_for_market("us", universe=["AAPL"]),
+    )
+    agent.runner._memory_store = _WatchMemoryStore()
+
+    out = agent.generate(
+        {
+            **_us_execution_context(cycle_id="cycle_watch_explore"),
+            "cycle_phase": "explore",
+        }
+    )
+
+    assert out.intents == []
+    assert out.board_post.explore_summary == "macro reviewed"
+    assert agent.runner._memory_store.research_calls == []
+    assert agent.runner._memory_store.watch_calls == []
+
+
+def test_generate_persists_watch_artifacts_in_execution_phase(monkeypatch: pytest.MonkeyPatch) -> None:
+    agent = _agent(
+        monkeypatch,
+        _WatchRunner(),
+        _settings_for_market("us", universe=["AAPL"]),
+    )
+    agent.runner._memory_store = _WatchMemoryStore()
+
+    out = agent.generate(_us_execution_context(cycle_id="cycle_watch_exec"))
+
+    assert out.intents == []
+    assert len(agent.runner._memory_store.research_calls) == 1
+    assert len(agent.runner._memory_store.watch_calls) == 1
+    assert agent.runner._memory_store.research_calls[0]["source_phase"] == "execution"
+    assert agent.runner._memory_store.watch_calls[0]["source_phase"] == "execution"

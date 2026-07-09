@@ -62,6 +62,33 @@ def test_upsert_instrument_master_persists_ticker_name() -> None:
     assert session.client.payloads[0]["ticker_name"] == "남해화학"
 
 
+def test_upsert_instrument_master_persists_classification_fields() -> None:
+    session = _FakeSession(client=_InsertClient())
+    store = MarketStore(session)
+
+    inserted = store.upsert_instrument_master(
+        [
+            {
+                "instrument_id": "KRX:005930",
+                "ticker": "005930",
+                "ticker_name": "삼성전자",
+                "exchange_code": "KRX",
+                "currency": "KRW",
+                "sector": "Technology",
+                "industry_code": "0013",
+                "industry_name": "KIS industry 0013",
+                "classification_source": "kis_master",
+            }
+        ]
+    )
+
+    assert inserted == 1
+    assert session.client.payloads[0]["sector"] == "Technology"
+    assert session.client.payloads[0]["industry_code"] == "0013"
+    assert session.client.payloads[0]["industry_name"] == "KIS industry 0013"
+    assert session.client.payloads[0]["classification_source"] == "kis_master"
+
+
 def test_ticker_name_map_falls_back_to_instrument_master() -> None:
     store = _make_market_store(
         responses=[

@@ -401,7 +401,7 @@ class _RepoForMacroDocumentTool:
         self.updates.append({"source_doc_id": source_doc_id, **kwargs})
 
 
-def test_get_macro_research_briefing_lists_document_metadata_when_available() -> None:
+def test_read_official_macro_research_lists_document_metadata_when_available() -> None:
     from arena.agents.adk_agents import _ContextTools
 
     repo = _RepoForMacroDocumentTool()
@@ -412,7 +412,7 @@ def test_get_macro_research_briefing_lists_document_metadata_when_available() ->
     tool.tenant_id = "tenant-a"
 
     out = asyncio.run(
-        tool.get_macro_research_briefing(
+        tool.read_official_macro_research(
             market="kr",
             sources=["bok"],
             limit=1,
@@ -442,7 +442,7 @@ def test_get_macro_research_briefing_lists_document_metadata_when_available() ->
     ]
 
 
-def test_get_macro_research_briefing_reads_live_source_by_doc_id(monkeypatch) -> None:
+def test_read_official_macro_research_reads_live_source_by_doc_id(monkeypatch) -> None:
     from arena.agents import adk_context_tools
     from arena.agents.adk_agents import _ContextTools
     from arena.research_documents import LiveDocumentRead
@@ -470,7 +470,7 @@ def test_get_macro_research_briefing_reads_live_source_by_doc_id(monkeypatch) ->
     )
 
     out = asyncio.run(
-        tool.get_macro_research_briefing(
+        tool.read_official_macro_research(
             source_doc_ids=["bok:bok_issue_notes:1001:201156"],
             offset=0,
             limit=1,
@@ -486,7 +486,7 @@ def test_get_macro_research_briefing_reads_live_source_by_doc_id(monkeypatch) ->
     assert repo.updates[0]["content_hash"] == "hash-read"
 
 
-def test_get_macro_research_briefing_returns_read_response_when_snapshot_update_fails(monkeypatch) -> None:
+def test_read_official_macro_research_returns_read_response_when_snapshot_update_fails(monkeypatch) -> None:
     from arena.agents import adk_context_tools
     from arena.agents.adk_agents import _ContextTools
     from arena.research_documents import LiveDocumentRead
@@ -518,7 +518,7 @@ def test_get_macro_research_briefing_returns_read_response_when_snapshot_update_
     )
 
     out = asyncio.run(
-        tool.get_macro_research_briefing(
+        tool.read_official_macro_research(
             source_doc_ids=["bok:bok_issue_notes:1001:201156"],
             offset=0,
             limit=1,
@@ -529,7 +529,7 @@ def test_get_macro_research_briefing_returns_read_response_when_snapshot_update_
     assert out[0]["content_hash"] == "hash-fresh"
 
 
-def test_get_macro_research_briefing_does_not_fallback_to_summarized_briefings() -> None:
+def test_read_official_macro_research_does_not_fallback_to_summarized_briefings() -> None:
     from arena.agents.adk_agents import _ContextTools
 
     repo = _RepoForMacroBriefingOnlyTool()
@@ -540,7 +540,7 @@ def test_get_macro_research_briefing_does_not_fallback_to_summarized_briefings()
     tool.tenant_id = "tenant-a"
 
     out = asyncio.run(
-        tool.get_macro_research_briefing(
+        tool.read_official_macro_research(
             market="kr",
             sources=["bok"],
             limit=2,
@@ -551,7 +551,7 @@ def test_get_macro_research_briefing_does_not_fallback_to_summarized_briefings()
     assert repo.calls == []
 
 
-def test_get_macro_research_briefing_schema_exposes_minimal_document_browser_params() -> None:
+def test_read_official_macro_research_schema_exposes_minimal_document_browser_params() -> None:
     from google.adk.tools.function_tool import FunctionTool
 
     from arena.agents.adk_agents import _ContextTools
@@ -562,7 +562,7 @@ def test_get_macro_research_briefing_schema_exposes_minimal_document_browser_par
     tool.settings = load_settings()
     tool.tenant_id = "tenant-a"
 
-    params = FunctionTool(tool.get_macro_research_briefing)._get_declaration().parameters.model_dump(
+    params = FunctionTool(tool.read_official_macro_research)._get_declaration().parameters.model_dump(
         mode="json",
         exclude_none=True,
     )
@@ -571,6 +571,25 @@ def test_get_macro_research_briefing_schema_exposes_minimal_document_browser_par
     assert set(props) == {"market", "sources", "source_doc_ids", "offset", "limit"}
     assert props["market"]["enum"] == list(MACRO_RESEARCH_MARKETS)
     assert props["sources"]["items"]["enum"] == list(MACRO_RESEARCH_SOURCES)
+
+
+def test_read_official_macro_research_description_frames_forward_looking_reading_value() -> None:
+    from google.adk.tools.function_tool import FunctionTool
+
+    from arena.agents.adk_agents import _ContextTools
+
+    tool = _ContextTools.__new__(_ContextTools)
+    tool.repo = _RepoForMacroBriefingOnlyTool()
+    tool.settings = load_settings()
+    tool.tenant_id = "tenant-a"
+
+    declaration = FunctionTool(tool.read_official_macro_research)._get_declaration()
+    description = declaration.description
+
+    assert declaration.name == "read_official_macro_research"
+    assert "forward-looking" in description
+    assert "before they are obvious in prices or indicators" in description
+    assert "Choose documents freely" in description
 
 
 def test_macro_research_schema_and_registry_are_exposed() -> None:
@@ -591,7 +610,8 @@ def test_macro_research_schema_and_registry_are_exposed() -> None:
     assert "tenant_id" not in specs["macro_research_theses"]
 
     reg = build_default_registry(repo=_FakeRepo(), settings=_settings())
-    entry = reg.get("get_macro_research_briefing")
+    entry = reg.get("read_official_macro_research")
+    assert entry is not None
     assert entry.category == "macro"
     assert entry.tier == "optional"
     assert "FRED" not in entry.description.splitlines()[0]
@@ -602,6 +622,7 @@ def test_macro_research_schema_and_registry_are_exposed() -> None:
     assert "FRED" not in entry.description_ko
     assert "source_doc_id" in entry.description
     assert "드릴다운" in entry.description_ko
+    assert reg.get("get_macro_research_briefing") is None
 
 
 def test_local_macro_research_store_upserts_and_filters(tmp_path) -> None:

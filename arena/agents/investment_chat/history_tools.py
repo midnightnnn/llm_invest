@@ -12,8 +12,8 @@ from arena.tools.registry import ToolEntry
 TradeHistoryScope = Literal["all", "account", "agent_sleeve"]
 
 
-_DEFAULT_STATUSES = ["FILLED", "SIMULATED", "SUBMITTED"]
-_ALLOWED_STATUSES = {"FILLED", "SIMULATED", "SUBMITTED", "ERROR", "REJECTED"}
+_DEFAULT_STATUSES = ["FILLED", "PARTIAL_FILLED", "SIMULATED", "SUBMITTED"]
+_ALLOWED_STATUSES = {"FILLED", "PARTIAL_FILLED", "SIMULATED", "SUBMITTED", "ERROR", "REJECTED"}
 
 
 def _normalize_scope(scope: str | None) -> str:

@@ -7,7 +7,10 @@ from typing import Any
 
 import requests
 
+from arena.open_trading.sector_classification import kis_industry_name, sector_from_kis_industry_code
+
 KOSPI_MASTER_URL = "https://new.real.download.dws.co.kr/common/master/kospi_code.mst.zip"
+KOSDAQ_MASTER_URL = "https://new.real.download.dws.co.kr/common/master/kosdaq_code.mst.zip"
 
 _KOSPI_PART2_WIDTHS = [
     2,
@@ -84,6 +87,7 @@ _KOSPI_PART2_WIDTHS = [
 _KOSPI_PART2_WIDTH = sum(_KOSPI_PART2_WIDTHS)
 
 _PREVIOUS_VOLUME_IDX = 47
+_INDUSTRY_CODE_IDX = 3
 _ETP_IDX = 12
 _SPAC_IDX = 19
 _HALTED_IDX = 34
@@ -155,12 +159,17 @@ def parse_kospi_master_text(text: str) -> list[dict[str, Any]]:
         fields = _split_fixed_width(line[-_KOSPI_PART2_WIDTH:], _KOSPI_PART2_WIDTHS)
         if not _eligible_kospi_master_row(fields):
             continue
+        industry_code = str(fields[_INDUSTRY_CODE_IDX] or "").strip()
         market_cap = _finite_float(fields[_MARKET_CAP_IDX])
         volume = _finite_float(fields[_PREVIOUS_VOLUME_IDX])
         rows.append(
             {
                 "ticker": ticker,
                 "name": name,
+                "sector": sector_from_kis_industry_code(industry_code),
+                "industry_code": industry_code or None,
+                "industry_name": kis_industry_name(industry_code),
+                "classification_source": "kis_master" if industry_code else None,
                 "market_cap": market_cap,
                 "volume": volume,
             }
@@ -178,8 +187,57 @@ def parse_kospi_master_zip(payload: bytes) -> list[dict[str, Any]]:
     return parse_kospi_master_text(data.decode("cp949", errors="replace"))
 
 
+def parse_kosdaq_master_text(text: str) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    tail_start = 56
+    for raw_line in text.splitlines():
+        line = raw_line.rstrip("\r\n")
+        if len(line) <= tail_start:
+            continue
+        ticker = line[0:9].strip()
+        name = line[21:tail_start].strip()
+        if not (ticker.isdigit() and len(ticker) == 6):
+            continue
+        fields = _split_fixed_width(line[tail_start:], _KOSPI_PART2_WIDTHS)
+        industry_code = str(fields[_INDUSTRY_CODE_IDX] or "").strip()
+        rows.append(
+            {
+                "ticker": ticker,
+                "name": name,
+                "sector": None,
+                "industry_code": industry_code or None,
+                "industry_name": kis_industry_name(industry_code),
+                "classification_source": "kis_master" if industry_code else None,
+                "market_cap": None,
+                "volume": None,
+            }
+        )
+    rows.sort(key=lambda row: str(row.get("ticker") or ""))
+    return rows
+
+
+def parse_kosdaq_master_zip(payload: bytes) -> list[dict[str, Any]]:
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        names = [name for name in archive.namelist() if name.lower().endswith(".mst")]
+        if not names:
+            return []
+        data = archive.read(names[0])
+    return parse_kosdaq_master_text(data.decode("cp949", errors="replace"))
+
+
 def fetch_kospi_master_rows(*, session: requests.Session | None = None, timeout: int = 30) -> list[dict[str, Any]]:
     http = session or requests.Session()
     response = http.get(KOSPI_MASTER_URL, timeout=max(1, int(timeout)))
     response.raise_for_status()
     return parse_kospi_master_zip(response.content)
+
+
+def fetch_kosdaq_master_payload(*, session: requests.Session | None = None, timeout: int = 30) -> bytes:
+    http = session or requests.Session()
+    response = http.get(KOSDAQ_MASTER_URL, timeout=max(1, int(timeout)))
+    response.raise_for_status()
+    return bytes(response.content)
+
+
+def fetch_kosdaq_master_rows(*, session: requests.Session | None = None, timeout: int = 30) -> list[dict[str, Any]]:
+    return parse_kosdaq_master_zip(fetch_kosdaq_master_payload(session=session, timeout=timeout))

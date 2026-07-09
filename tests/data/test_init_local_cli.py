@@ -10,6 +10,7 @@ import pytest
 
 from arena.cli_commands.init_local import cmd_init_local
 from arena.data.local.schema import duckdb_table_names
+from arena.prompts.memory_defaults import default_memory_compaction_prompt
 
 
 @pytest.fixture(scope="module")
@@ -35,6 +36,21 @@ def test_init_local_creates_db_and_all_tables(duckdb_module, tmp_path):
     actual = sorted(r[0] for r in rows)
     expected = sorted(duckdb_table_names())
     assert actual == expected
+
+    con = duckdb_module.connect(str(target), read_only=True)
+    try:
+        prompt_rows = con.execute(
+            "SELECT tenant_id, config_value FROM arena_config "
+            "WHERE config_key='memory_compactor_prompt' "
+            "ORDER BY tenant_id"
+        ).fetchall()
+    finally:
+        con.close()
+
+    assert prompt_rows == [
+        ("global", default_memory_compaction_prompt("global")),
+        ("local", default_memory_compaction_prompt("local")),
+    ]
 
 
 def test_init_local_is_idempotent(duckdb_module, tmp_path):

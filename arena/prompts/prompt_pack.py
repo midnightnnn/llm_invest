@@ -310,6 +310,7 @@ class PromptPack:
                 "memory_context",
                 "board_context",
                 "research_context",
+                "watch_context",
                 "macro_research_thesis_context",
                 "ticker_names",
                 "candidate_cases",
@@ -363,6 +364,7 @@ class PromptPack:
                 "board_context",
                 "market_context",
                 "research_context",
+                "watch_context",
                 "macro_research_thesis_context",
                 "portfolio",
                 "ticker_names",
@@ -387,6 +389,12 @@ class PromptPack:
         graph_context = str(context.get("graph_context") or "").strip()
         if graph_context:
             payload["graph_context"] = graph_context
+        watch_context = str(context.get("watch_context") or "").strip()
+        if watch_context:
+            payload["watch_context"] = watch_context
+        watch_items = context.get("watch_items")
+        if isinstance(watch_items, list) and watch_items:
+            payload["watch_items"] = watch_items
         runtime_clock = context.get("_runtime_clock")
         if isinstance(runtime_clock, dict) and runtime_clock:
             payload["_runtime_clock"] = runtime_clock

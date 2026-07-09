@@ -118,6 +118,19 @@ def _json_dict(value: Any) -> dict[str, Any]:
     return dict(parsed) if isinstance(parsed, dict) else {}
 
 
+def _json_list(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return list(value)
+    text = str(value or "").strip()
+    if not text:
+        return []
+    try:
+        parsed = json.loads(text)
+    except Exception:
+        return []
+    return list(parsed) if isinstance(parsed, list) else []
+
+
 def _memory_payload_ticker(row: dict[str, Any]) -> str:
     payload = _json_dict(row.get("payload_json"))
     intent = payload.get("intent")
@@ -139,6 +152,159 @@ def _memory_context_badges(row: dict[str, Any]) -> list[str]:
                 if token and token not in out:
                     out.append(token)
     return out[:6]
+
+
+def _watch_item_badges(row: dict[str, Any]) -> list[str]:
+    payload = _json_dict(row.get("payload_json"))
+    tags = _json_dict(row.get("context_tags_json"))
+    out: list[str] = []
+    for value in (
+        str(row.get("ticker") or "").strip().upper(),
+        str(row.get("watch_kind") or "").strip().lower(),
+        str(row.get("watch_status") or "").strip().lower(),
+        str(row.get("source_doc_id") or "").strip(),
+    ):
+        if value and value not in out:
+            out.append(value)
+    for item in _json_list(row.get("source_doc_ids_json"))[:3]:
+        token = str(item or "").strip()
+        if token and token not in out:
+            out.append(token)
+    indicators = tags.get("watch_indicators") if isinstance(tags, dict) else []
+    if isinstance(indicators, list):
+        for item in indicators:
+            token = str(item or "").strip()
+            if token and token not in out:
+                out.append(token)
+    source = str(payload.get("source") or "").strip()
+    if source and source not in out:
+        out.append(source)
+    return out[:6]
+
+
+def _watch_payload(repo: BigQueryRepository, *, tenant_id: str) -> dict[str, Any]:
+    stats_rows = repo.fetch_rows(
+        f"""
+        SELECT
+          COUNT(1) AS total_items,
+          COUNTIF(watch_status = 'active') AS active_items,
+          COUNTIF(watch_status = 'resolved') AS resolved_items,
+          COUNTIF(watch_status = 'archived') AS archived_items,
+          MAX(COALESCE(updated_at, created_at)) AS last_updated_at
+        FROM `{repo.dataset_fqn}.agent_watch_items`
+        WHERE tenant_id = @tenant_id
+        """,
+        {"tenant_id": tenant_id},
+    )
+    stats_row = stats_rows[0] if stats_rows else {}
+    kind_rows = repo.fetch_rows(
+        f"""
+        SELECT watch_kind, COUNT(1) AS cnt
+        FROM `{repo.dataset_fqn}.agent_watch_items`
+        WHERE tenant_id = @tenant_id
+        GROUP BY watch_kind
+        """,
+        {"tenant_id": tenant_id},
+    )
+    status_rows = repo.fetch_rows(
+        f"""
+        SELECT watch_status, COUNT(1) AS cnt
+        FROM `{repo.dataset_fqn}.agent_watch_items`
+        WHERE tenant_id = @tenant_id
+        GROUP BY watch_status
+        """,
+        {"tenant_id": tenant_id},
+    )
+    rows = repo.fetch_rows(
+        f"""
+        SELECT
+          watch_key,
+          created_at,
+          updated_at,
+          agent_id,
+          watch_kind,
+          watch_status,
+          ticker,
+          title,
+          summary,
+          source_doc_id,
+          source_doc_ids_json,
+          payload_json,
+          cycle_id,
+          llm_call_id,
+          source_phase,
+          source_event,
+          priority_score,
+          time_horizon_days,
+          next_review_at,
+          expires_at,
+          resolved_at,
+          resolution,
+          observed_return_krw,
+          observed_return_ratio,
+          observed_price_krw,
+          observed_note,
+          context_tags_json
+        FROM `{repo.dataset_fqn}.agent_watch_items`
+        WHERE tenant_id = @tenant_id
+        ORDER BY
+          CASE watch_status WHEN 'active' THEN 0 WHEN 'resolved' THEN 1 ELSE 2 END ASC,
+          COALESCE(updated_at, created_at) DESC,
+          created_at DESC
+        LIMIT 12
+        """,
+        {"tenant_id": tenant_id},
+    )
+
+    examples: list[dict[str, Any]] = []
+    for row in rows:
+        examples.append(
+            {
+                "watch_key": str(row.get("watch_key") or "").strip(),
+                "created_at": str(row.get("created_at") or "").strip(),
+                "updated_at": str(row.get("updated_at") or "").strip(),
+                "agent_id": str(row.get("agent_id") or "").strip().lower(),
+                "watch_kind": str(row.get("watch_kind") or "").strip().lower(),
+                "watch_status": str(row.get("watch_status") or "").strip().lower(),
+                "ticker": str(row.get("ticker") or "").strip().upper(),
+                "title": str(row.get("title") or "").strip(),
+                "summary": str(row.get("summary") or "").strip(),
+                "source_doc_id": str(row.get("source_doc_id") or "").strip(),
+                "source_doc_ids": _json_list(row.get("source_doc_ids_json")),
+                "cycle_id": str(row.get("cycle_id") or "").strip(),
+                "llm_call_id": str(row.get("llm_call_id") or "").strip(),
+                "source_phase": str(row.get("source_phase") or "").strip(),
+                "source_event": str(row.get("source_event") or "").strip(),
+                "priority_score": row.get("priority_score"),
+                "time_horizon_days": row.get("time_horizon_days"),
+                "next_review_at": str(row.get("next_review_at") or "").strip(),
+                "expires_at": str(row.get("expires_at") or "").strip(),
+                "resolved_at": str(row.get("resolved_at") or "").strip(),
+                "resolution": str(row.get("resolution") or "").strip(),
+                "observed_return_krw": row.get("observed_return_krw"),
+                "observed_return_ratio": row.get("observed_return_ratio"),
+                "observed_price_krw": row.get("observed_price_krw"),
+                "observed_note": str(row.get("observed_note") or "").strip(),
+                "badges": _watch_item_badges(row),
+            }
+        )
+
+    counts_by_kind = {str(row.get("watch_kind") or "").strip().lower(): int(row.get("cnt") or 0) for row in kind_rows if str(row.get("watch_kind") or "").strip()}
+    counts_by_status = {str(row.get("watch_status") or "").strip().lower(): int(row.get("cnt") or 0) for row in status_rows if str(row.get("watch_status") or "").strip()}
+
+    return {
+        "tenant_id": tenant_id,
+        "stats": {
+            "total_items": int(stats_row.get("total_items") or 0),
+            "active_items": int(stats_row.get("active_items") or 0),
+            "resolved_items": int(stats_row.get("resolved_items") or 0),
+            "archived_items": int(stats_row.get("archived_items") or 0),
+            "last_updated_at": str(stats_row.get("last_updated_at") or "").strip(),
+            "counts_by_kind": counts_by_kind,
+            "counts_by_status": counts_by_status,
+        },
+        "examples": examples,
+    }
 
 
 def _activity_payload(repo: BigQueryRepository, *, tenant_id: str, trading_mode: str) -> dict[str, Any]:
@@ -802,6 +968,25 @@ def register_memory_routes(
             return JSONResponse({"error": "auth required"}, status_code=401)
         return json_response(
             _activity_payload(repo, tenant_id=tenant, trading_mode=settings.trading_mode),
+            max_age=0,
+        )
+
+    @app.get("/api/memory/watch-items")
+    def api_memory_watch_items(
+        request: Request,
+        tenant_id: str = Query(default="local", description="tenant id"),
+    ) -> JSONResponse:
+        if not settings_enabled:
+            return JSONResponse({"error": "settings disabled"}, status_code=403)
+        _user, _user_email, tenant, _allowed_tenants, redirect = resolve_admin_context(
+            request,
+            requested_tenant=tenant_id,
+            next_path=f"/api/memory/watch-items?tenant_id={tenant_id}",
+        )
+        if redirect:
+            return JSONResponse({"error": "auth required"}, status_code=401)
+        return json_response(
+            _watch_payload(repo, tenant_id=tenant),
             max_age=0,
         )
 

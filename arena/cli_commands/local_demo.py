@@ -11,6 +11,7 @@ from typing import Any
 from arena.config import load_settings
 from arena.data.factory import get_repository
 from arena.open_trading.sync import MarketDataSyncService
+from arena.cli_commands.local_bootstrap import seed_local_memory_compaction_prompts
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +99,7 @@ def cmd_seed_local_demo(*, days: int = 60) -> dict[str, int]:
     settings.arena_mode = "local"
     repo = get_repository(settings, tenant_id=os.getenv("ARENA_TENANT_ID") or "local")
     repo.ensure_tables()
+    seeded = seed_local_memory_compaction_prompts(repo, tenant_id=repo.tenant_id, updated_by="seed-local-demo")
     rows, instruments = _demo_rows(days=max(10, int(days)))
     inserted = repo.insert_market_features(rows)
     latest = repo.refresh_market_features_latest(sources=["local_demo"])
@@ -107,6 +109,11 @@ def cmd_seed_local_demo(*, days: int = 60) -> dict[str, int]:
         inserted,
         latest,
         inst,
+    )
+    logger.info(
+        "Memory compaction prompts seeded global=%s tenant=%s",
+        "yes" if seeded["global"] else "no",
+        "yes" if seeded["tenant"] else "no",
     )
     return {"market_rows": inserted, "latest_rows": latest, "instruments": inst}
 

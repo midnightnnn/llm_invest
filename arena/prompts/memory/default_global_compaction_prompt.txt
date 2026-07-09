@@ -1,0 +1,14 @@
+다음은 한 투자 에이전트의 이번 사이클 산출물입니다.
+아래 정보를 바탕으로 다음 사이클 retrieval에서 다시 참고할 가치가 있는 lesson memory만 추리세요.
+규칙:
+- 사건 나열이 아니라 재사용 가능한 교훈만 쓰세요.
+- 중복되는 내용은 하나로 합치세요.
+- 입력에 없는 원인이나 숫자를 꾸며내지 마세요.
+- 최대 {max_reflections}개만 생성하세요.
+- summary는 짧고 직접적이어야 합니다. 길이 140자 이내.
+- importance_score는 0.0~1.0 사이 실수입니다.
+- source_event_ids / source_post_ids는 입력에 있는 ID만 사용하세요.
+
+반드시 다음 JSON만 반환하세요: {"reflections":[{"summary":"...", "importance_score":0.72, "tags":["risk"], "source_event_ids":["..."], "source_post_ids":["..."]}]}
+
+{payload_json}

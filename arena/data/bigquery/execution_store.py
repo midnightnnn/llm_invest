@@ -29,7 +29,7 @@ class ExecutionStore:
     @staticmethod
     def _active_statuses(*, include_simulated: bool = True, include_submitted: bool = True) -> list[str]:
         """Builds execution status set used by daily counters and cooldown checks."""
-        statuses = ["FILLED"]
+        statuses = ["FILLED", "PARTIAL_FILLED"]
         if include_submitted:
             statuses.append("SUBMITTED")
         if include_simulated:
@@ -47,19 +47,19 @@ class ExecutionStore:
         return (
             "COALESCE(trading_mode, CASE "
             "WHEN status = 'SIMULATED' THEN 'paper' "
-            "WHEN status IN ('FILLED', 'SUBMITTED', 'ERROR') THEN 'live' "
+            "WHEN status IN ('FILLED', 'PARTIAL_FILLED', 'SUBMITTED', 'ERROR') THEN 'live' "
             "ELSE 'paper' END)"
         )
 
     @staticmethod
     def _normalize_history_statuses(statuses: list[str] | tuple[str, ...] | None) -> list[str]:
-        allowed = {"FILLED", "SIMULATED", "SUBMITTED", "ERROR", "REJECTED"}
+        allowed = {"FILLED", "PARTIAL_FILLED", "SIMULATED", "SUBMITTED", "ERROR", "REJECTED"}
         out: list[str] = []
-        for raw in statuses or ["FILLED", "SIMULATED", "SUBMITTED"]:
+        for raw in statuses or ["FILLED", "PARTIAL_FILLED", "SIMULATED", "SUBMITTED"]:
             token = str(raw or "").strip().upper()
             if token in allowed and token not in out:
                 out.append(token)
-        return out or ["FILLED", "SIMULATED", "SUBMITTED"]
+        return out or ["FILLED", "PARTIAL_FILLED", "SIMULATED", "SUBMITTED"]
 
     @staticmethod
     def _normalize_history_scope(scope: str | None) -> str:
@@ -95,7 +95,7 @@ class ExecutionStore:
 
         where = " AND ".join(filters)
         sql = f"""
-        SELECT COALESCE(SUM(ABS((CASE WHEN status = 'SUBMITTED' THEN requested_qty ELSE filled_qty END) * avg_price_krw)), 0.0) AS turnover
+        SELECT COALESCE(SUM(ABS((CASE WHEN status IN ('SUBMITTED', 'PARTIAL_FILLED') THEN requested_qty ELSE filled_qty END) * avg_price_krw)), 0.0) AS turnover
         FROM `{self.session.dataset_fqn}.execution_reports`
         WHERE {where}
         """
@@ -327,10 +327,15 @@ class ExecutionStore:
         hrs = max(1, min(int(lookback_hours), 24 * 14))
         filters = [
             "tenant_id = @tenant_id",
-            "status = 'SUBMITTED'",
+            "status IN UNNEST(@statuses)",
             "created_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @lookback_hours HOUR)",
         ]
-        params: dict[str, object] = {"tenant_id": tenant, "lookback_hours": hrs, "limit": lim}
+        params: dict[str, object] = {
+            "tenant_id": tenant,
+            "lookback_hours": hrs,
+            "limit": lim,
+            "statuses": ["SUBMITTED", "PARTIAL_FILLED"],
+        }
         mode = self._normalize_trading_mode_token(trading_mode)
         if mode:
             filters.append(f"{self._execution_trading_mode_expr()} = @trading_mode")
@@ -425,9 +430,9 @@ class ExecutionStore:
         tenant_id: str | None = None,
         include_simulated: bool = False,
     ) -> list[dict[str, Any]]:
-        """Returns FILLED (and optionally SIMULATED) execution rows on or after a timestamp."""
+        """Returns realized execution rows on or after a timestamp."""
         tenant = self._tenant_token(tenant_id)
-        statuses = ["FILLED"]
+        statuses = ["FILLED", "PARTIAL_FILLED"]
         if include_simulated:
             statuses.append("SIMULATED")
         filters = ["tenant_id = @tenant_id", "status IN UNNEST(@statuses)", "created_at >= @since"]

@@ -84,6 +84,18 @@ def test_prepare_decision_prompt_resume_reuses_session_and_omits_phase_duplicate
     assert '"max_tool_calls": 12' not in prompt
 
 
+def test_tool_budget_closing_prompt_for_explore_only_requests_summary() -> None:
+    runner = _ADKDecisionRunner.__new__(_ADKDecisionRunner)
+    runner._current_phase = "explore"
+
+    prompt = runner._tool_budget_closing_prompt()
+
+    assert '"explore_summary"' in prompt
+    assert '"research_takeaways"' not in prompt
+    assert '"watch_updates"' not in prompt
+    assert '"explore_status"' not in prompt
+
+
 def test_build_tool_summary_memory_record_keeps_token_usage_even_without_events() -> None:
     record = build_tool_summary_memory_record(
         [],
@@ -191,7 +203,7 @@ def test_prompt_context_sections_collects_prompt_details() -> None:
 
 
 def test_extract_decision_payload_normalizes_non_list_orders() -> None:
-    explore_summary, orders = extract_decision_payload(
+    explore_summary, orders, research_takeaways, watch_updates = extract_decision_payload(
         {
             "explore_summary": "  concise explore  ",
             "orders": {"ticker": "AAPL"},
@@ -200,6 +212,45 @@ def test_extract_decision_payload_normalizes_non_list_orders() -> None:
 
     assert explore_summary == "concise explore"
     assert orders == []
+    assert research_takeaways == []
+    assert watch_updates == []
+
+
+def test_extract_decision_payload_returns_optional_watch_artifacts() -> None:
+    explore_summary, orders, research_takeaways, watch_updates = extract_decision_payload(
+        {
+            "explore_summary": "macro and candidates reviewed",
+            "orders": [],
+            "research_takeaways": [
+                {
+                    "source_doc_id": "bok:note:1",
+                    "takeaway": "credit transmission still matters",
+                    "transmission_channels": ["policy rates", "credit"],
+                    "watch_indicators": ["base rate", "household credit growth"],
+                    "horizon_days": 90,
+                }
+            ],
+            "watch_updates": [
+                {
+                    "action": "add",
+                    "watch_kind": "candidate",
+                    "ticker": "AAPL",
+                    "reason": "quality pullback",
+                    "confirmation_conditions": ["next earnings beats"],
+                    "invalidation_conditions": ["guide cut"],
+                    "time_horizon_days": 30,
+                    "source_doc_ids": ["bok:note:1"],
+                }
+            ],
+        }
+    )
+
+    assert explore_summary == "macro and candidates reviewed"
+    assert orders == []
+    assert research_takeaways[0]["source_doc_id"] == "bok:note:1"
+    assert research_takeaways[0]["horizon_days"] == 90
+    assert watch_updates[0]["ticker"] == "AAPL"
+    assert watch_updates[0]["watch_kind"] == "candidate"
 
 
 def test_explore_phase_output_uses_distinct_tickers() -> None:

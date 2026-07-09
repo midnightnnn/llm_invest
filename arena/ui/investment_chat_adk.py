@@ -574,6 +574,10 @@ button.audio-rec-btn {
     flex: 1 1 auto !important;
     min-height: 0 !important;
     overflow-y: auto !important;
+    touch-action: pan-y !important;
+  }
+  .message-card {
+    touch-action: pan-y !important;
   }
   .chat-input-container {
     flex: 0 0 auto !important;
@@ -582,7 +586,11 @@ button.audio-rec-btn {
   /* messages: contain overflow from markdown tables / long tokens */
   .message-card,
   .message-text,
-  .message-content { max-width: 100% !important; min-width: 0 !important; }
+  .message-content {
+    max-width: 100% !important;
+    min-width: 0 !important;
+    line-height: 1.55 !important;
+  }
   .message-text { overflow-wrap: anywhere !important; word-break: break-word !important; }
   .message-text table {
     display: block !important;
@@ -603,6 +611,25 @@ button.audio-rec-btn {
   .message-text img,
   .message-text video,
   .message-text canvas { max-width: 100% !important; height: auto !important; }
+
+  /* collapsed composer: reclaim transcript height after send */
+  body.arena-chat-composer-collapsed .chat-input-container {
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+  }
+  body.arena-chat-composer-collapsed .chat-input {
+    padding: 2px 10px 0 !important;
+  }
+  body.arena-chat-composer-collapsed .chat-input-actions {
+    display: none !important;
+  }
+  body.arena-chat-composer-collapsed .chat-input-box,
+  body.arena-chat-composer-collapsed textarea.chat-input-box {
+    height: 42px !important;
+    min-height: 42px !important;
+    max-height: 42px !important;
+    overflow-y: hidden !important;
+  }
 
   /* toolbar: prevent icon overlap on the right (theme toggle + user avatar)
      covers both chat-page toolbar and any nested side-panel toolbar that
@@ -1000,8 +1027,9 @@ _MOBILE_KEYBOARD_DISMISSAL_SCRIPT = """\
 })();
 
 (function installArenaMobileMessageClickShield() {
-  // ADK opens its hidden side panel from message-card taps on mobile. Keep the
-  // transcript inert while preserving real controls such as feedback buttons.
+  // ADK opens its hidden side panel from message-card taps on mobile. Keep
+  // click taps inert while leaving touch/pan gestures alone so the transcript
+  // can still scroll naturally.
   var MESSAGE_SELECTOR = [
     '.message-card',
     'app-message-card',
@@ -1092,7 +1120,7 @@ _MOBILE_KEYBOARD_DISMISSAL_SCRIPT = """\
     }
   }
 
-  ['click', 'auxclick', 'mousedown', 'mouseup', 'pointerdown', 'pointerup', 'touchstart', 'touchend', 'contextmenu'].forEach(addShieldListener);
+  ['click', 'auxclick', 'contextmenu'].forEach(addShieldListener);
   collapseOpenedDrawers();
   if (typeof MutationObserver === 'function') {
     try {
@@ -1108,10 +1136,9 @@ _MOBILE_KEYBOARD_DISMISSAL_SCRIPT = """\
 
 (function installArenaMessageCardClickSuppression() {
   // Tapping a message bubble normally surfaces the trace/details side panel.
-  // The arena chat shell intentionally hides that panel, so the click reads as
-  // an accidental nav. Swallow events on the bubble at capture phase before
-  // any Angular handler fires; keep interactive children (buttons / inputs)
-  // live so feedback controls still work.
+  // The arena chat shell intentionally hides that panel, so click taps should
+  // stay inert. Leave drag / scroll gestures alone so the transcript still
+  // behaves like a normal reading surface.
   var INTERACTIVE_SELECTOR = 'button, a, [role="button"], .message-feedback-container, mat-icon-button, input, textarea, select, label';
   var CARD_SELECTOR = '.message-card, app-message-card, [data-message-id], .message-card-container';
 
@@ -1132,14 +1159,15 @@ _MOBILE_KEYBOARD_DISMISSAL_SCRIPT = """\
     if (typeof event.preventDefault === 'function') event.preventDefault();
   }
 
-  // Capture every way Angular / Material might detect a tap on the bubble.
-  ['click', 'auxclick', 'mousedown', 'mouseup', 'pointerdown', 'pointerup', 'touchstart', 'touchend', 'contextmenu'].forEach(function(name) {
+  // Capture click-like activation only; pointer/touch pan gestures must pass.
+  ['click', 'auxclick', 'contextmenu'].forEach(function(name) {
     document.addEventListener(name, suppressIfBubble, true);
   });
 })();
 
 (function installArenaMobileKeyboardDismissal() {
   var lastFocusedChatInput = null;
+  var COLLAPSED_CLASS = 'arena-chat-composer-collapsed';
 
   function isMobileViewport() {
     return !window.matchMedia || window.matchMedia('(max-width: 767px)').matches;
@@ -1151,6 +1179,17 @@ _MOBILE_KEYBOARD_DISMISSAL_SCRIPT = """\
       node.matches &&
       node.matches('textarea.chat-input-box, input.chat-input-box')
     );
+  }
+
+  function setComposerCollapsed(collapsed) {
+    if (!document.body) {
+      return;
+    }
+    if (!isMobileViewport()) {
+      document.body.classList.remove(COLLAPSED_CLASS);
+      return;
+    }
+    document.body.classList.toggle(COLLAPSED_CLASS, !!collapsed);
   }
 
   function rememberChatInput(event) {
@@ -1175,16 +1214,39 @@ _MOBILE_KEYBOARD_DISMISSAL_SCRIPT = """\
   }
 
   document.addEventListener('focusin', rememberChatInput, true);
+  document.addEventListener('pointerdown', function(event) {
+    var target = event.target;
+    if (target && target.closest && target.closest('textarea.chat-input-box, input.chat-input-box')) {
+      setComposerCollapsed(false);
+    }
+  }, true);
+  document.addEventListener('click', function(event) {
+    var target = event.target;
+    if (target && target.closest && target.closest('textarea.chat-input-box, input.chat-input-box')) {
+      setComposerCollapsed(false);
+    }
+  }, true);
+  document.addEventListener('input', function(event) {
+    if (isChatInput(event.target)) {
+      setComposerCollapsed(false);
+    }
+  }, true);
   document.addEventListener('click', function(event) {
     var target = event.target;
     if (target && target.closest && target.closest('button.send-message-btn')) {
       dismissMobileKeyboard();
+      window.setTimeout(function() {
+        setComposerCollapsed(true);
+      }, 80);
     }
   }, true);
   document.addEventListener('submit', function(event) {
     var target = event.target;
     if (target && target.querySelector && target.querySelector('textarea.chat-input-box, input.chat-input-box')) {
       dismissMobileKeyboard();
+      window.setTimeout(function() {
+        setComposerCollapsed(true);
+      }, 80);
     }
   }, true);
   document.addEventListener('keydown', function(event) {
@@ -1195,6 +1257,9 @@ _MOBILE_KEYBOARD_DISMISSAL_SCRIPT = """\
       isChatInput(event.target)
     ) {
       dismissMobileKeyboard();
+      window.setTimeout(function() {
+        setComposerCollapsed(true);
+      }, 80);
     }
   }, true);
 })();

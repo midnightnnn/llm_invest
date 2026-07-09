@@ -534,7 +534,7 @@ build_investment_chat_agent(repo, settings, tenant_id, registry, provider, model
 
 | Tool group | Tools | Purpose |
 |------------|-------|---------|
-| **Chat account** | `get_account_snapshot`, `refresh_account_snapshot`, `get_agent_sleeve_snapshot` | 저장된 총계좌/슬리브 스냅샷 조회 + KIS 계좌 즉시 새로고침 (테넌트 KIS secret 없으면 차단) |
+| **Chat account** | `get_account_snapshot`, `refresh_account_snapshot`, `get_agent_sleeve_snapshot` | 저장된 총계좌/슬리브 스냅샷 조회 + KIS 계좌 즉시 새로고침. 총계좌 스냅샷은 canonical `market_scope="account"` row를 읽고/씁니다. (테넌트 KIS secret 없으면 차단) |
 | **Chat history** | `get_trade_history` | 체결/주문 이력 — `judgment_source` 분리(`user+investment_chat` vs 자율 batch) |
 | **Chat order** | `validate_order_draft`, `submit_approved_order` | 2단 승인 주문. validate에서 `RiskEngine` 통과한 draft를 arena_config에 저장(`expires_at`, 기본 15분), UI 승인 버튼이 internal bridge로 `CONFIRM <approval_token>`을 전달해야 submit 가능 |
 | **Chat config** | `propose_agent_config_change`, `propose_chat_agent_config_change`, `propose_tenant_config_change`, `get_config_change_status` | 투자 에이전트/채팅 에이전트/tenant runtime 설정 변경 초안. LLM은 draft만 만들고, `/investment-chat/config-drafts/{token}/apply`가 승인 버튼 후 internal bridge를 호출 |
@@ -1127,7 +1127,7 @@ FastAPI Admin Dashboard — 모듈화된 라우트 구조.
 | `system_prompt` | text | 에이전트 시스템 프롬프트 |
 | `agents_config` | JSON | 에이전트 CRUD (provider/model/capital/risk/tools/memory). chat 승인 flow도 최종적으로 이 key를 append |
 | `investment_chat_config` | JSON | 채팅 에이전트 provider/model/disabled_tools/llm_params/memory_compaction_model + `model_routing.cheap_model[_by_provider]`(router/utility용 저비용 모델). `POST /settings/chat-model`이 provider/model 두 필드만 갱신하고 캐시 invalidate |
-| `investment_chat_account_markets` | scalar | legacy ignored key — 채팅 계좌/상담 scope는 batch agent target_market와 분리되어 항상 전체 계좌(`us,kospi,kosdaq`)로 고정 |
+| `investment_chat_account_markets` | scalar | legacy ignored key — 채팅 계좌/상담의 분석용 시장 묶음은 batch agent target_market와 분리되어 항상 전체 계좌(`us,kospi,kosdaq`)로 고정. persisted total-account snapshots는 `market_scope="account"`로 저장 |
 | `risk_policy` | JSON | Risk 파라미터 |
 | `planned_corporate_actions` | JSON | 분할/병합/액면 변경 등 사전 등록된 코퍼레이트 액션 (RiskEngine 차단 + Reconciliation warning 다운그레이드) |
 | `sleeve_capital_krw` | scalar | 기본 sleeve 자본 |

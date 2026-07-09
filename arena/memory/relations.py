@@ -36,6 +36,8 @@ _TICKER_STOPWORDS = frozenset(
         "SELL",
         "HOLD",
         "FILLED",
+        "PARTIAL_FILLED",
+        "PARTIAL",
         "SIMULATED",
         "SUBMITTED",
         "REJECTED",

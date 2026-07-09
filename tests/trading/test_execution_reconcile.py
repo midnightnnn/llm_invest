@@ -64,6 +64,23 @@ class _Broker:
         )
 
 
+class _PartialBroker:
+    def __init__(self, filled_qty: float) -> None:
+        self.filled_qty = filled_qty
+        self.calls = []
+
+    def reconcile_submitted(self, **kwargs):
+        self.calls.append(dict(kwargs))
+        return ExecutionReport(
+            status=ExecutionStatus.PARTIAL_FILLED,
+            order_id="ord_partial",
+            filled_qty=self.filled_qty,
+            avg_price_krw=6_558.0,
+            message=f"confirmed; partial_filled={self.filled_qty:g}/59",
+            created_at=utc_now(),
+        )
+
+
 class _RecordingBroker:
     def __init__(self) -> None:
         self.calls = []
@@ -145,6 +162,73 @@ def test_reconcile_submitted_orders_updates_execution_row() -> None:
     assert intent.intent_id == "intent_1"
     assert report.order_id == "ord_1"
     assert report.status.value == "FILLED"
+
+
+def test_reconcile_submitted_orders_updates_progressed_partial_fill() -> None:
+    class _PartialRepo(_Repo):
+        def recent_submitted_reports(self, *, limit: int, lookback_hours: int, trading_mode: str | None = None):
+            _ = (limit, lookback_hours, trading_mode)
+            return [
+                {
+                    "order_id": "ord_partial",
+                    "intent_id": "intent_partial",
+                    "created_at": utc_now(),
+                    "trading_mode": trading_mode or "live",
+                    "agent_id": "claude",
+                    "ticker": "025860",
+                    "side": "SELL",
+                    "requested_qty": 59.0,
+                    "filled_qty": 50.0,
+                    "avg_price_krw": 6_560.0,
+                    "status": "PARTIAL_FILLED",
+                }
+            ]
+
+    repo = _PartialRepo()
+    broker = _PartialBroker(filled_qty=55.0)
+    gateway = ExecutionGateway(repo=repo, risk_engine=object(), broker=broker, memory_store=object())
+
+    updated = gateway.reconcile_submitted_orders(limit=50, lookback_hours=24)
+
+    assert updated == 1
+    assert len(repo.writes) == 1
+    assert broker.calls[0]["requested_qty"] == 59.0
+    intent, report = repo.writes[0]
+    assert intent.intent_id == "intent_partial"
+    assert report.status == ExecutionStatus.PARTIAL_FILLED
+    assert report.filled_qty == 55.0
+
+
+def test_reconcile_submitted_orders_skips_unchanged_partial_fill() -> None:
+    class _PartialRepo(_Repo):
+        def recent_submitted_reports(self, *, limit: int, lookback_hours: int, trading_mode: str | None = None):
+            _ = (limit, lookback_hours, trading_mode)
+            return [
+                {
+                    "order_id": "ord_partial",
+                    "intent_id": "intent_partial",
+                    "created_at": utc_now(),
+                    "trading_mode": trading_mode or "live",
+                    "agent_id": "claude",
+                    "ticker": "025860",
+                    "side": "SELL",
+                    "requested_qty": 59.0,
+                    "filled_qty": 50.0,
+                    "avg_price_krw": 6_560.0,
+                    "status": "PARTIAL_FILLED",
+                }
+            ]
+
+    repo = _PartialRepo()
+    broker = _PartialBroker(filled_qty=50.0)
+    memory = _MemoryStore()
+    gateway = ExecutionGateway(repo=repo, risk_engine=object(), broker=broker, memory_store=memory)
+
+    updated = gateway.reconcile_submitted_orders(limit=50, lookback_hours=24)
+
+    assert updated == 0
+    assert repo.writes == []
+    assert memory.calls == []
 
 
 def test_reconcile_submitted_orders_does_not_inject_snapshot_fx() -> None:

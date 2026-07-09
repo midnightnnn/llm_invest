@@ -24,6 +24,7 @@ from arena.memory.forgetting import effective_memory_score
 from arena.memory.candidates import CANDIDATE_MEMORY_EVENT_TYPES
 from arena.memory.candidate_structured import format_candidate_memory_prompt_line
 from arena.memory.graph import memory_event_node_id
+from arena.memory.watch_items import compress_watch_rows
 from arena.memory.policy import (
     get_memory_policy_value,
     memory_event_enabled,
@@ -70,6 +71,8 @@ _MEMORY_TICKER_STOPWORDS = {
     "SELL",
     "HOLD",
     "FILLED",
+    "PARTIAL",
+    "PARTIAL_FILLED",
     "SUBMITTED",
     "REJECTED",
     "SIMULATED",
@@ -1937,6 +1940,74 @@ class ContextBuilder:
             out.append(normalized)
         return out
 
+    def _fetch_watch_rows(
+        self,
+        *,
+        agent_id: str,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        loader = getattr(self.repo, "watch_items", None)
+        if not callable(loader):
+            return []
+        try:
+            rows = loader(
+                agent_id=agent_id,
+                limit=max(1, int(limit)),
+                watch_statuses=["active", "resolved"],
+            )
+        except Exception as exc:
+            logger.warning(
+                "[yellow]watch item load failed[/yellow] agent=%s err=%s",
+                agent_id,
+                str(exc),
+                extra=failure_extra(
+                    "watch_item_load_failed",
+                    exc,
+                    agent_id=agent_id,
+                ),
+            )
+            return []
+        out: list[dict[str, Any]] = []
+        now = utc_now()
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            normalized = dict(row)
+            expires_at = normalized.get("expires_at")
+            if isinstance(expires_at, datetime) and expires_at < now and str(normalized.get("watch_status") or "").strip().lower() == "active":
+                continue
+            out.append(normalized)
+        return out
+
+    def _watch_context_rows(self, *, agent_id: str, limit: int = 8) -> list[dict[str, Any]]:
+        rows = self._fetch_watch_rows(agent_id=agent_id, limit=limit)
+        if not rows:
+            return []
+        rows.sort(
+            key=lambda row: (
+                0 if str(row.get("watch_status") or "").strip().lower() == "active" else 1,
+                0 if str(row.get("watch_kind") or "").strip().lower() == "macro_takeaway" else 1,
+                str(row.get("updated_at") or row.get("created_at") or ""),
+            )
+        )
+        return rows[: max(1, min(int(limit), 12))]
+
+    def _compress_watch_context(self, rows: list[dict[str, Any]]) -> str:
+        if not rows:
+            return ""
+        header_counts: dict[str, int] = {}
+        for row in rows:
+            kind = str(row.get("watch_kind") or "").strip().lower() or "candidate"
+            header_counts[kind] = header_counts.get(kind, 0) + 1
+        sections = [f"{kind}={count}" for kind, count in sorted(header_counts.items()) if count > 0]
+        body = compress_watch_rows(rows, limit=min(len(rows), 8))
+        if not body:
+            return ""
+        prefix = "Watch Items"
+        if sections:
+            prefix += " (" + ", ".join(sections) + ")"
+        return prefix + ":\n" + body
+
     @staticmethod
     def _memory_row_key(row: dict[str, Any]) -> str:
         return str(row.get("event_id") or row.get("summary") or "").strip()
@@ -2376,6 +2447,8 @@ class ContextBuilder:
             focus_tickers=focus_tickers,
             limit=max(6, min(self.settings.context_max_memory_events, 12)),
         )
+        watch_rows = self._watch_context_rows(agent_id=agent_id, limit=max(4, min(self.settings.context_max_memory_events, 8)))
+        watch_context = self._compress_watch_context(watch_rows)
         legacy_memory_rows = self._merge_memory_query_tracks(
             primary_rows=primary_memory_rows,
             opportunity_rows=opportunity_memory_rows,
@@ -2866,6 +2939,7 @@ class ContextBuilder:
             "active_thesis_context_execution": active_thesis_context_execution,
             "market_context": _safe_json(market_rows),
             "research_context": research_context,
+            "watch_context": watch_context,
             "macro_research_thesis_context": macro_research_thesis_context,
             "relation_context": relation_context,
             "memory_context": memory_context,
@@ -2873,6 +2947,7 @@ class ContextBuilder:
             "board_context": board_context,
             "market_features": _safe_json(market_rows),
             "research_briefings": _safe_json(research_rows),
+            "watch_items": _safe_json(watch_rows),
             "macro_research_theses": _safe_json(macro_research_thesis_rows),
             "active_theses": _safe_json(active_thesis_rows),
             "memory_events": _safe_json(prompt_memory_rows),

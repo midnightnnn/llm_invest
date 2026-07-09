@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import math
+import os
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from statistics import stdev
@@ -27,6 +28,7 @@ from .exchange_codes import (
     us_order_exchange_candidates,
     us_quote_exchange_candidates,
 )
+from .sector_classification import SECClassificationClient
 
 logger = logging.getLogger(__name__)
 _KST = timezone(timedelta(hours=9))
@@ -259,6 +261,9 @@ class MarketDataSyncService:
         self._usd_krw_latest_fx: float | None = None
         self._known_us_quote_exchange_cache: dict[str, str] = {}
         self._universe_rank_metadata: dict[str, dict[str, Any]] = {}
+        self._sec_classification_client: SECClassificationClient | None = None
+        self._us_classification_cache: dict[str, dict[str, Any]] = {}
+        self._sec_classification_disabled = False
 
     _US_MARKETS: set[str] = {"nasdaq", "nyse", "amex", "us"}
     _UNIVERSE_SOURCE_PRIORITY: dict[str, int] = {
@@ -326,6 +331,38 @@ class MarketDataSyncService:
         """Legacy compat: True only if ALL markets are US (no kospi)."""
         markets = self._parsed_markets()
         return bool(markets & self._US_MARKETS) and not bool(markets & {"kospi", "kosdaq"})
+
+    def _sec_user_agent(self) -> str:
+        user_agent = str(os.environ.get("SEC_USER_AGENT") or "").strip()
+        if user_agent:
+            return user_agent
+        contacts = str(os.environ.get("ARENA_OPERATOR_EMAILS") or "").strip()
+        return f"LLM Arena {contacts}" if contacts else ""
+
+    def _us_classification_for_ticker(self, ticker: str) -> dict[str, Any]:
+        token = str(ticker or "").strip().upper()
+        if not token:
+            return {}
+        if token in self._us_classification_cache:
+            return dict(self._us_classification_cache[token])
+        if self._sec_classification_disabled:
+            return {}
+        user_agent = self._sec_user_agent()
+        if not user_agent:
+            self._sec_classification_disabled = True
+            return {}
+        try:
+            if self._sec_classification_client is None:
+                self._sec_classification_client = SECClassificationClient(
+                    user_agent=user_agent,
+                    timeout=max(1, min(int(self.settings.kis_http_timeout_seconds), 10)),
+                )
+            classification = self._sec_classification_client.classify_ticker(token)
+        except Exception as exc:
+            logger.debug("SEC classification lookup failed ticker=%s err=%s", token, str(exc)[:160])
+            classification = {}
+        self._us_classification_cache[token] = dict(classification or {})
+        return dict(classification or {})
 
     def _daily_source(self, market: str = "") -> str:
         """Returns source tag for a specific market. If not given, uses first parsed market."""
@@ -509,6 +546,7 @@ class MarketDataSyncService:
         seen: set[str] = set()
         # ticker → Korean name mapping (populated from ranking API responses)
         self._kospi_ticker_names: dict[str, str] = getattr(self, "_kospi_ticker_names", {})
+        self._kospi_classification: dict[str, dict[str, Any]] = getattr(self, "_kospi_classification", {})
 
         def add_symbol(
             ticker: object,
@@ -585,8 +623,16 @@ class MarketDataSyncService:
             else:
                 before = len(seen)
                 for rank_idx, row in enumerate(master_rows, start=1):
+                    token = str(row.get("ticker") or "").strip().upper()
+                    if token:
+                        self._kospi_classification[token] = {
+                            "sector": row.get("sector"),
+                            "industry_code": row.get("industry_code"),
+                            "industry_name": row.get("industry_name"),
+                            "classification_source": row.get("classification_source"),
+                        }
                     add_symbol(
-                        row.get("ticker"),
+                        token,
                         str(row.get("name") or ""),
                         source="market_cap",
                         market_cap_rank=rank_idx,
@@ -603,6 +649,39 @@ class MarketDataSyncService:
                 )
                 if len(seen) >= cap:
                     return all_rows
+
+        if "kosdaq" in self._parsed_markets():
+            kosdaq_master_loader = getattr(self.client, "get_domestic_kosdaq_master_rows", None)
+            if callable(kosdaq_master_loader):
+                try:
+                    kosdaq_master_rows = kosdaq_master_loader()
+                except Exception as exc:
+                    logger.warning(
+                        "[yellow]KOSDAQ official master classification failed[/yellow] err=%s",
+                        str(exc),
+                        extra=failure_extra(
+                            "kosdaq_official_master_classification_failed",
+                            exc,
+                        ),
+                    )
+                else:
+                    for row in kosdaq_master_rows:
+                        token = str(row.get("ticker") or "").strip().upper()
+                        if not token:
+                            continue
+                        name = str(row.get("name") or "").strip()
+                        if name:
+                            self._kospi_ticker_names[token] = name
+                        self._kospi_classification[token] = {
+                            "sector": row.get("sector"),
+                            "industry_code": row.get("industry_code"),
+                            "industry_name": row.get("industry_name"),
+                            "classification_source": row.get("classification_source"),
+                        }
+                    logger.info(
+                        "[cyan]KOSDAQ classification[/cyan] source=official_master rows=%d",
+                        len(kosdaq_master_rows),
+                    )
 
         discovery_specs: list[tuple[str, Any]] = [
             ("market_cap", self.client.get_domestic_market_cap_ranking),
@@ -1400,6 +1479,7 @@ class MarketDataSyncService:
                 "ticker": ticker,
                 "exchange_code": order_excd,
                 "currency": "USD",
+                **self._us_classification_for_ticker(ticker),
                 "lot_size": 1,
                 "tick_size": None,
                 "tradable": True,
@@ -1447,6 +1527,7 @@ class MarketDataSyncService:
             "ticker_name": str(getattr(self, "_kospi_ticker_names", {}).get(ticker) or "").strip() or None,
             "exchange_code": "KRX",
             "currency": "KRW",
+            **dict(getattr(self, "_kospi_classification", {}).get(ticker) or {}),
             "lot_size": 1,
             "tick_size": 1.0,
             "tradable": True,
@@ -1513,6 +1594,7 @@ class MarketDataSyncService:
                 "ticker": ticker,
                 "exchange_code": order_excd,
                 "currency": str(detail.get("curr") or "USD").strip().upper() or "USD",
+                **self._us_classification_for_ticker(ticker),
                 "lot_size": 1,
                 "tick_size": tick_size,
                 "tradable": tradable,
@@ -2124,6 +2206,7 @@ class MarketDataSyncService:
                             "ticker_name": str(getattr(self, "_kospi_ticker_names", {}).get(ticker) or "").strip() or None,
                             "exchange_code": "KRX",
                             "currency": "KRW",
+                            **dict(getattr(self, "_kospi_classification", {}).get(ticker) or {}),
                             "lot_size": 1,
                             "tick_size": 1.0,
                             "tradable": None,
@@ -2619,7 +2702,7 @@ class AccountSyncService:
     def _has_kospi_market(self) -> bool:
         return bool(self._parsed_markets() & {"kospi", "kosdaq"})
 
-    def sync_account_snapshot(self) -> AccountSnapshot:
+    def sync_account_snapshot(self, *, market_scope: str | None = None) -> AccountSnapshot:
         """Fetches account balance and writes latest snapshot."""
         has_us = self._has_us_market()
         has_kr = self._has_kospi_market()
@@ -2645,9 +2728,9 @@ class AccountSyncService:
         else:
             raise ValueError(f"unsupported target market for account sync: {self.settings.kis_target_market}")
 
-        market_scope = str(self.settings.kis_target_market or "").strip().lower()
+        write_market_scope = str(market_scope or self.settings.kis_target_market or "").strip().lower()
         try:
-            self.repo.write_account_snapshot(snapshot, market_scope=market_scope)
+            self.repo.write_account_snapshot(snapshot, market_scope=write_market_scope)
         except TypeError:
             self.repo.write_account_snapshot(snapshot)
         logger.info(
@@ -2658,6 +2741,7 @@ class AccountSyncService:
             extra={
                 "event": "account_sync_done",
                 "target_market": self.settings.kis_target_market,
+                "market_scope": write_market_scope,
                 "cash_krw": snapshot.cash_krw,
                 "total_equity_krw": snapshot.total_equity_krw,
                 "positions": len(snapshot.positions),

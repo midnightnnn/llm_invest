@@ -41,10 +41,10 @@ def test_investment_chat_account_snapshot_reports_total_account_market_scope() -
     payload = tools["get_account_snapshot"]()
 
     assert payload["scope"] == "account"
-    assert payload["market_scope"] == "us,kospi,kosdaq"
+    assert payload["market_scope"] == "account"
 
 
-def test_investment_chat_account_snapshot_reads_scoped_total_account_snapshot() -> None:
+def test_investment_chat_account_snapshot_reads_canonical_account_snapshot() -> None:
     from arena.agents.investment_chat.account_tools import build_account_tool_entries
 
     settings = load_settings()
@@ -67,38 +67,8 @@ def test_investment_chat_account_snapshot_reads_scoped_total_account_snapshot() 
     payload = tools["get_account_snapshot"]()
 
     assert payload["status"] == "ok"
-    assert repo.latest_calls[-1]["market_scope"] == "us,kospi,kosdaq"
-
-
-def test_investment_chat_account_snapshot_falls_back_to_latest_stored_snapshot() -> None:
-    from arena.agents.investment_chat.account_tools import build_account_tool_entries
-
-    settings = load_settings()
-
-    class _FallbackRepo(_ChatOrderRepo):
-        def __init__(self):
-            super().__init__()
-            self.latest_calls: list[dict[str, object]] = []
-
-        def latest_account_snapshot(self, *, tenant_id: str | None = None, market_scope: str | None = None):
-            self.latest_calls.append({"tenant_id": tenant_id, "market_scope": market_scope})
-            if market_scope:
-                return None
-            return self.account_snapshot
-
-    repo = _FallbackRepo()
-    tools = {
-        entry.name: entry.callable
-        for entry in build_account_tool_entries(repo=repo, settings=settings, tenant_id="local")
-    }
-
-    payload = tools["get_account_snapshot"]()
-
-    assert payload["status"] == "ok"
-    assert payload["total_equity_krw"] == 10_000_000.0
     assert repo.latest_calls == [
-        {"tenant_id": "local", "market_scope": "us,kospi,kosdaq"},
-        {"tenant_id": "local", "market_scope": None},
+        {"tenant_id": "local", "market_scope": "account"},
     ]
 
 
@@ -143,6 +113,23 @@ def test_investment_chat_sleeve_tool_rejects_unknown_agent_id() -> None:
     assert repo.sleeve_calls == []
 
 
+def test_investment_chat_sleeve_tool_disables_simulated_rows_in_live_mode() -> None:
+    from arena.agents.investment_chat.account_tools import build_account_tool_entries
+
+    settings = load_settings()
+    settings.trading_mode = "live"
+    repo = _ChatOrderRepo()
+    tools = {
+        entry.name: entry.callable
+        for entry in build_account_tool_entries(repo=repo, settings=settings, tenant_id="local")
+    }
+
+    payload = tools["get_agent_sleeve_snapshot"](agent_id="gpt")
+
+    assert payload["status"] == "ok"
+    assert repo.sleeve_calls[-1]["include_simulated"] is False
+
+
 def test_refresh_account_snapshot_tool_calls_sync_service(monkeypatch) -> None:
     from arena.agents.investment_chat import account_tools
 
@@ -157,7 +144,8 @@ def test_refresh_account_snapshot_tool_calls_sync_service(monkeypatch) -> None:
             calls["settings"] = settings
             calls["repo"] = repo
 
-        def sync_account_snapshot(self):
+        def sync_account_snapshot(self, *, market_scope: str | None = None):
+            calls["market_scope"] = market_scope
             calls["synced_at"] = datetime.now(timezone.utc)
             return AccountSnapshot(cash_krw=1.0, total_equity_krw=2.0, positions={})
 
@@ -168,6 +156,7 @@ def test_refresh_account_snapshot_tool_calls_sync_service(monkeypatch) -> None:
     assert result["status"] == "ok"
     assert result["total_equity_krw"] == 2.0
     assert calls["repo"] is repo
+    assert calls["market_scope"] == "account"
 
 
 def test_refresh_account_snapshot_logs_unexpected_sync_failure(monkeypatch, caplog) -> None:
@@ -182,7 +171,8 @@ def test_refresh_account_snapshot_logs_unexpected_sync_failure(monkeypatch, capl
         def __init__(self, *, settings, repo):
             _ = settings, repo
 
-        def sync_account_snapshot(self):
+        def sync_account_snapshot(self, *, market_scope: str | None = None):
+            _ = market_scope
             raise RuntimeError("sync boom")
 
     monkeypatch.setattr(account_tools, "AccountSyncService", _FailingAccountSyncService)
@@ -213,7 +203,8 @@ def test_refresh_account_snapshot_defaults_to_total_account_markets(monkeypatch)
             calls["market"] = settings.kis_target_market
             calls["repo"] = repo
 
-        def sync_account_snapshot(self):
+        def sync_account_snapshot(self, *, market_scope: str | None = None):
+            calls["market_scope"] = market_scope
             return AccountSnapshot(cash_krw=1.0, total_equity_krw=2.0, positions={})
 
     monkeypatch.setattr(account_tools, "AccountSyncService", _FakeAccountSyncService)
@@ -222,6 +213,7 @@ def test_refresh_account_snapshot_defaults_to_total_account_markets(monkeypatch)
 
     assert result["status"] == "ok"
     assert calls["market"] == "us,kospi,kosdaq"
+    assert calls["market_scope"] == "account"
     assert repo.audit_logs[-1]["detail"]["target_market"] == "us,kospi,kosdaq"
 
 
@@ -240,7 +232,8 @@ def test_refresh_account_snapshot_ignores_legacy_single_market_chat_scope(monkey
             calls["market"] = settings.kis_target_market
             calls["repo"] = repo
 
-        def sync_account_snapshot(self):
+        def sync_account_snapshot(self, *, market_scope: str | None = None):
+            calls["market_scope"] = market_scope
             return AccountSnapshot(cash_krw=1.0, total_equity_krw=2.0, positions={})
 
     monkeypatch.setattr(account_tools, "AccountSyncService", _FakeAccountSyncService)
@@ -249,6 +242,7 @@ def test_refresh_account_snapshot_ignores_legacy_single_market_chat_scope(monkey
 
     assert result["status"] == "ok"
     assert calls["market"] == "us,kospi,kosdaq"
+    assert calls["market_scope"] == "account"
     assert repo.audit_logs[-1]["detail"]["target_market"] == "us,kospi,kosdaq"
 
 
@@ -273,7 +267,8 @@ def test_refresh_account_snapshot_blocks_server_fallback_credentials(monkeypatch
             calls["settings"] = settings
             calls["repo"] = repo
 
-        def sync_account_snapshot(self):
+        def sync_account_snapshot(self, *, market_scope: str | None = None):
+            calls["market_scope"] = market_scope
             calls["synced"] = True
             return AccountSnapshot(cash_krw=1.0, total_equity_krw=2.0, positions={})
 

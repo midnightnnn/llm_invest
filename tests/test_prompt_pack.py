@@ -36,7 +36,10 @@ def test_prompt_pack_renders_explore_prompt_from_single_entrypoint() -> None:
     )
 
     assert "## explore phase 규칙" in prompt
-    assert '"explore_status": "complete"' in prompt
+    assert '"explore_summary"' in prompt
+    assert '"explore_status": "complete"' not in prompt
+    assert '"research_takeaways"' not in prompt
+    assert '"watch_updates"' not in prompt
     assert "Context payload JSON" in prompt
     assert '"max_tool_calls": 7' in prompt
 
@@ -56,7 +59,15 @@ def test_execution_prompt_schema_requests_structured_thesis_fields() -> None:
     assert '"supporting_factors"' in prompt
     assert '"risk_factors"' in prompt
     assert '"invalidation_conditions"' in prompt
-    assert "catalyst|event|indicator|metric|macro_factor|regime|strategy_tag|thesis|scenario" in prompt
+    assert "side는 BUY, SELL, HOLD 중 하나입니다." in prompt
+    assert '"side": "SELL"' in prompt
+    assert '"type": "catalyst | event | indicator | metric | macro_factor | regime | strategy_tag | thesis | scenario"' in prompt
+    assert '"type": "risk | event | macro_factor | regime | scenario | indicator | metric"' in prompt
+    assert '"type": "risk | event | indicator | metric | macro_factor | regime | scenario | thesis"' in prompt
+    assert '"action": "add | update | resolve"' in prompt
+    assert '"watch_kind": "macro_takeaway | candidate | post_exit"' in prompt
+    assert '"strategy_refs": ["thesis_realized", "earnings_growth"]' in prompt
+    assert "## 허용 값" not in prompt
     assert "rationale은 사람이 읽는 주문 판단 요약문" in prompt
 
 

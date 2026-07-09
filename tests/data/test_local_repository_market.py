@@ -158,8 +158,11 @@ def test_latest_instrument_map_returns_dicts(repo):
     now = _now()
     repo.execute(
         """
-        INSERT INTO instrument_master (instrument_id, ticker, ticker_name, exchange_code, currency, updated_at)
-        VALUES ('NASD:NVDA', 'NVDA', 'NVIDIA', 'NASD', 'USD', ?)
+        INSERT INTO instrument_master (
+          instrument_id, ticker, ticker_name, exchange_code, currency,
+          sector, industry_code, industry_name, classification_source, updated_at
+        )
+        VALUES ('NASD:NVDA', 'NVDA', 'NVIDIA', 'NASD', 'USD', 'Technology', '06', 'Technology', 'sec_edgar', ?)
         """,
         [now],
     )
@@ -167,3 +170,7 @@ def test_latest_instrument_map_returns_dicts(repo):
     assert "NVDA" in out
     assert out["NVDA"]["exchange_code"] == "NASD"
     assert out["NVDA"]["currency"] == "USD"
+    assert out["NVDA"]["sector"] == "Technology"
+    assert out["NVDA"]["industry_code"] == "06"
+    assert out["NVDA"]["industry_name"] == "Technology"
+    assert out["NVDA"]["classification_source"] == "sec_edgar"

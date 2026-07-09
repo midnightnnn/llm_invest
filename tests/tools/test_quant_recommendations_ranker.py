@@ -68,6 +68,110 @@ def test_recommend_opportunities_uses_precomputed_learned_scores() -> None:
     assert out["diagnostics"]["selection_scope"]["markets"] == ["us"]
 
 
+def test_recommend_opportunities_prefers_approved_v2_score_source() -> None:
+    class _Repo(FakeRepo):
+        def __init__(self):
+            super().__init__()
+            self.rank_calls = []
+
+        def latest_approved_signal_calibration_run(self, **kwargs):
+            self.calibration_kwargs = dict(kwargs)
+            return {
+                "run_id": "cal_v2",
+                "status": "approved",
+                "promoted": True,
+                "active": True,
+                "score_source": "joint_policy_v2",
+            }
+
+        def latest_opportunity_ranker_scores(self, **kwargs):
+            self.rank_calls.append(dict(kwargs))
+            assert kwargs.get("score_sources") == ["joint_policy_v2"]
+            return [
+                {
+                    "as_of_date": "2026-04-17",
+                    "computed_at": "2026-04-18T00:00:00+00:00",
+                    "ranker_version": "ranker_v2",
+                    "score_source": "joint_policy_v2",
+                    "ticker": "MSFT",
+                    "market": "us",
+                    "profile": "balanced",
+                    "bucket": "pullback",
+                    "recommendation_rank": 1,
+                    "recommendation_score": 0.42,
+                    "model_confidence": "medium",
+                    "action": "candidate",
+                    "evidence_level": "validated",
+                    "feature_json": {},
+                    "explanation_json": {},
+                }
+            ]
+
+    repo = _Repo()
+    qt = QuantTools(repo=repo, settings=_settings())
+
+    out = qt.recommend_opportunities(top_n=3)
+
+    assert out["status"] == "ok"
+    assert out["ranker"]["score_source"] == "joint_policy_v2"
+    assert out["diagnostics"]["score_source_selection"]["selected"] == "joint_policy_v2"
+    assert repo.calibration_kwargs["market"] == "us"
+
+
+def test_recommend_opportunities_falls_back_to_v1_when_approved_v2_has_no_rows() -> None:
+    class _Repo(FakeRepo):
+        def __init__(self):
+            super().__init__()
+            self.rank_calls = []
+
+        def latest_approved_signal_calibration_run(self, **kwargs):
+            return {
+                "run_id": "cal_v2",
+                "status": "approved",
+                "promoted": True,
+                "active": True,
+                "score_source": "joint_policy_v2",
+            }
+
+        def latest_opportunity_ranker_scores(self, **kwargs):
+            self.rank_calls.append(dict(kwargs))
+            if kwargs.get("score_sources") == ["joint_policy_v2"]:
+                return []
+            assert kwargs.get("score_sources") == ["joint_policy_v1"]
+            return [
+                {
+                    "as_of_date": "2026-04-17",
+                    "computed_at": "2026-04-18T00:00:00+00:00",
+                    "ranker_version": "ranker_v1",
+                    "score_source": "joint_policy_v1",
+                    "ticker": "AAPL",
+                    "market": "us",
+                    "profile": "aggressive",
+                    "bucket": "momentum",
+                    "recommendation_rank": 1,
+                    "recommendation_score": 0.30,
+                    "model_confidence": "medium",
+                    "action": "candidate",
+                    "evidence_level": "validated",
+                    "feature_json": {},
+                    "explanation_json": {},
+                }
+            ]
+
+    repo = _Repo()
+    qt = QuantTools(repo=repo, settings=_settings())
+
+    out = qt.recommend_opportunities(top_n=3)
+
+    assert out["status"] == "ok"
+    assert out["ranker"]["score_source"] == "joint_policy_v1"
+    assert [call.get("score_sources") for call in repo.rank_calls] == [
+        ["joint_policy_v2"],
+        ["joint_policy_v1"],
+    ]
+    assert out["diagnostics"]["score_source_selection"]["fallback"] == "joint_policy_v1"
+
+
 def test_recommend_opportunities_market_scope_us_narrows_multi_market_agent() -> None:
     class _Repo(FakeRepo):
         def __init__(self):

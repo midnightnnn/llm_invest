@@ -345,7 +345,7 @@ def test_discover_kospi_symbols_backfills_name_for_already_seen_ticker() -> None
     assert service._kospi_ticker_names["005930"] == "삼성전자"
 
 
-def test_discover_kospi_symbols_does_not_use_static_sector_map_to_reach_cap() -> None:
+def test_discover_kospi_symbols_does_not_use_static_ticker_map_to_reach_cap() -> None:
     repo = FakeRepo()
     settings = _settings("kospi", ["005930"])
     settings.universe_per_exchange_cap = 12

@@ -141,7 +141,8 @@ def test_credential_draft_api_lists_and_applies_kis_account(monkeypatch, tmp_pat
         def __init__(self, *, settings, repo):
             sync_calls.append({"market": settings.kis_target_market, "repo": repo})
 
-        def sync_account_snapshot(self):
+        def sync_account_snapshot(self, *, market_scope: str | None = None):
+            sync_calls.append({"market_scope": market_scope})
             return repo.account_snapshot
 
     monkeypatch.setattr(open_trading_sync, "AccountSyncService", _FakeAccountSyncService)
@@ -174,7 +175,8 @@ def test_credential_draft_api_lists_and_applies_kis_account(monkeypatch, tmp_pat
     assert body["reload_url"] == "/investment-chat?tenant_id=local"
     assert repo.runtime_credentials["local"]["kis_env"] == "demo"
     assert repo.runtime_credentials["local"]["kis_account_no_masked"]
-    assert sync_calls[-1]["market"] == "us,kospi,kosdaq"
+    assert sync_calls[0]["market"] == "us,kospi,kosdaq"
+    assert sync_calls[-1]["market_scope"] == "account"
 
 
 def test_credential_draft_api_deletes_kis_account(monkeypatch, tmp_path) -> None:

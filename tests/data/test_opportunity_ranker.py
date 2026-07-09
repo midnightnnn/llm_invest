@@ -30,7 +30,10 @@ def test_schema_includes_new_signal_and_fundamentals_tables() -> None:
 
     # Signal / regime tables
     assert "proj.ds.signal_daily_values" in ddls
+    assert "proj.ds.signal_daily_values_v2" in ddls
     assert "proj.ds.signal_daily_ic" in ddls
+    assert "proj.ds.signal_calibration_runs" in ddls
+    assert "proj.ds.signal_transform_specs" in ddls
     assert "proj.ds.regime_daily_features" in ddls
     # PIT fundamentals tables
     assert "proj.ds.fundamentals_history_raw" in ddls
@@ -39,6 +42,10 @@ def test_schema_includes_new_signal_and_fundamentals_tables() -> None:
 
     # Critical columns
     assert ("label_ready", "BOOL") in cols["signal_daily_values"]
+    assert ("calibration_run_id", "STRING") in cols["signal_daily_values_v2"]
+    assert ("signal_quality_json", "JSON") in cols["signal_daily_values_v2"]
+    assert ("promoted", "BOOL") in cols["signal_calibration_runs"]
+    assert ("active", "BOOL") in cols["signal_transform_specs"]
     assert ("ic_20d", "FLOAT64") in cols["signal_daily_ic"]
     assert ("regime_trend", "FLOAT64") in cols["regime_daily_features"]
     assert ("announcement_date", "DATE") in cols["fundamentals_history_raw"]
@@ -168,6 +175,21 @@ class _FakePolicyRepo(_FakeICRepo):
                 continue
             out.append(dict(row))
         return out
+
+
+class _FakeCalibratingPolicyRepo(_FakePolicyRepo):
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.calibration_rows: list[dict] = []
+        self.transform_spec_rows: list[dict] = []
+
+    def insert_signal_calibration_run(self, row: dict) -> int:
+        self.calibration_rows.append(dict(row))
+        return 1
+
+    def insert_signal_transform_specs(self, rows: list[dict]) -> int:
+        self.transform_spec_rows.extend(dict(row) for row in rows)
+        return len(rows)
 
 
 def _synthetic_ic_rows(days: int = 120) -> tuple[list[dict], list[dict], list[dict]]:
@@ -468,6 +490,32 @@ def test_build_and_store_opportunity_ranker_writes_joint_policy_scores() -> None
     assert "top_contributions" in explanation
     assert repo.run_rows[-1]["score_source"] == "joint_policy_v1"
     assert "policy_coefficients" in repo.run_rows[-1]["detail_json"]
+
+
+def test_build_and_store_opportunity_ranker_records_signal_v2_calibration_artifacts() -> None:
+    policy_rows, regime_rows, scoring_rows = _synthetic_policy_rows(days=90)
+    repo = _FakeCalibratingPolicyRepo(policy_rows=policy_rows, regime_rows=regime_rows, scoring_rows=scoring_rows)
+    settings = load_settings()
+    settings.kis_target_market = "us"
+
+    result = build_and_store_opportunity_ranker(
+        repo,
+        settings,
+        lookback_days=120,
+        horizon_days=20,
+        min_ic_dates=30,
+        max_scoring_rows=10,
+    )
+
+    assert result.status == "ok"
+    assert repo.calibration_rows
+    assert repo.calibration_rows[-1]["baseline_score_source"] == "joint_policy_v1"
+    assert repo.calibration_rows[-1]["score_source"] in {"joint_policy_v1", "joint_policy_v2"}
+    assert repo.calibration_rows[-1]["validation_metrics_json"]["baseline"]["mean_rank_ic"] is not None
+    assert repo.calibration_rows[-1]["detail_json"]["policy_variant"] == "signal_formula_calibrated_v2_1"
+    assert repo.calibration_rows[-1]["detail_json"]["calibration"] == "walk_forward_formula_policy_validation"
+    assert repo.transform_spec_rows
+    assert {row["signal_name"] for row in repo.transform_spec_rows}.issubset(set(SIGNAL_NAMES))
 
 
 def test_macro_factor_frame_uses_conservative_macro_lag() -> None:

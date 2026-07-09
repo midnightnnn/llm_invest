@@ -17,7 +17,7 @@ from arena.agents.investment_chat.drafts import (
     save_config_draft,
 )
 from arena.agents.investment_chat.locks import tenant_lock
-from arena.agents.investment_chat.market_scope import account_market_override
+from arena.agents.investment_chat.market_scope import account_market_override, account_snapshot_market_scope
 from arena.agents.investment_chat.scope import chat_actor_email
 from arena.agents.investment_chat.utils import latest_account_snapshot, safe_float, sources_for_settings, utc_iso
 from arena.config import Settings
@@ -291,7 +291,7 @@ def _resolve_capital_allocation(
         snapshot = latest_account_snapshot(
             repo,
             tenant_id=tenant_id,
-            market_scope=account_market_override(repo, tenant_id=tenant_id),
+            market_scope=account_snapshot_market_scope(),
         )
         if snapshot is None:
             raise ValueError("account_percent allocation requires a stored account snapshot")
@@ -300,7 +300,7 @@ def _resolve_capital_allocation(
         snapshot = latest_account_snapshot(
             repo,
             tenant_id=tenant_id,
-            market_scope=account_market_override(repo, tenant_id=tenant_id),
+            market_scope=account_snapshot_market_scope(),
         )
         if snapshot is None:
             raise ValueError("whole_account allocation requires a stored account snapshot")

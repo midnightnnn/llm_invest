@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import pytest
 
 from arena.broker.open_trading import KISOpenTradingBroker
+from arena.models import ExecutionStatus, OrderIntent, Side
 from tests.trading.open_trading_broker_helpers import _settings
 
 
@@ -85,6 +86,116 @@ def test_query_fill_once_scans_multiple_us_exchanges(monkeypatch) -> None:
     assert report.filled_qty == 1
     assert "NASD" in calls
     assert "NYSE" in calls
+
+
+def test_query_fill_once_marks_partial_when_less_than_requested(monkeypatch) -> None:
+    settings = _settings()
+    settings.kis_target_market = "kospi"
+    broker = KISOpenTradingBroker(settings=settings)
+
+    def _fake_inquire(**kwargs):
+        _ = kwargs
+        return [{"odno": "0032544700", "tot_ccld_qty": "50", "avg_prvs": "6558"}]
+
+    monkeypatch.setattr(broker.client, "inquire_domestic_daily_ccld", _fake_inquire)
+
+    report = broker._query_fill_once(
+        market="kospi",
+        order_id="0032544700",
+        ticker="025860",
+        qty=59,
+        fallback_price_krw=6560,
+        message="confirmed",
+    )
+
+    assert report is not None
+    assert report.status == ExecutionStatus.PARTIAL_FILLED
+    assert report.filled_qty == 50
+    assert "partial_filled=50/59" in report.message
+
+
+def test_confirm_fill_waits_past_partial_until_full(monkeypatch) -> None:
+    settings = _settings()
+    settings.kis_target_market = "kospi"
+    settings.kis_confirm_fills = True
+    settings.kis_confirm_timeout_seconds = 10
+    settings.kis_confirm_poll_seconds = 0.5
+    broker = KISOpenTradingBroker(settings=settings)
+    calls: list[dict] = []
+    rows = iter(
+        [
+            [{"odno": "0032544700", "tot_ccld_qty": "50", "avg_prvs": "6558"}],
+            [{"odno": "0032544700", "tot_ccld_qty": "59", "avg_prvs": "6558"}],
+        ]
+    )
+
+    def _fake_inquire(**kwargs):
+        calls.append(dict(kwargs))
+        return next(rows)
+
+    monkeypatch.setattr(broker.client, "inquire_domestic_daily_ccld", _fake_inquire)
+    monkeypatch.setattr("arena.broker.open_trading.time.sleep", lambda _seconds: None)
+    intent = OrderIntent(
+        agent_id="claude",
+        ticker="025860",
+        side=Side.SELL,
+        quantity=59,
+        price_krw=6560,
+        rationale="trim",
+        fx_rate=1.0,
+    )
+
+    report = broker._confirm_fill(
+        market="kospi",
+        order_id="0032544700",
+        intent=intent,
+        qty=59,
+        fallback_price_krw=6560,
+    )
+
+    assert report is not None
+    assert report.status == ExecutionStatus.FILLED
+    assert report.filled_qty == 59
+    assert len(calls) == 2
+
+
+def test_confirm_fill_returns_best_partial_after_timeout(monkeypatch) -> None:
+    settings = _settings()
+    settings.kis_target_market = "kospi"
+    settings.kis_confirm_fills = True
+    settings.kis_confirm_timeout_seconds = 1
+    settings.kis_confirm_poll_seconds = 0.5
+    broker = KISOpenTradingBroker(settings=settings)
+    monotonic_values = iter([0.0, 0.0, 2.0])
+
+    def _fake_inquire(**kwargs):
+        _ = kwargs
+        return [{"odno": "0032544700", "tot_ccld_qty": "50", "avg_prvs": "6558"}]
+
+    monkeypatch.setattr(broker.client, "inquire_domestic_daily_ccld", _fake_inquire)
+    monkeypatch.setattr("arena.broker.open_trading.time.monotonic", lambda: next(monotonic_values))
+    monkeypatch.setattr("arena.broker.open_trading.time.sleep", lambda _seconds: None)
+    intent = OrderIntent(
+        agent_id="claude",
+        ticker="025860",
+        side=Side.SELL,
+        quantity=59,
+        price_krw=6560,
+        rationale="trim",
+        fx_rate=1.0,
+    )
+
+    report = broker._confirm_fill(
+        market="kospi",
+        order_id="0032544700",
+        intent=intent,
+        qty=59,
+        fallback_price_krw=6560,
+    )
+
+    assert report is not None
+    assert report.status == ExecutionStatus.PARTIAL_FILLED
+    assert report.filled_qty == 50
 
 
 def test_reconcile_submitted_uses_fill_lookup(monkeypatch) -> None:

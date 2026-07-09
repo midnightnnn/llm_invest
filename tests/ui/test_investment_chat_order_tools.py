@@ -356,7 +356,7 @@ def test_get_trade_history_tool_reads_tenant_scoped_execution_history(monkeypatc
             "scope": "agent_sleeve",
             "days": 30,
             "limit": 5,
-            "statuses": ["FILLED", "SIMULATED", "SUBMITTED"],
+            "statuses": ["FILLED", "PARTIAL_FILLED", "SIMULATED", "SUBMITTED"],
         }
     ]
     trade = result["trades"][0]

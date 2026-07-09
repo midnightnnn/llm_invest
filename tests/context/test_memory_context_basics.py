@@ -285,6 +285,48 @@ def test_context_builder_reserves_candidate_memory_track() -> None:
     assert sum(1 for row in context["memory_events"] if "AAPL" in row.get("tickers", [])) <= 2
 
 
+def test_context_builder_includes_watch_context() -> None:
+    class _WatchRepo(FakeRepo):
+        def watch_items(
+            self,
+            *,
+            agent_id: str,
+            limit: int = 24,
+            watch_kinds: list[str] | None = None,
+            watch_statuses: list[str] | None = None,
+            ticker: str | None = None,
+            source_doc_id: str | None = None,
+            active_only: bool = False,
+            tenant_id: str | None = None,
+        ) -> list[dict]:
+            _ = (agent_id, limit, watch_kinds, watch_statuses, ticker, source_doc_id, active_only, tenant_id)
+            return [
+                {
+                    "watch_key": "candidate:gpt:AAPL:1",
+                    "created_at": "2026-03-15T08:00:00Z",
+                    "updated_at": "2026-03-15T09:00:00Z",
+                    "agent_id": "gpt",
+                    "watch_kind": "candidate",
+                    "watch_status": "active",
+                    "ticker": "AAPL",
+                    "title": "AAPL candidate watch",
+                    "summary": "keep tracking the pullback",
+                    "payload_json": json.dumps({"source": "candidate_memory_backfill"}),
+                    "context_tags_json": json.dumps({"watch_indicators": ["earnings"]}),
+                }
+            ]
+
+    repo = _WatchRepo()
+    builder = ContextBuilder(repo=repo, memory=FakeMemory(), board=FakeBoard(), settings=_settings())
+    snapshot = AccountSnapshot(cash_krw=1_000_000, total_equity_krw=1_200_000, positions={})
+
+    context = builder.build(agent_id="gpt", snapshot=snapshot)
+
+    assert "Watch Items" in context["watch_context"]
+    assert "candidate" in context["watch_context"]
+    assert context["watch_items"][0]["watch_kind"] == "candidate"
+
+
 def test_candidate_memory_context_uses_structured_payload_without_checked_truncation() -> None:
     snapshot = AccountSnapshot(
         cash_krw=500_000,

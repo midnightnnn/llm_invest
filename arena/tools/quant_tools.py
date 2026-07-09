@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import logging
 import os
 import threading
@@ -47,8 +48,6 @@ from .allocation import (
     recompute_stats,
 )
 from .screening import build_discovery_rows, momentum_scores
-from .sector_map import SECTOR_BY_TICKER
-
 logger = logging.getLogger(__name__)
 
 _RECOMMEND_OPPORTUNITY_MAX_POOL = 500
@@ -163,6 +162,46 @@ def _normalize_opportunity_filters(
         "effective_profiles": profile_tokens,
         "legacy_profile_bucket_tokens": _dedupe_tokens(legacy_profile_bucket_tokens),
     }
+
+
+def _callable_accepts_keyword(func: Any, keyword: str) -> bool:
+    try:
+        signature = inspect.signature(func)
+    except (TypeError, ValueError):
+        return False
+    for param in signature.parameters.values():
+        if param.kind == inspect.Parameter.VAR_KEYWORD:
+            return True
+        if param.name == keyword:
+            return True
+    return False
+
+
+def _load_opportunity_ranker_scores(
+    loader: Any,
+    *,
+    score_source: str | None,
+    accepts_score_sources: bool,
+    limit: int,
+    max_age_hours: int,
+    tickers: list[str],
+    buckets: list[str] | None,
+    profiles: list[str] | None,
+    markets: list[str] | None,
+    per_profile_limit: int,
+) -> list[dict[str, Any]]:
+    kwargs: dict[str, Any] = {
+        "limit": limit,
+        "max_age_hours": max_age_hours,
+        "tickers": tickers,
+        "buckets": buckets,
+        "profiles": profiles,
+        "markets": markets,
+        "per_profile_limit": per_profile_limit,
+    }
+    if accepts_score_sources and score_source:
+        kwargs["score_sources"] = [score_source]
+    return list(loader(**kwargs) or [])
 
 
 def _opportunity_selection_limits(
@@ -1643,41 +1682,92 @@ class QuantTools:
                 "diagnostics": diagnostics,
             }
         learned_rows: list[dict[str, Any]] = []
+        score_source_candidates: list[str] = ["joint_policy_v1"]
+        score_source_selection: dict[str, Any] = {
+            "baseline": "joint_policy_v1",
+            "selected": "joint_policy_v1",
+            "candidates": list(score_source_candidates),
+        }
+        calibration_loader = getattr(self.repo, "latest_approved_signal_calibration_run", None)
+        if callable(calibration_loader):
+            try:
+                calibration_market = market_filter[0] if len(market_filter) == 1 else None
+                approved_run = calibration_loader(
+                    market=calibration_market,
+                    max_age_hours=_OPPORTUNITY_CALENDAR_LOOKUP_HOURS,
+                )
+            except Exception as exc:
+                approved_run = None
+                diagnostics["warnings"].append(f"latest_approved_signal_calibration_run failed: {str(exc)[:160]}")
+            if approved_run:
+                approved_source = str(approved_run.get("score_source") or "").strip()
+                if approved_source:
+                    score_source_candidates = _dedupe_tokens([approved_source, "joint_policy_v1"])
+                    score_source_selection = {
+                        "baseline": "joint_policy_v1",
+                        "selected": approved_source,
+                        "candidates": list(score_source_candidates),
+                        "approved_run_id": approved_run.get("run_id"),
+                        "approved_market": approved_run.get("market"),
+                        "approved_created_at": approved_run.get("created_at"),
+                    }
         loader = getattr(self.repo, "latest_opportunity_ranker_scores", None)
         if callable(loader):
-            try:
-                learned_rows = loader(
-                    limit=global_limit,
-                    max_age_hours=lookup_max_age_hours,
-                    tickers=universe,
-                    buckets=bucket_tokens or None,
-                    profiles=profile_tokens or None,
-                    markets=market_filter or None,
-                    per_profile_limit=per_profile_limit,
-                ) or []
-            except Exception as exc:
-                diagnostics["warnings"].append(f"latest_opportunity_ranker_scores failed: {str(exc)[:160]}")
-            if not learned_rows and filter_diagnostics.get("legacy_profile_bucket_tokens"):
-                diagnostics["selection_scope"]["loaded_rows_before_filter_fallback"] = 0
+            accepts_score_sources = _callable_accepts_keyword(loader, "score_sources")
+            source_attempts: list[str | None] = score_source_candidates if accepts_score_sources else [None]
+            for attempted_source in source_attempts:
                 try:
-                    learned_rows = loader(
+                    learned_rows = _load_opportunity_ranker_scores(
+                        loader,
+                        score_source=attempted_source,
+                        accepts_score_sources=accepts_score_sources,
                         limit=global_limit,
                         max_age_hours=lookup_max_age_hours,
                         tickers=universe,
-                        buckets=None,
-                        profiles=None,
+                        buckets=bucket_tokens or None,
+                        profiles=profile_tokens or None,
                         markets=market_filter or None,
                         per_profile_limit=per_profile_limit,
-                    ) or []
-                    diagnostics["filter_fallback"] = "unfiltered_after_empty_legacy_profile_bucket_filter"
-                    diagnostics["warnings"].append(
-                        "legacy profile/style tokens were passed via buckets and matched no rows; retried without bucket/profile filters"
                     )
-                    bucket_tokens = []
                 except Exception as exc:
-                    diagnostics["warnings"].append(f"latest_opportunity_ranker_scores fallback failed: {str(exc)[:160]}")
+                    diagnostics["warnings"].append(f"latest_opportunity_ranker_scores failed: {str(exc)[:160]}")
+                    learned_rows = []
+                if not learned_rows and filter_diagnostics.get("legacy_profile_bucket_tokens"):
+                    diagnostics["selection_scope"]["loaded_rows_before_filter_fallback"] = 0
+                    try:
+                        learned_rows = _load_opportunity_ranker_scores(
+                            loader,
+                            score_source=attempted_source,
+                            accepts_score_sources=accepts_score_sources,
+                            limit=global_limit,
+                            max_age_hours=lookup_max_age_hours,
+                            tickers=universe,
+                            buckets=None,
+                            profiles=None,
+                            markets=market_filter or None,
+                            per_profile_limit=per_profile_limit,
+                        )
+                        diagnostics["filter_fallback"] = "unfiltered_after_empty_legacy_profile_bucket_filter"
+                        diagnostics["warnings"].append(
+                            "legacy profile/style tokens were passed via buckets and matched no rows; retried without bucket/profile filters"
+                        )
+                        bucket_tokens = []
+                    except Exception as exc:
+                        diagnostics["warnings"].append(f"latest_opportunity_ranker_scores fallback failed: {str(exc)[:160]}")
+                if learned_rows:
+                    if attempted_source:
+                        score_source_selection["selected"] = attempted_source
+                    elif learned_rows:
+                        score_source_selection["selected"] = str(learned_rows[0].get("score_source") or "loader_default")
+                    break
+                if attempted_source and attempted_source != "joint_policy_v1" and "joint_policy_v1" in score_source_candidates:
+                    score_source_selection["fallback"] = "joint_policy_v1"
+            if not learned_rows:
+                score_source_selection["selected"] = "missing"
         else:
             diagnostics["warnings"].append("latest_opportunity_ranker_scores unavailable")
+            score_source_selection["selected"] = "missing"
+        diagnostics["score_source_selection"] = score_source_selection
         diagnostics["selection_scope"]["loaded_rows"] = len(learned_rows)
         if learned_rows:
             learned_rows = [
@@ -2344,12 +2434,32 @@ class QuantTools:
             lookback_days=22,
         )
 
+        row_tickers = _dedupe_tokens(
+            [str(row.get("ticker") or "").strip().upper() for row in rows if str(row.get("ticker") or "").strip()]
+        )
+        sector_by_ticker: dict[str, str] = {}
+        instrument_loader = getattr(self.repo, "latest_instrument_map", None)
+        if callable(instrument_loader) and row_tickers:
+            try:
+                instrument_map = instrument_loader(row_tickers)
+            except Exception as exc:
+                logger.debug("instrument sector metadata lookup failed: %s", exc)
+                instrument_map = {}
+            if isinstance(instrument_map, dict):
+                for ticker, meta in instrument_map.items():
+                    token = str(ticker or "").strip().upper()
+                    if not token or not isinstance(meta, dict):
+                        continue
+                    sector = str(meta.get("sector") or "").strip()
+                    if sector:
+                        sector_by_ticker[token] = sector
+
         buckets: dict[str, list[dict]] = {}
         for r in rows:
             t = str(r.get("ticker", "")).strip().upper()
             if not t:
                 continue
-            sector = SECTOR_BY_TICKER.get(t, "Unknown")
+            sector = sector_by_ticker.get(t) or "Unknown"
             buckets.setdefault(sector, []).append(r)
 
         out: list[dict] = []

@@ -302,7 +302,7 @@ class KISOpenTradingBroker:
         fx_rate: float | None = None,
         submitted_at: datetime | None = None,
     ) -> ExecutionReport | None:
-        """Queries KIS once and returns FILLED report if execution is observed."""
+        """Queries KIS once and returns a fill report when execution is observed."""
         if market == "kospi":
             end_date = datetime.now(_KST).strftime("%Y%m%d")
             start_date = min(_kis_date_token(submitted_at), end_date)
@@ -367,15 +367,30 @@ class KISOpenTradingBroker:
             else:
                 avg_price_krw = best_avg_ccy
 
+        requested_qty = max(float(qty), 0.0)
+        raw_filled_qty = max(float(best_filled), 0.0)
+        is_full_fill = requested_qty <= 0 or raw_filled_qty + 1e-9 >= requested_qty
+        filled_qty = requested_qty if is_full_fill and requested_qty > 0 else raw_filled_qty
+        if requested_qty > 0:
+            filled_qty = min(requested_qty, filled_qty)
+        status = (
+            ExecutionStatus.FILLED
+            if is_full_fill
+            else ExecutionStatus.PARTIAL_FILLED
+        )
+        report_message = str(message or "").strip() or status.value.lower()
+        if status == ExecutionStatus.PARTIAL_FILLED:
+            report_message = f"{report_message}; partial_filled={filled_qty:g}/{requested_qty:g}"
+
         return ExecutionReport(
-            status=ExecutionStatus.FILLED,
+            status=status,
             order_id=order_id,
-            filled_qty=min(float(qty), float(best_filled)),
+            filled_qty=filled_qty,
             avg_price_krw=float(avg_price_krw),
             avg_price_native=float(best_avg_ccy) if best_avg_ccy > 0 else None,
             quote_currency="USD" if market == "us" else "KRW",
             fx_rate=self._resolved_fx_rate(fx_rate=fx_rate) if market == "us" else 1.0,
-            message=message,
+            message=report_message,
             created_at=utc_now(),
         )
 
@@ -390,13 +405,14 @@ class KISOpenTradingBroker:
         exchange_code: str = "",
         fx_rate: float | None = None,
     ) -> ExecutionReport | None:
-        """Best-effort fill confirmation; returns FILLED report when detected."""
+        """Best-effort fill confirmation; keeps polling partials until full fill or timeout."""
         if not self.settings.kis_confirm_fills:
             return None
 
         timeout_s = max(1, int(self.settings.kis_confirm_timeout_seconds))
         poll_s = max(0.5, float(self.settings.kis_confirm_poll_seconds))
         deadline = time.monotonic() + timeout_s
+        best_partial: ExecutionReport | None = None
 
         while time.monotonic() < deadline:
             try:
@@ -411,8 +427,13 @@ class KISOpenTradingBroker:
                     fx_rate=fx_rate,
                     submitted_at=getattr(intent, "created_at", None),
                 )
-                if confirmed is not None:
+                if confirmed is None:
+                    pass
+                elif confirmed.status == ExecutionStatus.FILLED:
                     return confirmed
+                elif confirmed.status == ExecutionStatus.PARTIAL_FILLED:
+                    if best_partial is None or confirmed.filled_qty > best_partial.filled_qty:
+                        best_partial = confirmed
             except Exception as exc:
                 logger.warning(
                     "[yellow]Fill confirm skipped[/yellow] ordno=%s err=%s",
@@ -422,7 +443,7 @@ class KISOpenTradingBroker:
 
             time.sleep(poll_s)
 
-        return None
+        return best_partial
 
     def reconcile_submitted(
         self,

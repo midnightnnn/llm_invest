@@ -764,7 +764,7 @@ class _ContextTools:
             result = await result
         return bool(result)
 
-    async def get_macro_research_briefing(
+    async def read_official_macro_research(
         self,
         market: MacroResearchMarket = "all",
         sources: Optional[list[MacroResearchSource]] = None,
@@ -772,7 +772,14 @@ class _ContextTools:
         offset: int = 0,
         limit: int = 5,
     ) -> list[dict[str, Any]]:
-        """Browse official BOK and St. Louis Fed research documents from rule-based metadata.
+        """Browse and read official BOK and St. Louis Fed macro research documents.
+
+        Start by listing the available documents and source_doc_id values.
+        Then pick only the source_doc_ids that look decision-relevant and
+        read the original source text directly. This is the right tool when
+        policy, credit, consumption, labor, productivity, housing, liquidity,
+        or external-sector shifts may become forward-looking signals before
+        they are obvious in prices or indicators.
 
         Without source_doc_ids, returns a document list with source_doc_id,
         source_url, title, source, market, and document type. With

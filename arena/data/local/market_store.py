@@ -352,6 +352,10 @@ class LocalMarketStore:
                     "ticker_name": str(row.get("ticker_name") or row.get("name") or "").strip() or None,
                     "exchange_code": str(row.get("exchange_code") or "").strip() or "LOCAL",
                     "currency": str(row.get("currency") or row.get("quote_currency") or "").strip().upper() or None,
+                    "sector": str(row.get("sector") or "").strip() or None,
+                    "industry_code": str(row.get("industry_code") or "").strip() or None,
+                    "industry_name": str(row.get("industry_name") or "").strip() or None,
+                    "classification_source": str(row.get("classification_source") or "").strip() or None,
                     "lot_size": row.get("lot_size") if row.get("lot_size") is not None else 1,
                     "tick_size": row.get("tick_size"),
                     "tradable": bool(row.get("tradable", True)),
@@ -1531,6 +1535,10 @@ class LocalMarketStore:
                 "ticker",
                 "market",
                 *_SIGNAL_COLUMNS,
+                "ret_5d",
+                "ret_20d",
+                "volatility_20d",
+                "sentiment_score",
                 "fwd_excess_return_20d",
                 "label_ready",
             ]
@@ -1680,6 +1688,74 @@ class LocalMarketStore:
             "detail_json": self._json_dumps(row.get("detail_json")),
         }
         return self.session.insert_dicts("opportunity_ranker_runs", [payload])
+
+    def insert_signal_calibration_run(self, row: dict[str, Any]) -> int:
+        if not row:
+            return 0
+        payload = {
+            "run_id": str(row.get("run_id") or "").strip(),
+            "created_at": self._datetime_value(row.get("created_at")) or utc_now(),
+            "market": str(row.get("market") or "").strip().lower() or None,
+            "status": str(row.get("status") or "").strip().lower() or "unknown",
+            "promoted": bool(row.get("promoted")),
+            "active": bool(row.get("active")),
+            "score_source": str(row.get("score_source") or "").strip() or "joint_policy_v1",
+            "baseline_score_source": str(row.get("baseline_score_source") or "").strip() or None,
+            "active_score_source": str(row.get("active_score_source") or "").strip() or None,
+            "validation_metrics_json": self._json_dumps(row.get("validation_metrics_json")),
+            "transform_specs_json": self._json_dumps(row.get("transform_specs_json")),
+            "detail_json": self._json_dumps(row.get("detail_json")),
+        }
+        return self.session.insert_dicts("signal_calibration_runs", [payload])
+
+    def insert_signal_transform_specs(self, rows: list[dict[str, Any]]) -> int:
+        if not rows:
+            return 0
+        payload: list[dict[str, Any]] = []
+        for row in rows:
+            signal_name = str(row.get("signal_name") or "").strip()
+            transform_name = str(row.get("transform_name") or "").strip()
+            if not signal_name or not transform_name:
+                continue
+            payload.append(
+                {
+                    "calibration_run_id": str(row.get("calibration_run_id") or "").strip(),
+                    "created_at": self._datetime_value(row.get("created_at")) or utc_now(),
+                    "market": str(row.get("market") or "").strip().lower() or None,
+                    "signal_name": signal_name,
+                    "transform_name": transform_name,
+                    "params_json": self._json_dumps(row.get("params_json")),
+                    "validation_metrics_json": self._json_dumps(row.get("validation_metrics_json")),
+                    "active": bool(row.get("active")),
+                }
+            )
+        return self.session.insert_dicts("signal_transform_specs", payload)
+
+    def latest_approved_signal_calibration_run(
+        self,
+        *,
+        market: str | None = None,
+        max_age_hours: int = 24 * 14,
+    ) -> dict[str, Any] | None:
+        market_token = str(market or "").strip().lower() or None
+        rows = self.session.fetch_rows(
+            """
+            SELECT *
+            FROM signal_calibration_runs
+            WHERE status = 'approved'
+              AND promoted
+              AND active
+              AND created_at >= (CURRENT_TIMESTAMP - $max_age_hours * INTERVAL '1 hour')
+              AND ($market IS NULL OR market = $market OR market IS NULL)
+            ORDER BY created_at DESC, run_id DESC
+            LIMIT 1
+            """,
+            {
+                "market": market_token,
+                "max_age_hours": max(1, min(int(max_age_hours or (24 * 14)), 24 * 365)),
+            },
+        )
+        return dict(rows[0]) if rows else None
 
     def latest_opportunity_ranker_scores(
         self,
@@ -1834,7 +1910,8 @@ class LocalMarketStore:
             """
             WITH ranked AS (
               SELECT ticker, exchange_code, instrument_id, ticker_name,
-                     currency, lot_size, tick_size, tradable, status, updated_at,
+                     currency, sector, industry_code, industry_name, classification_source,
+                     lot_size, tick_size, tradable, status, updated_at,
                      ROW_NUMBER() OVER (
                        PARTITION BY ticker
                        ORDER BY updated_at DESC NULLS LAST
@@ -1843,7 +1920,8 @@ class LocalMarketStore:
               WHERE ticker IN (SELECT unnest($tickers))
             )
             SELECT ticker, exchange_code, instrument_id, ticker_name,
-                   currency, lot_size, tick_size, tradable, status, updated_at
+                   currency, sector, industry_code, industry_name, classification_source,
+                   lot_size, tick_size, tradable, status, updated_at
             FROM ranked
             WHERE rn = 1
             """,

@@ -7,6 +7,7 @@ from arena.config import Settings
 
 
 DEFAULT_ACCOUNT_MARKETS = "us,kospi,kosdaq"
+ACCOUNT_SNAPSHOT_MARKET_SCOPE = "account"
 
 
 def account_market_override(repo: Any, *, tenant_id: str) -> str:
@@ -18,6 +19,11 @@ def account_market_override(repo: Any, *, tenant_id: str) -> str:
     """
     _ = repo, tenant_id
     return DEFAULT_ACCOUNT_MARKETS
+
+
+def account_snapshot_market_scope() -> str:
+    """Returns the canonical stored account snapshot scope."""
+    return ACCOUNT_SNAPSHOT_MARKET_SCOPE
 
 
 def account_scope_settings(repo: Any, *, tenant_id: str, settings: Settings) -> Settings:
